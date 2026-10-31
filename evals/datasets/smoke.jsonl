@@ -1,0 +1,3 @@
+{"id":"valid","response":"{\"title\":\"Weekly sync\",\"tags\":[\"meeting\"]}","expect":"ok"}
+{"id":"malformed_json","response":"Sure! Here is the JSON: {title: Weekly sync","expect":"invalid_json"}
+{"id":"schema_mismatch","response":"{\"title\":42,\"tags\":\"meeting\"}","expect":"schema_mismatch"}

@@ -1,0 +1,20 @@
+services:
+  brain:
+    build: .
+    env_file: .env
+    environment:
+      VAULT_DIR: /data/vault
+      HOST: 0.0.0.0
+    mem_limit: 512m
+    volumes:
+      - vault:/data/vault
+    networks:
+      - n8n
+
+volumes:
+  vault:
+
+networks:
+  n8n:
+    external: true
+    name: ${N8N_NETWORK:-n8n}

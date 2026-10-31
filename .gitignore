@@ -13,3 +13,7 @@ blob-report/
 playwright/.auth/
 e2e/.auth/
 e2e/.explore/
+
+# Build output and dependencies
+node_modules/
+dist/
