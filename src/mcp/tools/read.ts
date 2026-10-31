@@ -14,6 +14,8 @@ import { NoteInput } from "../../vault/note-schema.js";
 import { isInside, realpathOfDeepestAncestor } from "../../vault/write-note.js";
 // Types only: server.ts imports READ_TOOLS from this module.
 import type { McpServerDeps, McpToolDefinition } from "../server.js";
+// Types only: info.ts imports the helpers of this module at runtime.
+import type { InfoOutcome } from "./info.js";
 
 /**
  * The read tools: `search`, `read` and `recent` (R8.1 to R8.4).
@@ -61,14 +63,14 @@ export interface RecentNote {
   date: string;
 }
 
-type Failure = { ok: false; error: ReadError };
+export type Failure = { ok: false; error: ReadError };
 export type SearchOutcome = { ok: true; results: SearchHit[] } | Failure;
 export type ReadOutcome =
   | { ok: true; path: string; frontmatter: Record<string, unknown> | null; body: string }
   | Failure;
 export type RecentOutcome = { ok: true; notes: RecentNote[] } | Failure;
 
-const fail = (error: ReadError): Failure => ({ ok: false, error });
+export const fail = (error: ReadError): Failure => ({ ok: false, error });
 
 export interface ReadToolOptions {
   /** Test seam for the clock. */
@@ -336,9 +338,9 @@ export async function recentNotes(
   return { ok: true, notes };
 }
 
-type Body = SearchOutcome | ReadOutcome | RecentOutcome;
+export type ToolBody = SearchOutcome | ReadOutcome | RecentOutcome | InfoOutcome;
 
-function toResult(body: Body, stale: boolean) {
+export function toResult(body: ToolBody, stale: boolean) {
   const shaped = body.ok && stale ? { ...body, stale: true } : body;
   return {
     content: [{ type: "text" as const, text: JSON.stringify(shaped) }],
@@ -348,9 +350,9 @@ function toResult(body: Body, stale: boolean) {
 }
 
 /** Run one tool on the writer queue; every failure becomes a fixed code. */
-async function guarded(
+export async function guarded(
   deps: McpServerDeps,
-  run: () => Promise<Body>,
+  run: () => Promise<ToolBody>,
 ): Promise<ReturnType<typeof toResult>> {
   try {
     return await deps.writer.withPulled(async ({ stale }) => {
