@@ -1,0 +1,47 @@
+{
+  "name": "2brain",
+  "version": "0.1.0",
+  "description": "Capture AI work sessions into a second brain vault over MCP.",
+  "author": {
+    "name": "2brain-logic contributors"
+  },
+  "license": "MIT",
+  "icon": "./icon.png",
+  "userConfig": {
+    "area": {
+      "type": "string",
+      "title": "Area",
+      "description": "Vault area that session notes are filed under. Leave empty to let the capture session choose."
+    },
+    "server_name": {
+      "type": "string",
+      "title": "MCP server name",
+      "description": "Name of the MCP server that points at your vault.",
+      "default": "brain"
+    },
+    "model": {
+      "type": "string",
+      "title": "Model",
+      "description": "Model used by the headless capture session.",
+      "default": "sonnet"
+    },
+    "min_user_prompts": {
+      "type": "number",
+      "title": "Minimum user prompts",
+      "description": "Sessions with fewer user prompts than this are not captured.",
+      "default": 3
+    },
+    "note_language": {
+      "type": "string",
+      "title": "Note language",
+      "description": "Language code for the generated notes.",
+      "default": "en"
+    },
+    "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "description": "Turn automatic capture on or off.",
+      "default": true
+    }
+  }
+}

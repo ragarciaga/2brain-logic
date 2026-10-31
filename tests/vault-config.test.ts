@@ -254,6 +254,8 @@ describe("expandTypeFolders", () => {
       "inbox",
       "daily",
       "reviews",
+      "personal/sessions",
+      "work/sessions",
     ]);
   });
 
