@@ -152,6 +152,11 @@ export interface StoreReads {
   ): { id: string; grant: StoredGrant; reused: boolean } | undefined;
   /** True when `rawSecret` is the secret of a client that has one. Constant-time compare. */
   verifyClientSecret(clientId: string, rawSecret: string): boolean;
+  /**
+   * The id of the oldest client created more than `minAgeMs` ago (strictly older) that no grant,
+   * live or revoked, refers to. On a tie, the first in insertion order. Undefined when none.
+   */
+  oldestIdleClient(minAgeMs: number): string | undefined;
 }
 
 export interface NewClient {
@@ -192,6 +197,11 @@ export interface StoreTx extends StoreReads {
   rotateGrant(grantId: string, presentedRefreshToken: string, next: RotationTokens): RotateResult;
   /** Mark a grant revoked and clear its history. False when the id is unknown. */
   revokeGrant(grantId: string): boolean;
+  /**
+   * Remove a client. The only removal in the store, used to make room at the client cap. False
+   * when the id is unknown; throws when any grant refers to the client.
+   */
+  removeClient(clientId: string): boolean;
 }
 
 export interface AuthStore extends StoreReads {
@@ -323,6 +333,23 @@ function makeReads(tables: () => Tables, clock: () => Date): StoreReads {
       }
       return hexEqual(hash, client.secretHash);
     },
+    oldestIdleClient(minAgeMs) {
+      const { clients, grants } = tables();
+      const used = new Set<string>();
+      for (const grant of grants.values()) used.add(grant.clientId);
+      const cutoff = clock().getTime() - minAgeMs;
+      let best: string | undefined;
+      let bestAt = Number.POSITIVE_INFINITY;
+      for (const [id, client] of clients) {
+        const created = Date.parse(client.createdAt);
+        if (created >= cutoff || used.has(id)) continue;
+        if (created < bestAt) {
+          best = id;
+          bestAt = created;
+        }
+      }
+      return best;
+    },
   };
 }
 
@@ -408,6 +435,16 @@ function makeTx(draft: Tables, clock: () => Date, isActive: () => boolean, touch
       if (grant === undefined) return false;
       grant.revoked = true;
       grant.usedRefreshHashes = [];
+      touch();
+      return true;
+    },
+    removeClient(clientId) {
+      live();
+      if (!draft.clients.has(clientId)) return false;
+      for (const grant of draft.grants.values()) {
+        if (grant.clientId === clientId) throw new Error("client has grants");
+      }
+      draft.clients.delete(clientId);
       touch();
       return true;
     },

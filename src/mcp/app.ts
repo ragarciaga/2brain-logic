@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { registerDiscoveryRoutes } from "../auth/oauth/metadata.js";
+import { registerClientRoute } from "../auth/oauth/register.js";
+import type { AuthStore } from "../auth/oauth/store.js";
 
 /**
  * Every path the public app serves or advertises. Routes are mounted from these constants and
@@ -41,6 +43,19 @@ export interface PublicAppOptions {
   baseUrl: string;
   /** Where the one-line internal error record goes. Defaults to `console.error`. */
   log?: (line: string) => void;
+  /**
+   * What the OAuth routes need. Without it only the discovery documents are served and
+   * `POST /register` answers 404.
+   */
+  auth?: {
+    store: AuthStore;
+    /** `ALLOWED_REDIRECT_HOSTS`. */
+    allowedRedirectHosts: readonly string[];
+    /** `TRUST_PROXY_HOPS`. */
+    trustProxyHops: number;
+    /** Test seam for the rate limiter clock. */
+    rateNow?: () => number;
+  };
 }
 
 /**
@@ -62,9 +77,9 @@ export function buildPublicUrls(baseUrl: string): PublicUrls {
 
 /**
  * The public Hono app, served on `MCP_PORT`. It serves the discovery documents (RFC 9728 and
- * RFC 8414); every other path answers 404 (Hono's default), including the ingest routes: the
- * ingest API never answers here, with or without the ingest token. Later tasks mount their
- * routes on this app from `PUBLIC_PATHS`.
+ * RFC 8414) and, when `auth` is given, `POST /register` (RFC 7591); every other path answers 404
+ * (Hono's default), including the ingest routes: the ingest API never answers here, with or
+ * without the ingest token. Later tasks mount their routes on this app from `PUBLIC_PATHS`.
  *
  * Handlers read the advertised URLs from `c.var.urls`. They never derive a URL from the request.
  *
@@ -72,7 +87,7 @@ export function buildPublicUrls(baseUrl: string): PublicUrls {
  * `Cache-Control: no-store` and logs the single line `mcp: internal_error`. The error and the
  * headers set before it was thrown are dropped: the handler never looks at them.
  */
-export function createPublicApp({ baseUrl, log = console.error }: PublicAppOptions): {
+export function createPublicApp({ baseUrl, log = console.error, auth }: PublicAppOptions): {
   app: Hono<PublicAppEnv>;
   urls: PublicUrls;
 } {
@@ -103,6 +118,7 @@ export function createPublicApp({ baseUrl, log = console.error }: PublicAppOptio
   });
 
   registerDiscoveryRoutes(app);
+  if (auth !== undefined) registerClientRoute(app, { ...auth, log });
 
   return { app, urls };
 }

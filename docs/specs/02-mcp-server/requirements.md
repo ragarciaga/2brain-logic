@@ -42,7 +42,7 @@ As an AI client, I want to register myself, so that the owner does not create cl
 - R3.1 When `POST /register` receives RFC 7591 metadata whose redirect URIs are all allowed, the system shall store the client and respond 201 with a `client_id` (and a `client_secret` unless the method is `none`). `[unit]`
 - R3.2 A redirect URI shall be allowed only when it is `https` on a host in `ALLOWED_REDIRECT_HOSTS` (default `claude.ai,claude.com,chatgpt.com`), or `http` on a loopback host (`127.0.0.1`, `[::1]`, `localhost`) with any port. `[unit]`
 - R3.3 If any redirect URI is not allowed, then the system shall respond 400 `invalid_redirect_uri` and store nothing. `[unit]`
-- R3.4 If 50 clients are already registered, then the system shall respond 400 `invalid_client_metadata` naming the limit, and store nothing. `[unit]`
+- R3.4 If 50 clients are already registered and no client without a grant (live or revoked) is more than 24 hours old, then the system shall respond 400 `invalid_client_metadata` naming the limit, and store nothing; otherwise it shall remove the oldest such client and store the new one in the same write. `[unit]`
 
 ## R4: Authorization with owner sign-in
 As the owner, I want to approve each new client with my passphrase, so that nobody else can connect to my vault.

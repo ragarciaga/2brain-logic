@@ -1327,3 +1327,87 @@ describe("auth store: the directory must not be inside the vault (D8)", () => {
     );
   });
 });
+
+describe("auth store: idle clients and removal (T6)", () => {
+  const putPlain = (tx: StoreTx, id: string): void =>
+    tx.putClient(id, { authMethod: "none", redirectUris: ["https://claude.ai/cb"] });
+
+  it("oldestIdleClient: none, one, many, strict boundary and grants", async () => {
+    clockMs = Date.parse("2026-10-31T12:00:00.000Z");
+    const store = await open(sandbox());
+    expect(store.oldestIdleClient(DAY)).toBeUndefined();
+    const [first, second, third] = [newId(), newId(), newId()] as [string, string, string];
+    await store.update((tx) => putPlain(tx, first));
+    clockMs += 1000;
+    await store.update((tx) => putPlain(tx, second));
+    clockMs += 1000;
+    await store.update((tx) => putPlain(tx, third));
+    // The first is 2 s old: exactly the age is not enough, one more millisecond is.
+    expect(store.oldestIdleClient(2000)).toBeUndefined();
+    expect(store.oldestIdleClient(1999)).toBe(first);
+    expect(store.oldestIdleClient(0)).toBe(first);
+    clockMs += DAY;
+    expect(store.oldestIdleClient(DAY)).toBe(first);
+
+    const live = newId();
+    const revoked = newId();
+    const grant = (clientId: string) => ({
+      clientId,
+      resource: "https://brain.example.com/mcp",
+      accessToken: newId(),
+      accessExpiresAt: new Date(clockMs + HOUR),
+      refreshToken: newId(),
+      refreshExpiresAt: new Date(clockMs + 30 * DAY),
+    });
+    await store.update((tx) => {
+      tx.putGrant(live, grant(first));
+      tx.putGrant(revoked, grant(second));
+      tx.revokeGrant(revoked);
+    });
+    clockMs += 1;
+    expect(store.oldestIdleClient(DAY)).toBe(third);
+  });
+
+  it("oldestIdleClient: a tie returns the first inserted", async () => {
+    clockMs = Date.parse("2026-10-31T12:00:00.000Z");
+    const store = await open(sandbox());
+    const [a, b] = [newId(), newId()] as [string, string];
+    await store.update((tx) => {
+      putPlain(tx, a);
+      putPlain(tx, b);
+    });
+    clockMs += 10;
+    expect(store.oldestIdleClient(1)).toBe(a);
+  });
+
+  it("removeClient: removes, persists across a reopen, and reports unknown ids", async () => {
+    const sb = sandbox();
+    const store = await open(sb);
+    const id = newId();
+    await store.update((tx) => putPlain(tx, id));
+    const done = await store.update((tx) => [tx.removeClient(id), tx.removeClient(newId())]);
+    expect(done).toEqual({ ok: true, value: [true, false] });
+    expect(store.getClient(id)).toBeUndefined();
+    store.close();
+    expect((await open(sb)).clientCount()).toBe(0);
+  });
+
+  it("removeClient: throws for a client with a grant and leaves it in place", async () => {
+    const store = await open(sandbox());
+    const v = issue();
+    await store.update((tx) => addAll(tx, v));
+    await expect(store.update((tx) => tx.removeClient(v.clientId))).rejects.toThrow(
+      "client has grants",
+    );
+    expect(store.getClient(v.clientId)).toBeDefined();
+  });
+
+  it("removeClient: throws after the transaction ended", async () => {
+    const store = await open(sandbox());
+    let kept: StoreTx | undefined;
+    await store.update((tx) => {
+      kept = tx;
+    });
+    expect(() => kept?.removeClient(newId())).toThrow("the store transaction has ended");
+  });
+});
