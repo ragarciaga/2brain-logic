@@ -16,6 +16,10 @@ const PAT = P("github", "_pat_", "A1b2C3d4E5f6G7h8I9j0K1");
 const SLACK = P("xo", "xb-", "1234567890-abcd");
 const AWS = P("AK", "IA", "ABCDEFGHIJKLMNOP");
 const BEARER_TOKEN = P("abcdefgh", "12345678", "ABCDEFGH");
+const PW = P("hun", "ter", "2x");
+const B64 = P("dXNlcjpw", "YXNz", "d29yZA==");
+const Q = String.raw`\"`;
+const PRIV_ESC = P(PRIV, String.raw`\n`, "MIIBxx", String.raw`\n`, PRIV_END);
 
 const positive: [string, string, string, number][] = [
   ["private key block", `a\n${PRIV}\nMIIBxx\n${PRIV_END}\nb`, `a\n${R}\nb`, 1],
@@ -28,6 +32,45 @@ const positive: [string, string, string, number][] = [
   ["quoted secret", 'MY_SECRET="v w"', `MY_SECRET="${R}"`, 1],
   ["json key", '{"apiKey": "v"}', `{"apiKey": "${R}"}`, 1],
   ["flag form", "--password v", `--password ${R}`, 1],
+  [
+    "escaped json private key",
+    `{"cert":"-----END CERTIFICATE-----\\n${PRIV_ESC}"}`,
+    `{"cert":"-----END CERTIFICATE-----\\n${R}"}`,
+    1,
+  ],
+  ["private key glued to a word", `cert.pem${PRIV}\nAA\n${PRIV_END}`, `cert.pem${R}`, 1],
+  ["escaped assignment value", `API_KEY=${Q}${PW}${Q}`, `API_KEY=${Q}${R}${Q}`, 1],
+  [
+    "escaped json pair",
+    `{${Q}client_secret${Q}:${Q}${PW}${Q}}`,
+    `{${Q}client_secret${Q}:${Q}${R}${Q}}`,
+    1,
+  ],
+  [
+    "url userinfo",
+    `psql postgres://app:${PW}@db.example.com/main`,
+    `psql postgres://app:${R}@db.example.com/main`,
+    1,
+  ],
+  ["basic auth", `Authorization: Basic ${B64}`, `Authorization: Basic ${R}`, 1],
+  [
+    "curl -u",
+    `curl -u admin:${PW} https://api.example.com`,
+    `curl -u admin:${R} https://api.example.com`,
+    1,
+  ],
+  [
+    "curl --user",
+    `curl --user admin:${PW} https://api.example.com`,
+    `curl --user admin:${R} https://api.example.com`,
+    1,
+  ],
+  ["cookie header", `Cookie: sid=${PW}; theme=dark`, `Cookie: ${R}`, 1],
+  ["set-cookie header", `Set-Cookie: sid=${PW}; Path=/`, `Set-Cookie: ${R}`, 1],
+  ["DB_PASS", `DB_PASS=${PW}`, `DB_PASS=${R}`, 1],
+  ["MYSQL_PWD", `MYSQL_PWD=${PW}`, `MYSQL_PWD=${R}`, 1],
+  ["passwd", `passwd: ${PW}`, `passwd: ${R}`, 1],
+  ["credential", `AWS_CREDENTIAL=${PW}`, `AWS_CREDENTIAL=${R}`, 1],
   ["already redacted quoted", `MY_SECRET="${R}"`, `MY_SECRET="${R}"`, 0],
   ["anthropic", `x ${ANT} y`, `x ${R} y`, 1],
   ["github token", `x ${GHP} y`, `x ${R} y`, 1],
@@ -47,8 +90,33 @@ const negative: [string, string][] = [
   ["short bearer token", "Bearer abcdefgh1234567"],
   ["bare ghp_", "ghp_"],
   ["bare sk-ant", "sk-ant"],
+  ["comparison", "if (keys.length === 0) return"],
+  ["equality", "if (token == other) go()"],
+  ["tokens var", "const tokens = text.split(' ')"],
+  ["maxTokens", "maxTokens: 4096"],
+  ["token_count", "token_count=1234"],
+  ["tokenId", "tokenId=7"],
+  ["primary_key", "primary_key: id"],
+  ["sortKey", "sortKey: name"],
+  ["hotkey", "hotkey: ctrl+k"],
+  ["key-file", "--key-file ./id.pem"],
+  ["keys count", "keys: 3 files"],
+  ["basic prose", "Basic authentication is documented"],
+  ["basic short", "Basic setup"],
+  ["cookie prose", "the cookie jar is empty"],
+  ["url no password", "git clone https://user@host.example.com/repo"],
+  ["url no userinfo", "see https://example.com/a:b@c"],
+  ["curl -u no colon", "git push -u origin main"],
+  ["already redacted url", "postgres://app:[redacted]@db.example.com/x"],
   ["bearer in prose", "the Bearer scheme is documented"],
 ];
+
+/** Rows that redact once, with the unterminated key block last (it runs to the end of the text). */
+function ordered(): [string, string, string, number][] {
+  const mark = (r: [string, string, string, number]): number =>
+    Number(r[0].includes("without END"));
+  return positive.filter((r) => r[3] === 1).sort((a, b) => mark(a) - mark(b));
+}
 
 describe("preScrub", () => {
   it.each(positive)("%s", (_n, input, expected, count) => {
@@ -56,25 +124,58 @@ describe("preScrub", () => {
   });
 
   it("sums the counts of a text holding every shape", () => {
-    // An unterminated key block runs to the end of the text, so it goes last.
-    const rows = positive
-      .filter((r) => r[3] === 1)
-      .sort((a, b) => Number(a[0].includes("without END")) - Number(b[0].includes("without END")));
+    const rows = ordered();
     const input = rows.map((r) => r[1]).join("\n");
     const out = preScrub(input);
     expect(out.count).toBe(rows.length);
     expect(out.text).toBe(rows.map((r) => r[2]).join("\n"));
   });
 
-  it("is idempotent", () => {
-    const input = positive.map((r) => r[1]).join("\n");
-    expect(preScrub(input).count).toBeGreaterThan(0);
+  it("is idempotent and the fixture reaches every rule", () => {
+    const rows = ordered();
+    const input = rows.map((r) => r[1]).join("\n");
     const first = preScrub(input);
+    expect(first.count).toBe(rows.length);
     expect(preScrub(first.text)).toStrictEqual({ text: first.text, count: 0 });
   });
 
   it.each(negative)("leaves %s unchanged", (_n, input) => {
     expect(preScrub(input)).toStrictEqual({ text: input, count: 0 });
+  });
+
+  it.each([
+    "count",
+    "id",
+    "ids",
+    "type",
+    "types",
+    "length",
+    "len",
+    "limit",
+    "max",
+    "min",
+    "size",
+    "url",
+    "uri",
+    "name",
+    "names",
+    "path",
+    "file",
+    "ttl",
+    "expiry",
+    "expires",
+    "header",
+    "endpoint",
+    "policy",
+    "hint",
+    "prompt",
+    "index",
+    "keys",
+    "tokens",
+  ])("keeps the value when the name ends in %s", (word) => {
+    const input = `my_token_${word}: 5`;
+    expect(preScrub(input)).toStrictEqual({ text: input, count: 0 });
+    expect(preScrub("my_token: 5").count).toBe(1);
   });
 
   it("finishes hostile inputs under 500 ms", () => {
@@ -85,6 +186,18 @@ describe("preScrub", () => {
       "a.".repeat(100000),
       "Bearer ".repeat(28000),
       `${"K".repeat(100)}${" ".repeat(100000)}:`,
+      "http://u:".repeat(25000),
+      `http://${"u".repeat(150000)}`,
+      "Basic ".repeat(30000),
+      `Basic ${"a".repeat(199000)}`,
+      "-u a:".repeat(40000),
+      "--user ".repeat(28000),
+      "cookie:".repeat(28000),
+      "Set-Cookie: ".repeat(16000),
+      `${Q}${Q}`.repeat(50000),
+      'KEY=\\"'.repeat(40000),
+      `KEY=\\"${"a ".repeat(90000)}`,
+      "PASS.".repeat(40000),
     ];
     for (const input of inputs) {
       const t0 = performance.now();

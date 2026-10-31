@@ -1,4 +1,12 @@
-import { closeSync, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 export const PROGRESS_HEADER = "--- progress.md (first 20,000 characters) ---";
@@ -17,27 +25,43 @@ const MAX_BYTES = MAX_CHARS * 4;
  * @returns {string | null}
  */
 export function readProgress(cwd) {
-  if (typeof cwd !== "string" || cwd === "") return null;
+  if (typeof cwd !== "string" || cwd === "" || !isAbsolute(cwd)) return null;
   try {
     const root = realpathSync(cwd);
     const target = realpathSync(join(cwd, "docs", "progress.md"));
-    const rel = relative(root, target);
-    if (rel === "" || rel.split(sep)[0] === ".." || isAbsolute(rel)) return null;
+    if (!inside(root, target)) return null;
     if (!statSync(target).isFile()) return null;
-    return `${PROGRESS_HEADER}\n${firstCodePoints(readBounded(target))}`;
+    return `${PROGRESS_HEADER}\n${firstCodePoints(readBounded(target, root))}`;
   } catch {
     return null;
   }
 }
 
 /**
+ * @param {string} root
+ * @param {string} target
+ * @returns {boolean}
+ */
+function inside(root, target) {
+  const rel = relative(root, target);
+  return rel !== "" && rel.split(sep)[0] !== ".." && !isAbsolute(rel);
+}
+
+/**
+ * Opens without blocking and and refuses a redirected last path part, then checks the open file again.
  * @param {string} path
+ * @param {string} root
  * @returns {string}
  */
-function readBounded(path) {
-  const fd = openSync(path, "r");
+function readBounded(path, root) {
+  const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(path, flags);
   try {
     if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+    // Where the OS exposes the open file's path, containment is checked on that path too.
+    if (process.platform === "linux" && !inside(root, realpathSync(`/proc/self/fd/${fd}`))) {
+      throw new Error("outside cwd");
+    }
     const buf = Buffer.alloc(MAX_BYTES);
     let total = 0;
     while (total < MAX_BYTES) {

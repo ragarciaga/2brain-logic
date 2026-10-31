@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reads = vi.hoisted(() => ({ requested: 0, readFileSyncCalls: 0 }));
@@ -130,6 +130,9 @@ describe("readProgress", () => {
   it("returns null for a missing or empty cwd", () => {
     expect(readProgress(join(root, "nope"))).toBeNull();
     expect(readProgress("")).toBeNull();
+    // A relative cwd would resolve against the worker's own directory.
+    writeProgress("x");
+    expect(readProgress(relative(process.cwd(), cwd))).toBeNull();
     expect(readProgress(undefined as unknown as string)).toBeNull();
   });
 
@@ -177,8 +180,11 @@ describe("read-only source scan", () => {
     if (w) out.push(w[0]);
     for (const m of src.matchAll(OPEN_CALL)) {
       const args = (m[1] ?? "").split(",").map((a) => a.trim());
-      if (args[1] !== '"r"') out.push(m[0]);
+      if (args[1] !== '"r"' && args[1] !== "flags") out.push(m[0]);
     }
+    // A flags variable is allowed only when the source builds it from read-only constants.
+    const flagUse = /O_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC|EXCL)/.exec(src);
+    if (flagUse) out.push(flagUse[0]);
     return out;
   }
 
@@ -187,6 +193,8 @@ describe("read-only source scan", () => {
     expect(findings("rmSync(x)")).not.toHaveLength(0);
     expect(findings("fs.writeFileSync(a, b)")).not.toHaveLength(0);
     expect(findings('openSync(p, "r")')).toHaveLength(0);
+    expect(findings("const flags = constants.O_RDWR; openSync(p, flags)")).not.toHaveLength(0);
+    expect(findings("openSync(p, constants.O_RDONLY)")).not.toHaveLength(0);
   });
 
   it("finds none in progress.mjs", () => {
