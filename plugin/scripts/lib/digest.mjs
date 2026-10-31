@@ -59,6 +59,42 @@ function firstLine(text) {
   return capped.length < line.length || more ? `${capped} [...]` : capped;
 }
 
+const HEREDOC = /(?<!<)<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/g;
+
+/**
+ * Keeps every line of a shell command, but replaces heredoc bodies (up to and including the
+ * terminator line) with a marker, then caps the result at RESULT_CAP.
+ * @param {string} command
+ * @returns {string}
+ */
+function commandText(command) {
+  const lines = command.trimEnd().split(LINE_BREAK_ALL);
+  /** @type {string[]} */
+  const kept = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const found = [...line.matchAll(HEREDOC)];
+    if (found.length === 0) {
+      kept.push(line);
+      continue;
+    }
+    kept.push(`${line} [heredoc body left out]`);
+    for (const m of found) {
+      const word = m[2] ?? m[3] ?? m[4] ?? "";
+      const dash = m[1] === "-";
+      i += 1;
+      while (i < lines.length) {
+        const body = lines[i] ?? "";
+        if ((dash ? body.replace(/^\t+/, "") : body) === word) break;
+        i += 1;
+      }
+    }
+  }
+  const joined = kept.join("\n");
+  const capped = takeStart(joined, RESULT_CAP);
+  return capped.length < joined.length ? `${capped} [...]` : capped;
+}
+
 /** @param {string} text */
 function startsWithCommandTag(text) {
   const head = text.trimStart();
@@ -158,13 +194,11 @@ function resultText(content) {
 function toolLine(block) {
   const name = (typeof block.name === "string" ? block.name : "unknown").replace(NAME_UNSAFE, " ");
   const input = isObject(block.input) ? block.input : {};
-  const arg =
-    typeof input.command === "string"
-      ? input.command
-      : typeof input.file_path === "string"
-        ? input.file_path
-        : "";
-  return arg === "" ? `TOOL ${name}` : `TOOL ${name}: ${firstLine(arg)}`;
+  let arg = "";
+  if (typeof input.command === "string") arg = commandText(input.command);
+  else if (typeof input.file_path === "string") arg = firstLine(input.file_path);
+  else if (typeof input.path === "string") arg = firstLine(input.path);
+  return arg === "" ? `TOOL ${name}` : `TOOL ${name}: ${indent(arg)}`;
 }
 
 /**
