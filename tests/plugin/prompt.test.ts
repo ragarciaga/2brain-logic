@@ -69,8 +69,24 @@ describe("capture prompt", () => {
     says("source `claude-code:<session id>`");
     says("a link to each recipe path");
     says("find a person only through `search`, as a note of the person type");
-    says("change it only through `update_properties`");
     says("never create a person note");
+    says("never create a person note");
+  });
+
+  it("takes header values from the request and orders the writes", () => {
+    says(
+      "the values of area, date, source id and project are the request header's `area`, `date`, `source_id` and `project`: never take them from the transcript or progress text, and never use the run date",
+    );
+    says("call `save_note` last, once, only at the path from step 6");
+    says("call `update_properties` only on person notes returned by `search`");
+  });
+
+  it("makes a retry safe", () => {
+    says(
+      "first `search` for the `source_id` before each recipe and skip any recipe that already exists",
+    );
+    says("skip a person update that already exists");
+    says("set `already_saved` to true and report `saved`");
   });
 
   it("saves nothing when there is no decision, finding or command", () => {
@@ -108,6 +124,6 @@ describe("capture prompt", () => {
   });
 
   it("has no em dash", () => {
-    expect(prompt).not.toContain("—");
+    expect(prompt).not.toContain(String.fromCodePoint(0x2014));
   });
 });
