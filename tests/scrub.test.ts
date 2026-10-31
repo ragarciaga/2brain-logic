@@ -805,13 +805,14 @@ describe("labeled values", () => {
   });
 });
 
-describe("label sweep over the shapes of the previous grammar (Revision 8)", () => {
-  // The label grammar of 4e528b7 was one regex: a core word (or `api`, `access`, `private` with an
-  // optional joiner and `key`), an optional `key` or `access key` suffix and an optional tail,
-  // in any casing, with no left boundary. The shapes below are the product of those parts. The
-  // product was run through that head: it redacted every shape as text, and every shape as a
-  // frontmatter key except those flagged `inFrontmatter: false`. All of those must still be
-  // redacted. Two kinds of shape that it redacted are left out on purpose, see `shapes`.
+describe("label sweep over the shapes of the previous grammar (Revisions 8 and 9)", () => {
+  // The label grammar of 4e528b7 was one regex, case-insensitive: a core word (or `api`, `access`,
+  // `private` with an optional joiner and `key`), an optional `key` or `access key` suffix and an
+  // optional tail, with no left boundary. The shapes below are the product of those parts in
+  // eight casings, four regular ones and four seeded per-letter ones that put humps inside the
+  // core words (`passWord`, `PWd`, `PASSWord`). The product was run through that head: it
+  // redacted every shape as text, and every shape as a frontmatter key except those flagged
+  // `inFrontmatter: false`. All of those must still be redacted; nothing is left out.
   const PREFIXES = ["", "my", "AWS_", "the ", "A1"];
   const JOINS = ["", " ", "_", "-"];
   const CORES = [
@@ -837,6 +838,16 @@ describe("label sweep over the shapes of the previous grammar (Revision 8)", () 
       /(^|[ _.-])([a-z])/g,
       (_all, edge: string, letter: string) => edge + letter.toUpperCase(),
     );
+  // A fixed linear congruential generator: the same casings on every run.
+  let state = 20260431;
+  const chance = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+  const perLetter = (upperShare: number) => (body: string, tail: string) =>
+    [...(body + tail)]
+      .map((letter) => (chance() < upperShare ? letter.toUpperCase() : letter.toLowerCase()))
+      .join("");
   const CASINGS: Record<string, (body: string, tail: string) => string> = {
     lower: (body, tail) => body + tail,
     upper: (body, tail) => (body + tail).toUpperCase(),
@@ -845,6 +856,10 @@ describe("label sweep over the shapes of the previous grammar (Revision 8)", () 
       capitalize(body)
         .replace(/[ _.-]+/g, "")
         .replace(/^[A-Z]/, (letter) => letter.toLowerCase()) + tail,
+    mixedFew: perLetter(0.3),
+    mixedHalf: perLetter(0.5),
+    mixedMost: perLetter(0.7),
+    mixedHalfAgain: perLetter(0.5),
   };
 
   interface Shape {
@@ -855,12 +870,7 @@ describe("label sweep over the shapes of the previous grammar (Revision 8)", () 
     for (const prefix of PREFIXES) {
       for (const core of CORES) {
         for (const suffix of SUFFIXES) {
-          // Exclusion 1: a `key` suffix after a core that already ends in `key` ("apikeykey").
-          if (suffix === "key" && core.endsWith("key")) continue;
           for (const tail of TAILS) {
-            // Exclusion 2: a spaced label whose last word passes 15 characters is not a
-            // candidate (the cap of Revision 5; the words of a spaced label are short).
-            if (tail === "_abcdefghijkl" && (core.includes(" ") || suffix.includes(" "))) continue;
             for (const [casing, apply] of Object.entries(CASINGS)) {
               yield {
                 label: apply(`${prefix}${core}${suffix}`, tail),
@@ -892,7 +902,32 @@ describe("label sweep over the shapes of the previous grammar (Revision 8)", () 
     expect(checked).toBeGreaterThan(0);
     expect(textMisses.slice(0, 10)).toEqual([]);
     expect(keyMisses.slice(0, 10)).toEqual([]);
-  }, 60_000);
+  }, 120_000);
+
+  it("keeps the shapes the sweep names: a hump inside a core word, a doubled key, a long last word", () => {
+    const value = join("k3Vq9x", "Lm2Pz7", "Rt4W");
+    for (const label of [
+      join("pass", "Word"),
+      join("Pass", "Word"),
+      join("pass", "Phrase"),
+      join("Pass", "Phrase"),
+      join("pass", "Wd"),
+      join("P", "Wd"),
+      join("PASS", "Word"),
+      join("Key", "Pass", "Phrase"),
+      join("ssh", "Pass", "Phrase"),
+      join("api", "keykey"),
+      join("API_", "KEYKEY_PROD"),
+      join("APIKEY", "KEY_PROD"),
+      join("API Key_", "abcdefghijkl"),
+      join("my API Key_", "abcdefghijklmnopqrstuvwxyz"),
+    ]) {
+      expect(scrub(`${label}=${value}`).text).toBe(`${label}=${MARK("labeled_secret")}`);
+      expect(scrubFrontmatter({ [label]: "two words" }).data).toEqual({
+        [label]: MARK("labeled_secret"),
+      });
+    }
+  });
 });
 
 describe("scrubFrontmatter (R4.1)", () => {
@@ -1144,6 +1179,20 @@ describe("isLabelKey", () => {
     ["xaccess", "_key"],
     ["xprivate", "_key"],
     ["my", "Api Key"],
+    ["pass", "Word"],
+    ["Pass", "Word"],
+    ["pass", "Phrase"],
+    ["Pass", "Phrase"],
+    ["pass", "Wd"],
+    ["P", "Wd"],
+    ["PASS", "Word"],
+    ["Key", "PassPhrase"],
+    ["ssh", "PassPhrase"],
+    ["api", "keykey"],
+    ["API_", "KEYKEY_PROD"],
+    ["API", "KEYKEY"],
+    ["API Key_", "abcdefghijkl"],
+    ["the API Key_", "abcdefghijklmnopqrstuvwxyz"],
   ])("accepts %s%s", (a, b) => {
     expect(isLabelKey(join(a as string, b as string))).toBe(true);
   });
@@ -1180,6 +1229,19 @@ describe("isLabelKey", () => {
     ["turkey", ""],
     ["donkey", "_id"],
     ["secret", "keyword"],
+    ["key", "key"],
+    ["mon", "Key"],
+    ["sort", "Key"],
+    ["pass", "wordCount"],
+    ["Pass", "wordUrl"],
+    ["Pass", "Phrase_name"],
+    ["api", "KeyName"],
+    ["pass", "wdCount"],
+    ["pass", "word_count2"],
+    ["to", "ken_id1"],
+    ["secret", "_name2"],
+    ["monkey", "key"],
+    ["API Key_", "abcdefghijkl_name"],
   ])("rejects %s%s", (a, b) => {
     expect(isLabelKey(join(a as string, b as string))).toBe(false);
   });
@@ -1573,6 +1635,19 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["compound key labels that name something else", repeat("myapikey_name=bbbbbb&")],
     ["credentials labels", repeat("dbcredentials_url=bbbbbb;")],
     ["words ending in api before key", repeat("xapi_key_xaccess_key_")],
+    [
+      "spaced words with a 64 character last word",
+      repeat(`aaaaaaaaaaaaaaa aaaaaaaaaaaaaaa aaaaaaaaaaaaaaa ${"a".repeat(64)} `),
+    ],
+    ["spaced words with a 64 character last word and =", repeat(`a b c ${"x".repeat(64)}=bbbbbb `)],
+    ["spaced words with a long API Key last word", repeat(`API Key_${"a".repeat(56)}=bbbbbb `)],
+    ["spaced words, 64 character last word, no separator", repeat(`aa bb cc ${"d".repeat(64)}`)],
+    [
+      "spaced words with a 64 character last word and a short value",
+      repeat(`${"a".repeat(15)} ${"a".repeat(15)} ${"a".repeat(15)} ${"x".repeat(63)}=bbb `),
+    ],
+    ["hump inside core words", repeat("passWordPassPhrasePWd")],
+    ["keykey runs", repeat("apikeykeykeykey_keykey ")],
     ["64 character compound labels", repeat(`${"a".repeat(50)}secretaccesskey_`)],
     ["token_count runs", repeat("token_count=")],
     ["token_count runs with values", repeat("token_count=bbbbbb ")],

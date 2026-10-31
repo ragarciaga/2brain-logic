@@ -9,8 +9,9 @@
  *   token that follows it (the quoted-value body excludes its quote, see `quotedValue`), or is a
  *   lazy body that stops at the first closing marker or at the end of the text (`private_key`; the
  *   lazy lookaheads of `escapedValue` stop at their line);
- * - the label candidate of `labeled_secret` has no left boundary, but its length is capped at 64
- *   characters; the words are judged by `isLabelKey` on that candidate only, never on the text;
+ * - the label candidate of `labeled_secret` has no left boundary, but its length is capped (64
+ *   characters for an identifier, 4 words for a spaced label, each word but the last under 16
+ *   characters); the words are judged by `isLabelKey` on that candidate only, never on the text;
  * - a rule that validates a candidate (IBAN, card) does it in `select`, which resumes by offset;
  *   the label rule finds only the head of an assignment (label and separator) and judges the
  *   label with `admit` before its value is read at all (`tail`), and a rejected head resumes the
@@ -218,11 +219,12 @@ export function ibanValid(value: string): boolean {
 // ---------------------------------------------------------------------------------------------
 // Labeled assignments
 
-// The pattern only finds a candidate label (an identifier of up to 64 characters, or up to 4 short
-// words joined by single spaces) right before an assignment separator. `isLabelKey` judges the
-// words, so a new spelling of a label needs no new regex branch.
+// The pattern only finds a candidate label (an identifier of up to 64 characters, or up to 4 words
+// joined by single spaces whose last word may run to 64 characters and whose others stay under 16)
+// right before an assignment separator. `isLabelKey` judges the words, so a new spelling of a label
+// needs no new regex branch.
 const LABEL_WORD = "[A-Za-z][A-Za-z0-9_.-]";
-const LABEL_CANDIDATE = `(?:${LABEL_WORD}{0,14}(?: ${LABEL_WORD}{0,14}){1,3}|${LABEL_WORD}{0,63})`;
+const LABEL_CANDIDATE = `(?:${LABEL_WORD}{0,14}(?: ${LABEL_WORD}{0,14}){0,2} ${LABEL_WORD}{0,63}|${LABEL_WORD}{0,63})`;
 
 // A word that names a secret on its own ("apikey" is the lowercase form of "APIKey"), and the
 // words that name one when they follow "api", "access" or "private" ("API Key").
@@ -251,12 +253,14 @@ const LABEL_COMPOUND_ENDINGS: readonly string[] = [
   "secret",
 ];
 // A single word that names a key: a core word, "api", "access", "private" or "credential(s)", then
-// "key" ("awssecretaccesskey", "GOOGLEAPIKEY", "sshprivatekey", "tokenkey", "credentialkey"); or
-// one that ends with "credential" or "credentials" ("dbcredentials"). "monkey" and "keyboard"
-// match neither. A trailing digit run is already gone: `labelWords` splits at digits.
+// "key" and at most one more "key" ("awssecretaccesskey", "GOOGLEAPIKEY", "sshprivatekey",
+// "tokenkey", "apikeykey"); or one that ends with "credential" or "credentials" ("dbcredentials").
+// "monkey", "keyboard" and "keykey" alone match neither: a core is required. A trailing digit run
+// is already gone: `labelWords` splits at digits.
 const LABEL_COMPOUND_KEY =
-  /(?:password|passwd|pwd|passphrase|secret|token|api|access|private|credentials?)(?:access)?key$|credentials?$/;
-// "key" names a secret when the word before it ends with one of these ("API Key", "MYAPI_KEY").
+  /(?:password|passwd|pwd|passphrase|secret|token|api|access|private|credentials?)(?:access)?key(?:key)?$|credentials?$/;
+// "key" (or "keykey") names a secret when the word before it ends with one of these ("API Key",
+// "MYAPI_KEY", "API_KEYKEY").
 const LABEL_KEY_PREFIXES: readonly string[] = ["api", "access", "private"];
 // A last word that makes the name something else than a secret ("token_count", "api_key_name").
 const LABEL_LAST_DENIED: ReadonlySet<string> = new Set([
@@ -287,38 +291,50 @@ const LABEL_LAST_DENIED: ReadonlySet<string> = new Set([
   "prompt",
 ]);
 
-/** Splits a label into lowercase words at non-letters (so digit runs too) and camelCase edges. */
-function labelWords(label: string): string[] {
-  return label
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+/**
+ * Splits a label into lowercase words at non-letters (so digit runs too) and, when `camel` is set,
+ * at camelCase edges. Without the camelCase split a core word written with a hump inside it
+ * (`passWord`, `PassPhrase`, `PWd`) stays whole.
+ */
+function labelWords(label: string, camel: boolean): string[] {
+  const spaced = camel
+    ? label.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    : label;
+  return spaced
     .split(/[^A-Za-z]+/)
     .filter((word) => word !== "")
     .map((word) => word.toLowerCase());
+}
+
+/** True when a list of lowercase words holds a core word, a compound or a key after a prefix. */
+function namesSecret(words: readonly string[]): boolean {
+  return words.some(
+    (word, at) =>
+      LABEL_CORE_WORDS.has(word) ||
+      LABEL_COMPOUND_ENDINGS.some((ending) => word.endsWith(ending)) ||
+      LABEL_COMPOUND_KEY.test(word) ||
+      ((word === "key" || word === "keykey") &&
+        at > 0 &&
+        LABEL_KEY_PREFIXES.some((prefix) => (words[at - 1] as string).endsWith(prefix))),
+  );
 }
 
 /**
  * True when a label (a text label before `=` or `:`, or a frontmatter key) names a secret: its
  * words hold a core word (`password`, `secret`, `token`, `api` + `key`, ...), a compound that
  * ends with one (`PGPASSWORD`, `authtoken`), a compound key (`AWSSECRETACCESSKEY`, `myapikey`,
- * `dbcredentials`), or `key` after a word that ends in `api`, `access` or `private` (`MYAPI_KEY`),
- * and the last word is not one that turns it into something else (`count`, `url`, `name`, ...).
- * Only the last 4 spaced words and the last 64 characters are read, which is also the most the
- * text pattern can match.
+ * `dbcredentials`), or `key` after a word that ends in `api`, `access` or `private` (`MYAPI_KEY`).
+ * The words are read twice, split at camelCase edges and not split at them, and either list may
+ * name the secret (`passWord`, `PassPhrase`, `sshPassPhrase`); the last camelCase word must not be
+ * one that turns it into something else (`count`, `url`, `name`, ...). Only the last 4 spaced words
+ * and the last 64 characters are read: a label is the end of the text before the separator.
  */
 export function isLabelKey(label: string): boolean {
-  const words = labelWords(label.split(" ").slice(-4).join(" ").slice(-64));
+  const text = label.split(" ").slice(-4).join(" ").slice(-64);
+  const words = labelWords(text, true);
   const last = words[words.length - 1];
   if (last === undefined || LABEL_LAST_DENIED.has(last)) return false;
-  return words.some(
-    (word, at) =>
-      LABEL_CORE_WORDS.has(word) ||
-      LABEL_COMPOUND_ENDINGS.some((ending) => word.endsWith(ending)) ||
-      LABEL_COMPOUND_KEY.test(word) ||
-      (word === "key" &&
-        at > 0 &&
-        LABEL_KEY_PREFIXES.some((prefix) => (words[at - 1] as string).endsWith(prefix))),
-  );
+  return namesSecret(words) || namesSecret(labelWords(text, false));
 }
 
 /**
