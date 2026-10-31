@@ -150,6 +150,18 @@ function hasDirectoryFileClash(localChanged: string[], upstreamChanged: string[]
   );
 }
 
+/**
+ * Paths of the local tree that upstream did not change and that are no longer in the index. Any
+ * such path would be committed as a deletion the service did not choose.
+ */
+export function missingLocalPaths(
+  localTree: string[],
+  upstreamTouched: Set<string>,
+  indexed: Set<string>,
+): string[] {
+  return localTree.filter((p) => !upstreamTouched.has(p) && !indexed.has(p));
+}
+
 function inside(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(root + sep);
 }
@@ -287,7 +299,7 @@ async function resolveConflict(
       await runGitBuffer(dir, ["ls-tree", "-r", "-z", "--name-only", local]),
     );
     const indexed = new Set(splitNul(await runGitBuffer(dir, ["ls-files", "-z"])));
-    if (localTree.some((p) => !upstreamTouched.has(p) && !indexed.has(p))) throw original;
+    if (missingLocalPaths(localTree, upstreamTouched, indexed).length > 0) throw original;
 
     const staged = await runGitBuffer(dir, ["diff", "--cached", "--name-only", "-z"]);
     if (staged.length === 0) return { conflicts: conflicting.length };

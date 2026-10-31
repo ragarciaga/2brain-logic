@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultGit, ensureClone, type GitApi, GitError } from "../src/git/index.js";
-import { conflictCopyName } from "../src/git/sync.js";
+import { conflictCopyName, missingLocalPaths } from "../src/git/sync.js";
 import { createApp } from "../src/server/app.js";
 import { stringifyNote } from "../src/vault/frontmatter.js";
 import { isSafePathSegment } from "../src/vault/note-schema.js";
@@ -162,6 +162,21 @@ describe("conflictCopyName", () => {
 
   it("refuses a name that cannot be made safe", () => {
     expect(() => conflictCopyName("inbox/.hidden.md", DAY, 1)).toThrow();
+  });
+});
+
+describe("missingLocalPaths", () => {
+  it("reports a local path that upstream did not change and the index lost", () => {
+    expect(missingLocalPaths(["a.md", "b.md"], new Set(), new Set(["a.md"]))).toEqual(["b.md"]);
+  });
+
+  it("ignores a missing path that upstream changed", () => {
+    expect(missingLocalPaths(["a.md", "b.md"], new Set(["b.md"]), new Set(["a.md"]))).toEqual([]);
+  });
+
+  it("reports nothing when every path is indexed or the tree is empty", () => {
+    expect(missingLocalPaths(["a.md"], new Set(), new Set(["a.md", "extra.md"]))).toEqual([]);
+    expect(missingLocalPaths([], new Set(["x"]), new Set())).toEqual([]);
   });
 });
 
