@@ -17,14 +17,14 @@
 [1,2]
 null
 {"type":"user","uuid":"n-bad","message":{"content":5}}
-{"type":"user","uuid":"c-0","message":{"role":"user","content":"  <bash-input>TAGGED-bash-input DATABASE_URL=postgres://user:pw@db.example.com/app</bash-input>"}}
-{"type":"user","uuid":"c-1","message":{"role":"user","content":"  <bash-stdout>TAGGED-bash-stdout DATABASE_URL=postgres://user:pw@db.example.com/app</bash-stdout>"}}
+{"type":"user","uuid":"c-0","message":{"role":"user","content":"  <bash-input>TAGGED-bash-input DBURL-MARKER</bash-input>"}}
+{"type":"user","uuid":"c-1","message":{"role":"user","content":"  <bash-stdout>TAGGED-bash-stdout DBURL-MARKER</bash-stdout>"}}
 {not json at all
 {"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"NOISE-QUEUE"}
 
-{"type":"user","uuid":"c-2","message":{"role":"user","content":"  <bash-stderr>TAGGED-bash-stderr DATABASE_URL=postgres://user:pw@db.example.com/app</bash-stderr>"}}
-{"type":"user","uuid":"c-3","message":{"role":"user","content":"  <command-message>TAGGED-command-message DATABASE_URL=postgres://user:pw@db.example.com/app</command-message>"}}
-{"type":"user","uuid":"c-4","message":{"role":"user","content":"  <command-args>TAGGED-command-args DATABASE_URL=postgres://user:pw@db.example.com/app</command-args>"}}
+{"type":"user","uuid":"c-2","message":{"role":"user","content":"  <bash-stderr>TAGGED-bash-stderr DBURL-MARKER</bash-stderr>"}}
+{"type":"user","uuid":"c-3","message":{"role":"user","content":"  <command-message>TAGGED-command-message DBURL-MARKER</command-message>"}}
+{"type":"user","uuid":"c-4","message":{"role":"user","content":"  <command-args>TAGGED-command-args DBURL-MARKER</command-args>"}}
 {not json at all
 {"type":"attachment","attachment":{"type":"x"},"uuid":"n-att"}
 {"type":"user","uuid":"c-arr","message":{"role":"user","content":[{"type":"text","text":"<bash-stdout>TAGGED-ARRAY</bash-stdout>"}]}}

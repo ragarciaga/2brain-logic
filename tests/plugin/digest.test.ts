@@ -51,8 +51,7 @@ describe("buildDigest on the basic fixture", () => {
       "STDERR-TEXT",
       "command-name",
       "TAGGED-",
-      "DATABASE_URL",
-      "postgres://",
+      "DBURL-MARKER",
       "THINKING-TEXT",
       "DESC-IGNORED",
     ]) {
@@ -282,31 +281,33 @@ describe("unforgeable labels", () => {
   });
 
   it("replaces heredoc bodies with a marker and keeps the lines after the terminator", () => {
-    const cmd = "cat <<EOF > f\nAPI_KEY=hunter2-fictional\nEOF\nnpm test";
+    const cmd = "cat <<EOF > f\nBODY-MARKER-ONE\nEOF\nnpm test";
     expect(tool("Bash", { command: cmd })).toBe(
       "TOOL Bash: cat <<EOF > f [heredoc body left out]\n  npm test",
     );
   });
 
   it("handles <<-, quoted delimiters, a missing terminator and here-strings", () => {
-    expect(tool("Bash", { command: "cat <<-'END'\n\tSECRET-A\n\tEND\nls" })).toBe(
+    expect(tool("Bash", { command: "cat <<-'END'\n\tBODY-MARKER-A\n\tEND\nls" })).toBe(
       "TOOL Bash: cat <<-'END' [heredoc body left out]\n  ls",
     );
-    expect(tool("Bash", { command: 'cat <<"X Y"\nSECRET-B\nX Y\nls' })).not.toContain("SECRET-B");
-    expect(tool("Bash", { command: "cat <<EOF\nSECRET-C\nmore" })).toBe(
+    expect(tool("Bash", { command: 'cat <<"X Y"\nBODY-MARKER-B\nX Y\nls' })).not.toContain(
+      "BODY-MARKER-B",
+    );
+    expect(tool("Bash", { command: "cat <<EOF\nBODY-MARKER-C\nmore" })).toBe(
       "TOOL Bash: cat <<EOF [heredoc body left out]",
     );
-    expect(tool("Bash", { command: "cat <<EOF\nSECRET-D\n EOF\nEOF\nls" })).toBe(
+    expect(tool("Bash", { command: "cat <<EOF\nBODY-MARKER-D\n EOF\nEOF\nls" })).toBe(
       "TOOL Bash: cat <<EOF [heredoc body left out]\n  ls",
     );
     expect(tool("Bash", { command: "cat <<< word\nls" })).toBe("TOOL Bash: cat <<< word\n  ls");
   });
 
   it("shows input.path for tools without command or file_path, never the pattern", () => {
-    expect(tool("Grep", { pattern: "SECRET-PATTERN", path: "/work/app/src" })).toBe(
+    expect(tool("Grep", { pattern: "BODY-MARKER-PATTERN", path: "/work/app/src" })).toBe(
       "TOOL Grep: /work/app/src",
     );
-    expect(tool("Grep", { pattern: "SECRET-PATTERN" })).toBe("TOOL Grep");
+    expect(tool("Grep", { pattern: "BODY-MARKER-PATTERN" })).toBe("TOOL Grep");
   });
 
   it.each(["\u2028", "\u2029", "\u0085", "\v", "\f"])("break %j cannot forge a label", (br) => {
