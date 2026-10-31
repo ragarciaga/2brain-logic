@@ -14,8 +14,9 @@ import {
   isAllowedOrigin,
 } from "../auth/oauth/bearer.js";
 import type { AuthStore } from "../auth/oauth/store.js";
-import type { NoteWriter } from "../vault/write-note.js";
+import type { VaultWriter } from "../vault/write-note.js";
 import { PUBLIC_PATHS, type PublicAppEnv, type PublicUrls } from "./app.js";
+import { READ_TOOLS } from "./tools/read.js";
 
 /**
  * The protected MCP endpoint on the public app (R2.1, R6.1 to R6.3).
@@ -43,7 +44,7 @@ export interface McpServerConfig {
 }
 
 export interface McpServerDeps {
-  writer: NoteWriter;
+  writer: VaultWriter;
   config: McpServerConfig;
 }
 
@@ -52,8 +53,8 @@ export interface McpToolDefinition {
   register(server: McpServer, deps: McpServerDeps): void;
 }
 
-/** The tool registry. T12 and T13 add their entries here. */
-export const MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([]);
+/** The tool registry. T13 adds its entries here. */
+export const MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([...READ_TOOLS]);
 
 /** Builds the SDK server with every tool of the registry registered with `deps`. */
 export function createMcpServer(deps: McpServerDeps, tools = MCP_TOOLS): McpServer {

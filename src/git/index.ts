@@ -31,15 +31,22 @@ function committerEnv(author: GitAuthor): Record<string, string> {
   return { GIT_COMMITTER_NAME: author.name, GIT_COMMITTER_EMAIL: author.email };
 }
 
+export interface RunOptions {
+  /** Aborting it stops the child; the call then fails with `GitError(sub, null)`. */
+  signal?: AbortSignal;
+}
+
 /** Run git with an argument array (never a shell string) and return trimmed stdout. */
 export async function runGit(
   cwd: string,
   args: string[],
   env: Record<string, string> = {},
+  options: RunOptions = {},
 ): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
+      ...(options.signal ? { signal: options.signal } : {}),
       // Last, so no caller can override it: a path is a file name, never a glob or pathspec magic.
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
@@ -59,10 +66,12 @@ export async function runGitBuffer(
   cwd: string,
   args: string[],
   env: Record<string, string> = {},
+  options: RunOptions = {},
 ): Promise<Buffer> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
+      ...(options.signal ? { signal: options.signal } : {}),
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
       encoding: "buffer",
@@ -144,6 +153,63 @@ export async function headSha(dir: string): Promise<string> {
  */
 export async function unstageFile(dir: string, relPath: string): Promise<void> {
   await runGit(dir, ["reset", "-q", "--", relPath]);
+}
+
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * Paths changed by commits made since `since` on HEAD, each with the committer date (ISO 8601) of
+ * the newest commit that touched it, newest first. Renames are reported as a delete and an add; a
+ * path whose name is not valid UTF-8 is skipped. A deleted path is still listed (the caller checks
+ * the file).
+ */
+export async function logChangedPaths(
+  dir: string,
+  since: Date,
+  signal?: AbortSignal,
+): Promise<Array<{ path: string; date: string }>> {
+  const stamp = since.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const out = await runGitBuffer(
+    dir,
+    ["log", "-z", "--name-only", "--no-renames", "--format=%x1e%cI", `--since=${stamp}`, "HEAD"],
+    {},
+    signal ? { signal } : {},
+  );
+  const seen = new Map<string, string>();
+  for (const record of out.toString("latin1").split("\x1e").slice(1)) {
+    // With -z the date ends at a NUL, then a newline, then the NUL-terminated names.
+    const end = record.indexOf("\0");
+    if (end < 0) continue;
+    const date = record.slice(0, end);
+    // 0x1e never occurs inside a UTF-8 sequence, and latin1 maps bytes 1:1, so names can be
+    // re-sliced into the original bytes and decoded strictly.
+    const names = Buffer.from(record.slice(end + 1).replace(/^\n/, ""), "latin1");
+    for (const raw of splitNul(names)) {
+      let path: string;
+      try {
+        path = STRICT_UTF8.decode(raw);
+      } catch {
+        continue;
+      }
+      const known = seen.get(path);
+      if (known === undefined || Date.parse(date) > Date.parse(known)) seen.set(path, date);
+    }
+  }
+  return [...seen]
+    .map(([path, date]) => ({ path, date }))
+    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+}
+
+function splitNul(buffer: Buffer): Buffer[] {
+  const parts: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i <= buffer.length; i += 1) {
+    if (i === buffer.length || buffer[i] === 0) {
+      if (i > start) parts.push(buffer.subarray(start, i));
+      start = i + 1;
+    }
+  }
+  return parts;
 }
 
 export interface GitApi {

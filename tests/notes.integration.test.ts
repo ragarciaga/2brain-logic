@@ -1309,3 +1309,91 @@ describe("POST /notes against a real remote", () => {
     expect(err.cause).toBeUndefined();
   });
 });
+
+describe("withPulled on the write queue", () => {
+  function loggedWriter(overrides: Partial<GitApi> = {}) {
+    return createNoteWriter({
+      vaultDir: fixture.vaultDir,
+      author: TEST_AUTHOR,
+      git: spyGit(overrides),
+      sleep: recordSleep,
+      log: (message) => logs.push(message),
+    });
+  }
+
+  const settle = () => new Promise<void>((done) => setTimeout(done, 150));
+
+  function gate() {
+    let open!: () => void;
+    const opened = new Promise<void>((done) => {
+      open = done;
+    });
+    return { opened, open };
+  }
+
+  it("waits for a write in flight and then sees its commit", async () => {
+    const hold = gate();
+    const writer = loggedWriter({
+      pullRebase: async (...args) => {
+        gitCalls.push("pullRebase");
+        await hold.opened;
+        return defaultGit.pullRebase(...args);
+      },
+    });
+    const order: string[] = [];
+    const writing = writer.write(note("inbox/w.md")).then(() => order.push("write"));
+    const reading = writer.withPulled(async () => {
+      order.push("read");
+      return existsSync(join(fixture.vaultDir, "inbox", "w.md"));
+    });
+    await settle();
+    expect(order).toEqual([]);
+    expect(gitCalls.filter((c) => c === "pullRebase")).toHaveLength(1);
+    hold.open();
+    await writing;
+    expect(await reading).toBe(true);
+    expect(order).toEqual(["write", "read"]);
+  });
+
+  it("holds the next write until the read function is done", async () => {
+    const hold = gate();
+    const writer = loggedWriter();
+    const reading = writer.withPulled(async () => {
+      await hold.opened;
+      return "done";
+    });
+    const writing = writer.write(note("inbox/after.md"));
+    await settle();
+    expect(gitCalls.filter((c) => c === "pullRebase")).toHaveLength(1);
+    expect(existsSync(join(fixture.vaultDir, "inbox", "after.md"))).toBe(false);
+    hold.open();
+    expect(await reading).toBe("done");
+    expect((await writing).commit).toEqual(expect.any(String));
+    expect(gitCalls.filter((c) => c === "pullRebase")).toHaveLength(2);
+  });
+
+  it("a failed pull runs the function with stale true and logs one fixed line", async () => {
+    const writer = loggedWriter({
+      pullRebase: async () => {
+        throw new GitError("pull", 1);
+      },
+    });
+    const seen = await writer.withPulled(async (state) => state);
+    expect(seen).toEqual({ stale: true });
+    expect(logs).toEqual(["read_pull_failed"]);
+    const fresh = await loggedWriter().withPulled(async (state) => state);
+    expect(fresh).toEqual({ stale: false });
+  });
+
+  it("a rejecting function rejects the call and the next write still commits", async () => {
+    const writer = loggedWriter();
+    await expect(
+      writer.withPulled(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    const result = await writer.write(note("inbox/next.md"));
+    expect(result.commit).toEqual(expect.any(String));
+    expect(remoteFile("inbox/next.md")).toContain("x");
+  });
+});
