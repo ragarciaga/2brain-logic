@@ -2,7 +2,7 @@
 
 A self-feeding second brain. Meetings, emails, ideas and AI work sessions land as Markdown notes
 in an Obsidian vault stored in Git. This repository is the service that writes them: today a
-walking skeleton with one thin slice (`GET /health`, `POST /notes`, `PATCH /notes` and `POST /notes/archive`) from HTTP to a pushed commit.
+walking skeleton with one thin slice (`GET /health`, `POST /notes`, `PATCH /notes` and `POST /notes/archive`) from HTTP to a pushed commit. It also serves an optional public MCP endpoint (`<PUBLIC_BASE_URL>/mcp`) behind OAuth, so AI clients can search and write the vault; see [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
 
 Product context: [docs/brief.md](docs/brief.md). Decisions: [docs/adr/](docs/adr/).
 
@@ -206,6 +206,10 @@ detect that, and the OAuth state would be committed with the vault. The image in
 Compose runs a healthcheck every 30 seconds: `node` inside the container sends `GET /health` to
 `127.0.0.1` on `PORT` (default 3000), with no token. The container shows as `unhealthy` after
 three failed checks, once a 15 second start period has passed.
+
+## Connect an AI client (MCP)
+
+To set the passphrase hash, put HTTPS in front of the service and add `<PUBLIC_BASE_URL>/mcp` in claude.ai, Claude Code or Codex or ChatGPT, follow [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
 
 ## Develop
 
