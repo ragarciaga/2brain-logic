@@ -55,7 +55,7 @@ As the vault owner, I want every new note to carry the properties my vault relie
 ## R4: Secret scrub
 As the vault owner, I want secrets removed before anything is committed, so that they never enter Git history.
 
-- R4.1 When a note is created or text is appended, the system shall replace every match of a scrub rule in the body and in every string frontmatter value with `[REDACTED:<rule>]` before writing. `[unit]`
+- R4.1 When a note is created or text is appended, the system shall replace every match of a scrub rule in the body and in every string frontmatter value with `[REDACTED:<rule>]` before writing; a path that contains a scrub-rule match is refused with `unsafe_path` and never rewritten. `[unit]`
 - R4.2 The scrub rules shall detect private key blocks, AWS access key ids, GitHub tokens, Slack tokens, Anthropic and OpenAI style API keys, Google API keys, Stripe secret keys, JSON Web Tokens, `Authorization: Bearer` values, labeled password, secret, token and API key assignments, card numbers that pass the Luhn check, and IBANs, with 0 misses on the positive fixtures and 0 matches on the negative fixtures (at least one of each per rule). `[unit]`
 - R4.3 When a write redacts anything, the system shall return `redactions` as a list of `{ rule, count }` and log only rule names and counts. `[unit]`
 - R4.4 If the scrubber fails, then the system shall respond 500 `scrub_failed` and write nothing. `[unit]`
