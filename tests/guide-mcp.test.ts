@@ -62,11 +62,18 @@ describe("docs/GUIDE-mcp.md", () => {
     "save_note",
     "save_recipe",
     "update_properties",
+    "vault_info",
   ]) {
     it(`names the tool ${tool}`, () => {
       expect(guide).toContain(`\`${tool}\``);
     });
   }
+
+  it("says seven tools, describes vault_info as read only and no longer says six", () => {
+    expect(guide).toContain("seven tools");
+    expect(guide).not.toContain("six tools");
+    expect(guide).toMatch(/- `vault_info`: read only;/);
+  });
 
   it("says there is no delete tool", () => {
     expect(guide).toContain("no delete tool");
