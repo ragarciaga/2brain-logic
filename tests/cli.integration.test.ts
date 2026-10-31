@@ -204,7 +204,10 @@ describe("usage errors", () => {
     it(`returns 2 with usage and writes nothing for ${name}`, async () => {
       const before = readdirSync(process.cwd()).sort();
       const { io, out, err } = fakeIo();
-      expect(await main(argv, io)).toBe(2);
+      // A missing template makes a wrongly accepted argv exit 1 before any write, so a
+      // regression in the usage check cannot seed a vault into the working directory.
+      const options = { templateDir: join(root, "no-such-template") };
+      expect(await main(argv, io, options)).toBe(2);
       expect(err.join("\n")).toContain("usage: node dist/cli.js init-vault <dir>");
       expect(out).toStrictEqual([]);
       expect(readdirSync(process.cwd()).sort()).toStrictEqual(before);
