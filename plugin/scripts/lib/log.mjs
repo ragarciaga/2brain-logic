@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -40,6 +40,7 @@ export function createLog({ dataDir, now }) {
       parts.push(`recipes=${fields.recipes}`);
     }
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
     let size = 0;
     try {
       size = statSync(file).size;
@@ -52,6 +53,7 @@ export function createLog({ dataDir, now }) {
       renameSync(file, `${file}.1`);
     }
     appendFileSync(file, `${parts.join(" ")}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
   }
 
   return { log };

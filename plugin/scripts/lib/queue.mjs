@@ -19,6 +19,15 @@ const FAILED_TTL_MS = 30 * DAY_MS;
 const EVENT_KEYS = ["session_id", "transcript_path", "cwd", "hook_event_name", "reason"];
 
 /**
+ * Create a directory that is private and usable whatever the umask is.
+ * @param {string} path
+ */
+function privateDir(path) {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  chmodSync(path, 0o700);
+}
+
+/**
  * @typedef {object} JobFile
  * @property {1} version
  * @property {Record<string, string>} event
@@ -74,8 +83,8 @@ export function createQueue({ dataDir, now, log }) {
   }
 
   function ensureDirs() {
-    mkdirSync(queueDir, { recursive: true, mode: 0o700 });
-    mkdirSync(failedDir, { recursive: true, mode: 0o700 });
+    privateDir(queueDir);
+    privateDir(failedDir);
   }
 
   /** @returns {string[]} */
@@ -174,7 +183,7 @@ export function createQueue({ dataDir, now, log }) {
         giveUp = true;
       }
       if (!giveUp) continue;
-      mkdirSync(failedDir, { recursive: true, mode: 0o700 });
+      privateDir(failedDir);
       const dest = join(failedDir, name);
       renameSync(path, dest);
       utimesSync(dest, t / 1000, t / 1000);

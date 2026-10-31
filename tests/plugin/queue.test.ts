@@ -90,6 +90,10 @@ describe("enqueue", () => {
     try {
       const job = q.enqueue({ session_id: "abc" });
       expect(statSync(join(dir, "queue", job.name)).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, "queue")).mode & 0o777).toBe(0o700);
+      expect(statSync(join(dir, "failed")).mode & 0o777).toBe(0o700);
+      const second = q.enqueue({ session_id: "def" });
+      expect(queueFiles()).toContain(second.name);
     } finally {
       process.umask(old);
     }

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -74,6 +82,21 @@ describe("createLog", () => {
     expect(text.split("\n")).toHaveLength(2);
     expect(text).toContain("notes=a b  c,d\n");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "creates a private usable logs directory under a restrictive umask",
+    () => {
+      const old = process.umask(0o277);
+      try {
+        log(ID, "saved");
+        log(ID, "saved");
+        expect(statSync(join(dir, "logs")).mode & 0o777).toBe(0o700);
+        expect(readFileSync(file(), "utf8").split("\n")).toHaveLength(3);
+      } finally {
+        process.umask(old);
+      }
+    },
+  );
 
   it("rotates a file of exactly 1048576 bytes and replaces the old .1", () => {
     mkdirSync(join(dir, "logs"));
