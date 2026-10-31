@@ -420,6 +420,21 @@ describe("built entry point", () => {
         expect(withToken.status, `${method} ${path} with token`).toBe(404);
       }
 
+      const challenge =
+        'Bearer resource_metadata="https://brain.example.com/.well-known/oauth-protected-resource/mcp"';
+      const noToken = await fetch(`${publicUrl}/mcp`, { method: "POST", body: "{}" });
+      expect(noToken.status).toBe(401);
+      expect(noToken.headers.get("www-authenticate")).toBe(challenge);
+      const ingestAsBearer = await fetch(`${publicUrl}/mcp`, {
+        method: "POST",
+        body: "{}",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(ingestAsBearer.status).toBe(401);
+      expect(ingestAsBearer.headers.get("www-authenticate")).toBe(
+        `${challenge}, error="invalid_token"`,
+      );
+
       const ingest = await fetch(`http://127.0.0.1:${port}/health`);
       expect(ingest.status).toBe(200);
 

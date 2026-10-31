@@ -43,6 +43,7 @@ async function main(): Promise<void> {
   console.log(`auth store open: ${authStore.clientCount()} clients`);
   const { app: publicApp } = createPublicApp({
     baseUrl: PUBLIC_BASE_URL,
+    mcp: { writer, config: { vaultDir: env.VAULT_DIR } },
     auth: {
       store: authStore,
       allowedRedirectHosts: ALLOWED_REDIRECT_HOSTS,
