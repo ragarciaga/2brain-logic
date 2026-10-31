@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
+import { mapWriteError } from "../src/server/errors.js";
 import type { NoteArchive, NoteInput, NotePatch } from "../src/vault/note-schema.js";
 import {
   AlreadyArchivedError,
@@ -807,5 +808,153 @@ describe("POST /notes/archive", () => {
     const methods = app.routes.filter((r) => r.path !== "/*").map((r) => r.method);
     expect(methods).not.toContain("DELETE");
     expect(app.routes.filter((r) => r.method === "ALL").map((r) => r.path)).toEqual(["/*"]);
+  });
+});
+
+describe("mapWriteError: the shared error table", () => {
+  const cases: Array<{
+    name: string;
+    error: unknown;
+    status: number;
+    body: Record<string, unknown>;
+    log: string | undefined;
+  }> = [
+    {
+      name: "DuplicateSourceError",
+      error: new DuplicateSourceError("inbox/a.md"),
+      status: 409,
+      body: { ok: false, error: "duplicate_source", path: "inbox/a.md" },
+      log: "duplicate_source rejected",
+    },
+    {
+      name: "SourceIndexLimitError",
+      error: new SourceIndexLimitError(),
+      status: 500,
+      body: { ok: false, error: "write_failed" },
+      log: "write_failed: source index limit",
+    },
+    {
+      name: "ScrubFailedError",
+      error: new ScrubFailedError(),
+      status: 500,
+      body: { ok: false, error: "scrub_failed" },
+      log: "scrub_failed",
+    },
+    {
+      name: "ConfigInvalidError",
+      error: new ConfigInvalidError(CONFIG_FILE, "vault.colour", "SNIPPETMARKER"),
+      status: 503,
+      body: {
+        ok: false,
+        error: "config_invalid",
+        file: ".2brain/config.yaml",
+        keyPath: "vault.colour",
+      },
+      log: "config_invalid: .2brain/config.yaml at vault.colour",
+    },
+    {
+      name: "NoteExistsError",
+      error: new NoteExistsError(),
+      status: 409,
+      body: { ok: false, error: "note_exists" },
+      log: undefined,
+    },
+    {
+      name: "ImmutableBodyError",
+      error: new ImmutableBodyError(),
+      status: 409,
+      body: { ok: false, error: "immutable_body" },
+      log: "immutable_body rejected",
+    },
+    {
+      name: "AlreadyArchivedError",
+      error: new AlreadyArchivedError(),
+      status: 409,
+      body: { ok: false, error: "already_archived" },
+      log: "already_archived rejected",
+    },
+    {
+      name: "ArchiveTargetExistsError",
+      error: new ArchiveTargetExistsError(),
+      status: 409,
+      body: { ok: false, error: "archive_target_exists" },
+      log: "archive_target_exists rejected",
+    },
+    {
+      name: "NoteNotFoundError",
+      error: new NoteNotFoundError(),
+      status: 404,
+      body: { ok: false, error: "note_not_found" },
+      log: "note_not_found",
+    },
+    {
+      name: "UnsafePathError",
+      error: new UnsafePathError(),
+      status: 400,
+      body: { ok: false, error: "unsafe_path" },
+      log: "unsafe_path rejected",
+    },
+    {
+      name: "InvalidFrontmatterError",
+      error: new InvalidFrontmatterError(["area"], ["date"]),
+      status: 400,
+      body: { ok: false, error: "invalid_frontmatter", missing: ["area"], invalid: ["date"] },
+      log: "invalid_frontmatter rejected",
+    },
+    {
+      name: "WrongFolderError",
+      error: new WrongFolderError("inbox"),
+      status: 400,
+      body: { ok: false, error: "wrong_folder", expected: "inbox" },
+      log: "wrong_folder rejected",
+    },
+    {
+      name: "PushPendingError",
+      error: new PushPendingError("inbox/a.md", "abc123", 1),
+      status: 502,
+      body: { ok: false, error: "push_pending", path: "inbox/a.md", commit: "abc123" },
+      log: "push_pending: git push exit 1",
+    },
+    {
+      name: "GitError",
+      error: new GitError("commit", 128),
+      status: 500,
+      body: { ok: false, error: "write_failed" },
+      log: "write_failed: git commit exit 128",
+    },
+    {
+      name: "an unknown error",
+      error: new Error("token=SECRETMARKER"),
+      status: 500,
+      body: { ok: false, error: "write_failed" },
+      log: "write_failed: unexpected error",
+    },
+  ];
+
+  it.each(cases)("$name", ({ error, status, body, log }) => {
+    expect(mapWriteError(error)).toEqual({ status, body, log });
+  });
+
+  it("D1: POST, PATCH and archive answer with exactly the mapped status, body and log line", async () => {
+    for (const { error, status, body, log } of cases) {
+      const fail = async () => {
+        throw error;
+      };
+      const { app, logs } = setup(fail, fail, fail);
+      const responses = [
+        await post(app, JSON.stringify(valid)),
+        await patchRequest(app, JSON.stringify(validPatch)),
+        await app.request("/notes/archive", {
+          method: "POST",
+          body: JSON.stringify({ path: "Inbox/idea.md" }),
+          headers: { ...AUTH, "content-type": "application/json" },
+        }),
+      ];
+      for (const response of responses) {
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual(body);
+      }
+      expect(logs).toEqual(log === undefined ? [] : [log, log, log]);
+    }
   });
 });

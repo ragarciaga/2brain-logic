@@ -17,6 +17,7 @@ import type { AuthStore } from "../auth/oauth/store.js";
 import type { VaultWriter } from "../vault/write-note.js";
 import { PUBLIC_PATHS, type PublicAppEnv, type PublicUrls } from "./app.js";
 import { READ_TOOLS } from "./tools/read.js";
+import { WRITE_TOOLS } from "./tools/write.js";
 
 /**
  * The protected MCP endpoint on the public app (R2.1, R6.1 to R6.3).
@@ -53,8 +54,14 @@ export interface McpToolDefinition {
   register(server: McpServer, deps: McpServerDeps): void;
 }
 
-/** The tool registry. T13 adds its entries here. */
-export const MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([...READ_TOOLS]);
+/**
+ * The tool registry: the read tools and the write tools. No tool deletes, moves or archives a
+ * file (R9.5). T14 adds `update_properties`.
+ */
+export const MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
+  ...READ_TOOLS,
+  ...WRITE_TOOLS,
+]);
 
 /** Builds the SDK server with every tool of the registry registered with `deps`. */
 export function createMcpServer(deps: McpServerDeps, tools = MCP_TOOLS): McpServer {
