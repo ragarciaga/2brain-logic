@@ -64,6 +64,11 @@ describe("POST /notes", () => {
     ["an empty segment", JSON.stringify({ ...valid, path: "a//b.md" })],
     ["a NUL in the path", JSON.stringify({ ...valid, path: "a\u0000b.md" })],
     ["a control character in the path", JSON.stringify({ ...valid, path: "a\nb.md" })],
+    ["a leading colon", JSON.stringify({ ...valid, path: ":(top)x.md" })],
+    ["a Windows-unsafe character", JSON.stringify({ ...valid, path: "a/b?c.md" })],
+    ["a directory ending in a dot", JSON.stringify({ ...valid, path: "notes./x.md" })],
+    ["a directory ending in a space", JSON.stringify({ ...valid, path: "notes /x.md" })],
+    ["a reserved device name", JSON.stringify({ ...valid, path: "Notes/NUL.md" })],
     ["a NUL in the body", JSON.stringify({ ...valid, body: "a\u0000b" })],
   ];
 
