@@ -9,6 +9,7 @@ import {
   InvalidFrontmatterError,
   NoteExistsError,
   type NoteWriter,
+  PushPendingError,
   ScrubFailedError,
   UnsafePathError,
   WrongFolderError,
@@ -269,6 +270,29 @@ describe("POST /notes", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ ok: false, error: "write_failed" });
     expect(logs).toEqual(["write_failed: git push exit 128"]);
+  });
+
+  it("returns 502 push_pending with the local commit and logs only the exit code", async () => {
+    const { app, logs } = setup(async () => {
+      throw new PushPendingError("Inbox/idea.md", "abc123", 128);
+    });
+    const response = await post(app, JSON.stringify(valid));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: "push_pending",
+      path: "Inbox/idea.md",
+      commit: "abc123",
+    });
+    expect(logs).toEqual(["push_pending: git push exit 128"]);
+  });
+
+  it("logs exit unknown for a push_pending without an exit code", async () => {
+    const { app, logs } = setup(async () => {
+      throw new PushPendingError("Inbox/idea.md", "abc123", null);
+    });
+    expect((await post(app, JSON.stringify(valid))).status).toBe(502);
+    expect(logs).toEqual(["push_pending: git push exit unknown"]);
   });
 
   describe("T10: unchanged and duplicate source", () => {

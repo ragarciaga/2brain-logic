@@ -38,7 +38,8 @@ and never rewritten), validates the scrubbed frontmatter again, writes the file,
 except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the answer is 401
 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for a missing or
 wrong token, 409 `note_exists` when the path already holds different content (it never overwrites), 409 `duplicate_source` when another note already has the same `source_id`, 413 for a body over 1 MB, 415
-unless the content type is `application/json`, 500 when git fails, 500 `scrub_failed` when the
+unless the content type is `application/json`, 500 when git fails, 502 `push_pending` when the commit is made but the push does not land
+(`{"ok":false,"error":"push_pending","path":"...","commit":"<local sha>"}`), 500 `scrub_failed` when the
 scrub cannot finish (nothing is written), and 503 `config_invalid` when
 the vault's `.2brain/config.yaml` is invalid (the body names only the file and the key:
 `{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
@@ -50,7 +51,10 @@ without redactions the key is absent.
 A create is idempotent. If the path already holds a regular file whose bytes equal what this
 request would store (compared after the scrub), the answer is 200
 `{"ok":true,"path":"...","commit":null,"unchanged":true}` (with `redactions` when the scrub changed
-something), with no commit and no push. Other content at that path is 409 `note_exists`. At a free
+something), with no commit. It pushes only when the branch is ahead of its upstream (a commit left
+pending by an earlier `push_pending`), and if that push fails the answer is 502 `push_pending` with
+HEAD. An identical file that git does not track yet (the process died between writing and
+committing) is committed and pushed like a create, answering 201. Other content at that path is 409 `note_exists`. At a free
 path, a `source_id` (the property name comes from the vault config) that another note already has
 is 409 `{"ok":false,"error":"duplicate_source","path":"<path of that note>"}` and nothing is
 written; a number and its string form count as the same id. The service finds the other note by
@@ -78,16 +82,25 @@ If the pull before a write stops on a rebase conflict, the service aborts the re
 versions. The remote version stays at its path and each conflicting local version is added next to
 it as `<name> (conflict YYYY-MM-DD).md` (the date is the UTC day; a taken name gets ` 2`, ` 3`, ...
 inside the parentheses, so nothing is overwritten). The copy goes through the secret scrub like any
-note. Everything is committed once as `2brain: keep conflicting versions (<n> files)` and pushed,
-the service logs `conflicts_kept: <n>` (a count, never names or content), and the original request
+note. Everything is committed once as `2brain: keep conflicting versions (<n> files)`; the push of that commit is one attempt that may
+fail, because the push at the end of the request delivers it. The service logs `conflicts_kept: <n>` (a count, never names or content), and the original request
 then goes on. The local commits are squashed into that one commit. If both versions carry the same
 `source_id`, a create with that id at a new path answers 409 `duplicate_source` naming the copy that
 sorts first. A pull failure that is not a rebase conflict is still 500 `write_failed`.
+If the process died in the middle of that rebuild, the next write puts the vault back at the
+commit it had before (a local ref `refs/2brain/rebuild-local` holds it), logs `rebuild_recovered`
+and rebuilds again; no version is lost.
+
+A push that fails is retried 3 times, after 1 s, 2 s and 4 s. A push rejected because the remote
+moved (git exit 1) is not retried: the answer is 502 `push_pending` at once, and the next write
+pulls, rebases and pushes the pending commit with its own. A push that never lands gives the same
+502 with the local commit id; the commit stays in the vault and is pushed by the next write. The
+body and the log carry no remote URL.
 
 > **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
 > ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) and scrubs secrets on create and a retry of
-> the same request is idempotent, and a rebase conflict keeps both versions, but push failures
-> are not retried yet. Until then, use it only with a throwaway vault.
+> the same request is idempotent, and a rebase conflict keeps both versions, and a failed push
+> is retried, but this is still an early version. Use it only with a throwaway vault.
 
 SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyChecking=no`.
 

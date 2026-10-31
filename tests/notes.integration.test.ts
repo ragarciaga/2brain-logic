@@ -19,6 +19,7 @@ import { ScrubError, scrub, scrubFrontmatter } from "../src/vault/scrub/index.js
 import { createSourceIndex } from "../src/vault/source-index.js";
 import {
   createNoteWriter,
+  PushPendingError,
   type Scrubber,
   ScrubFailedError,
   scrubNote,
@@ -36,6 +37,7 @@ const TOKEN = "fictional-integration-token-0123456789-abcdef";
 let fixture: GitFixture;
 let gitCalls: string[];
 let logs: string[];
+let sleeps: number[];
 
 function spyGit(overrides: Partial<GitApi> = {}): GitApi {
   return {
@@ -68,7 +70,13 @@ function makeWriter(overrides: Partial<GitApi> = {}) {
     vaultDir: fixture.vaultDir,
     author: TEST_AUTHOR,
     git: spyGit(overrides),
+    sleep: recordSleep,
   });
+}
+
+function recordSleep(ms: number): Promise<void> {
+  sleeps.push(ms);
+  return Promise.resolve();
 }
 
 function makeApp(overrides: Partial<GitApi> = {}) {
@@ -129,6 +137,7 @@ beforeEach(async () => {
   fixture = createGitFixture();
   gitCalls = [];
   logs = [];
+  sleeps = [];
   await ensureClone(fixture.vaultDir, fixture.remote);
 });
 
@@ -877,12 +886,35 @@ describe("POST /notes against a real remote", () => {
       expect(commitCount()).toBe(1);
     });
 
-    it("R5.1 (b): after a failed push, the retry is 200 unchanged and does not commit or push", async () => {
+    it("R5.1 (b): after a failed push, a retry stays 502 with the same commit and makes no new commit", async () => {
       const badUrl = `file://${join(fixture.root, "missing", "r.git")}`;
       git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", badUrl]);
       const app = makeApp();
       const sent = note("inbox/b.md");
-      expect((await post(app, sent)).status).toBe(500);
+      const first = await post(app, sent);
+      expect(first.status).toBe(502);
+      const head = git(fixture.vaultDir, ["rev-parse", "HEAD"]);
+      expect(await first.json()).toEqual({
+        ok: false,
+        error: "push_pending",
+        path: "inbox/b.md",
+        commit: head,
+      });
+      gitCalls = [];
+      const retry = await post(app, sent);
+      expect(retry.status).toBe(502);
+      expect(((await retry.json()) as { commit: string }).commit).toBe(head);
+      expect(gitCalls).not.toContain("commitFile");
+      expect(commitCount()).toBe(1);
+    });
+
+    it("R5.1 (b): once the push works again, the retry is 200 unchanged and delivers the pending commit", async () => {
+      const badUrl = `file://${join(fixture.root, "missing", "r.git")}`;
+      git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", badUrl]);
+      const app = makeApp();
+      const sent = note("inbox/b.md");
+      expect((await post(app, sent)).status).toBe(502);
+      git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", fixture.remote]);
       gitCalls = [];
       const retry = await post(app, sent);
       expect(retry.status).toBe(200);
@@ -892,9 +924,40 @@ describe("POST /notes against a real remote", () => {
         commit: null,
         unchanged: true,
       });
-      expect(commitCount()).toBe(1);
       expect(gitCalls).not.toContain("commitFile");
-      expect(gitCalls).not.toContain("push");
+      expect(gitCalls.filter((c) => c === "push")).toHaveLength(1);
+      expect(remoteSha()).toBe(git(fixture.vaultDir, ["rev-parse", "HEAD"]));
+      expect(commitCount()).toBe(1);
+    });
+
+    it("R5.1: an identical file that HEAD does not track is committed and pushed, answering 201", async () => {
+      const sent = note("inbox/u.md", {}, "crash\n");
+      mkdirSync(join(fixture.vaultDir, "inbox"), { recursive: true });
+      writeFileSync(
+        join(fixture.vaultDir, "inbox", "u.md"),
+        stringifyNote(sent.frontmatter, sent.body),
+      );
+      const response = await post(makeApp(), sent);
+      expect(response.status).toBe(201);
+      expect(remoteFile("inbox/u.md")).toBe(stringifyNote(sent.frontmatter, sent.body));
+      expect(remoteSha()).toBe(git(fixture.vaultDir, ["rev-parse", "HEAD"]));
+      expect(git(fixture.vaultDir, ["log", "-1", "--format=%s"])).toBe("2brain: add inbox/u.md");
+      expect(commitCount()).toBe(1);
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+    });
+
+    it("R5.1: a failing commit of an untracked identical file leaves the file in place", async () => {
+      const sent = note("inbox/u.md", {}, "crash\n");
+      mkdirSync(join(fixture.vaultDir, "inbox"), { recursive: true });
+      writeFileSync(
+        join(fixture.vaultDir, "inbox", "u.md"),
+        stringifyNote(sent.frontmatter, sent.body),
+      );
+      const app = makeApp({
+        commitFile: () => Promise.reject(new GitError("commit", 1)),
+      });
+      expect((await post(app, sent)).status).toBe(500);
+      expect(existsSync(join(fixture.vaultDir, "inbox", "u.md"))).toBe(true);
     });
 
     it("R5.1 (c): identical bytes that arrived by pull give 200 unchanged, different bytes 409", async () => {
@@ -1064,6 +1127,150 @@ describe("POST /notes against a real remote", () => {
     });
   });
 
+  describe("T12: push retries and pending commits", () => {
+    const badUrl = () => `file://${join(fixture.root, "missing", "r.git")}`;
+    const setBad = () => git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", badUrl()]);
+    const setGood = () =>
+      git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", fixture.remote]);
+    const head = () => git(fixture.vaultDir, ["rev-parse", "HEAD"]);
+
+    it("a first push that works waits for nothing", async () => {
+      expect((await post(makeApp(), note("inbox/ok.md"))).status).toBe(201);
+      expect(sleeps).toEqual([]);
+    });
+
+    it("one failure then success waits 1000 ms once", async () => {
+      let calls = 0;
+      const app = makeApp({
+        push: (dir) => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new GitError("push", 128));
+          return defaultGit.push(dir);
+        },
+      });
+      expect((await post(app, note("inbox/r1.md"))).status).toBe(201);
+      expect(sleeps).toEqual([1000]);
+    });
+
+    it("D1: success on the 3rd retry is 201 with waits 1000, 2000, 4000", async () => {
+      let calls = 0;
+      const app = makeApp({
+        push: (dir) => {
+          calls += 1;
+          if (calls <= 3) return Promise.reject(new GitError("push", 128));
+          return defaultGit.push(dir);
+        },
+      });
+      const response = await post(app, note("inbox/r3.md"));
+      expect(response.status).toBe(201);
+      expect(calls).toBe(4);
+      expect(sleeps).toEqual([1000, 2000, 4000]);
+      expect(remoteSha()).toBe(head());
+    });
+
+    it("R8.3: a push that never lands is 502 push_pending with the local commit after 4 attempts", async () => {
+      setBad();
+      const before = remoteSha();
+      const response = await post(makeApp(), note("inbox/never.md"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "push_pending",
+        path: "inbox/never.md",
+        commit: head(),
+      });
+      expect(gitCalls.filter((c) => c === "push")).toHaveLength(4);
+      expect(sleeps).toEqual([1000, 2000, 4000]);
+      expect(remoteSha()).toBe(before);
+    });
+
+    it("a null exit code is transient and retried", async () => {
+      let calls = 0;
+      const app = makeApp({
+        push: (dir) => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new GitError("push", null));
+          return defaultGit.push(dir);
+        },
+      });
+      expect((await post(app, note("inbox/nocode.md"))).status).toBe(201);
+      expect(sleeps).toEqual([1000]);
+    });
+
+    it("an error that is not a GitError is not retried and is a 500", async () => {
+      const app = makeApp({ push: () => Promise.reject(new Error("boom")) });
+      expect((await post(app, note("inbox/boom.md"))).status).toBe(500);
+      expect(sleeps).toEqual([]);
+    });
+
+    it("D2: a push rejected after the pull is not retried; the next write pushes both commits", async () => {
+      let once = true;
+      const app = makeApp({
+        pullRebase: async (...args) => {
+          await defaultGit.pullRebase(...args);
+          if (once) {
+            once = false;
+            pushFromElsewhere("moved", { "inbox/elsewhere.md": "elsewhere\n" });
+          }
+        },
+      });
+      const first = await post(app, note("inbox/rej.md"));
+      expect(first.status).toBe(502);
+      expect(((await first.json()) as { error: string }).error).toBe("push_pending");
+      expect(gitCalls.filter((c) => c === "push")).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+      expect(logs).toContain("push_pending: git push exit 1");
+
+      const second = await post(app, note("inbox/after.md"));
+      expect(second.status).toBe(201);
+      expect(remoteSha()).toBe(head());
+      expect(remoteFile("inbox/rej.md")).toBe(stringifyNote(VALID, "x\n"));
+      expect(remoteFile("inbox/after.md")).toBe(stringifyNote(VALID, "x\n"));
+      expect(remoteFile("inbox/elsewhere.md")).toBe("elsewhere\n");
+    });
+
+    it("R8.4: a write after a push_pending pushes the pending commit with the new one in one push", async () => {
+      setBad();
+      const app = makeApp();
+      expect((await post(app, note("inbox/p1.md"))).status).toBe(502);
+      setGood();
+      gitCalls = [];
+      sleeps = [];
+      expect((await post(app, note("inbox/p2.md"))).status).toBe(201);
+      expect(gitCalls.filter((c) => c === "push")).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+      expect(remoteSha()).toBe(head());
+      expect(remoteFile("inbox/p1.md")).toBe(stringifyNote(VALID, "x\n"));
+      expect(remoteFile("inbox/p2.md")).toBe(stringifyNote(VALID, "x\n"));
+    });
+
+    it("D3: an unchanged create with the branch ahead whose push also fails is 502 with HEAD", async () => {
+      setBad();
+      const app = makeApp();
+      const sent = note("inbox/ahead.md");
+      expect((await post(app, sent)).status).toBe(502);
+      sleeps = [];
+      const again = await post(app, sent);
+      expect(again.status).toBe(502);
+      expect(await again.json()).toEqual({
+        ok: false,
+        error: "push_pending",
+        path: "inbox/ahead.md",
+        commit: head(),
+      });
+      expect(sleeps).toEqual([1000, 2000, 4000]);
+    });
+
+    it("D3: an unchanged create with the branch not ahead pushes nothing", async () => {
+      const app = makeApp();
+      const sent = note("inbox/level.md");
+      expect((await post(app, sent)).status).toBe(201);
+      gitCalls = [];
+      expect((await post(app, sent)).status).toBe(200);
+      expect(gitCalls).not.toContain("push");
+    });
+  });
+
   it("D19: a failing push leaks no URL marker into the response, logs or error", async () => {
     const marker = "SECRETMARKER";
     const badUrl = `file://${join(fixture.root, `missing-${marker}`, "r.git")}`;
@@ -1076,13 +1283,13 @@ describe("POST /notes against a real remote", () => {
     ];
 
     const response = await post(makeApp(), note("inbox/p.md"));
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(502);
     expect(await response.text()).not.toContain(marker);
     expect(logs.join("\n")).not.toContain(marker);
     for (const spy of consoleSpies) {
       expect(JSON.stringify(spy.mock.calls)).not.toContain(marker);
     }
-    expect(logs).toEqual(["write_failed: git push exit 128"]);
+    expect(logs).toEqual(["push_pending: git push exit 128"]);
 
     let caught: unknown;
     try {
@@ -1090,11 +1297,12 @@ describe("POST /notes against a real remote", () => {
         vaultDir: fixture.vaultDir,
         author: TEST_AUTHOR,
         git: defaultGit,
+        sleep: recordSleep,
       }).write(note("inbox/q.md"));
     } catch (error) {
       caught = error;
     }
-    expect(caught).toBeInstanceOf(Error);
+    expect(caught).toBeInstanceOf(PushPendingError);
     const err = caught as Error;
     expect(err.message).not.toContain(marker);
     expect(inspect(err, { depth: 5 })).not.toContain(marker);

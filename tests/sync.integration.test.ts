@@ -25,6 +25,7 @@ let fixture: GitFixture;
 let gitCalls: string[];
 let logs: string[];
 let clock: () => Date;
+let sleeps: number[];
 let counter = 0;
 
 function spyGit(overrides: Partial<GitApi> = {}): GitApi {
@@ -45,6 +46,10 @@ function makeApp(overrides: Partial<GitApi> = {}, scrubber?: Scrubber) {
     git: spyGit(overrides),
     now: clock,
     log: (message) => logs.push(message),
+    sleep: (ms) => {
+      sleeps.push(ms);
+      return Promise.resolve();
+    },
     ...(scrubber ? { scrubber } : {}),
   });
   return createApp({ writer, ingestToken: TOKEN, log: (message) => logs.push(message) });
@@ -101,6 +106,10 @@ function remoteFiles(): string[] {
   return git(fixture.remote, ["ls-tree", "-r", "--name-only", "main"]).split("\n");
 }
 
+function rebuildRefs(): string {
+  return git(fixture.vaultDir, ["for-each-ref", "refs/2brain/"]);
+}
+
 function rebaseDirs(): boolean {
   return (
     existsSync(join(fixture.vaultDir, ".git", "rebase-merge")) ||
@@ -124,6 +133,7 @@ beforeEach(async () => {
   fixture = createGitFixture();
   gitCalls = [];
   logs = [];
+  sleeps = [];
   clock = () => new Date(`${DAY}T12:00:00Z`);
   await ensureClone(fixture.vaultDir, fixture.remote);
 });
@@ -197,6 +207,7 @@ describe("syncBeforeWrite through the note writer", () => {
       "2brain: keep conflicting versions (1 files)",
     );
     expect(logs).toContain("conflicts_kept: 1");
+    expect(rebuildRefs()).toBe("");
     for (const line of logs) {
       expect(line).not.toContain("a.md");
       expect(line).not.toContain("local");
@@ -353,6 +364,7 @@ describe("syncBeforeWrite through the note writer", () => {
       expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
       expect(existsSync(join(fixture.vaultDir, COPY))).toBe(false);
       expect(rebaseDirs()).toBe(false);
+      expect(rebuildRefs()).toBe("");
 
       writeFileSync(hook, "#!/bin/sh\nexit 0\n");
       expect((await post(app, note("inbox/b.md"))).status).toBe(201);
@@ -478,19 +490,75 @@ describe("syncBeforeWrite through the note writer", () => {
     expect(remoteFile("inbox/same.md")).toBe(bytes("same\n"));
   });
 
-  it("a push failure after the conflict commit is retried by the next write", async () => {
+  it("a push failure after the conflict commit is 502 push_pending and the next write delivers it", async () => {
     localCommit({ "inbox/a.md": LOCAL });
     remoteCommit({ "inbox/a.md": REMOTE });
     git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", join(fixture.root, "no.git")]);
     const app = makeApp();
-    expect((await post(app, note("inbox/b.md"))).status).toBe(500);
-    expect(logs.some((l) => /^write_failed: git push exit \d+$/.test(l))).toBe(true);
+    const failed = await post(app, note("inbox/b.md"));
+    expect(failed.status).toBe(502);
+    expect(((await failed.json()) as { error: string }).error).toBe("push_pending");
+    expect(logs).toContain("push_pending: git push exit 128");
+    expect(sleeps).toEqual([1000, 2000, 4000]);
 
     git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", fixture.remote]);
     expect((await post(app, note("inbox/c.md"))).status).toBe(201);
     expect(remoteFile("inbox/a.md")).toBe(REMOTE);
     expect(remoteFile(COPY)).toBe(LOCAL);
+    expect(remoteFile("inbox/b.md")).toBe(bytes("x\n"));
+    expectVaultMatchesRemote();
   });
+
+  it("D5: an interrupted rebuild is recovered by the next write and both versions reach the remote", async () => {
+    const local = localCommit({ "inbox/a.md": LOCAL });
+    remoteCommit({ "inbox/a.md": REMOTE });
+    // The state a crash leaves: marker set, HEAD moved to upstream, the copy staged.
+    git(fixture.vaultDir, ["fetch", "origin"]);
+    git(fixture.vaultDir, ["update-ref", "refs/2brain/rebuild-local", local]);
+    git(fixture.vaultDir, ["reset", "--soft", "origin/main"]);
+    git(fixture.vaultDir, ["checkout", "origin/main", "--", "inbox/a.md"]);
+    writeIn(fixture.vaultDir, { [COPY]: LOCAL });
+
+    const response = await post(makeApp(), note("inbox/b.md"));
+    expect(response.status).toBe(201);
+    expect(logs).toContain("rebuild_recovered");
+    expect(remoteFile("inbox/a.md")).toBe(REMOTE);
+    expect(remoteFile(COPY)).toBe(LOCAL);
+    expect(rebuildRefs()).toBe("");
+    expectVaultMatchesRemote();
+  });
+
+  it("recovery removes the marker even when the pull afterwards has no conflict", async () => {
+    git(fixture.vaultDir, ["update-ref", "refs/2brain/rebuild-local", "HEAD"]);
+    expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+    expect(logs).toContain("rebuild_recovered");
+    expect(rebuildRefs()).toBe("");
+  });
+
+  it("a write with no marker ref logs no rebuild_recovered", async () => {
+    expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+    expect(logs).not.toContain("rebuild_recovered");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "D6: the marker ref is set while the rebuild commit runs",
+    async () => {
+      localCommit({ "inbox/a.md": LOCAL });
+      remoteCommit({ "inbox/a.md": REMOTE });
+      const seen = join(fixture.root, "seen-refs.txt");
+      const hook = join(fixture.vaultDir, ".git", "hooks", "pre-commit");
+      mkdirSync(dirname(hook), { recursive: true });
+      writeFileSync(hook, `#!/bin/sh\ngit for-each-ref refs/2brain/ >> "${seen}"\n`);
+      chmodSync(hook, 0o755);
+
+      expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+      const lines = readFileSync(seen, "utf8").trim().split("\n");
+      // First commit is the rebuild (marker present), second is the note (marker gone).
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("refs/2brain/rebuild-local");
+      expect(rebuildRefs()).toBe("");
+    },
+  );
 
   describe("D5: both versions carry the same source_id", () => {
     it("names the copy that sorts first, and answers note_exists at the original path", async () => {
