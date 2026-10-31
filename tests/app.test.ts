@@ -3,7 +3,9 @@ import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
 import type { NoteInput } from "../src/vault/note-schema.js";
+import { SourceIndexLimitError } from "../src/vault/source-index.js";
 import {
+  DuplicateSourceError,
   InvalidFrontmatterError,
   NoteExistsError,
   type NoteWriter,
@@ -267,6 +269,69 @@ describe("POST /notes", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ ok: false, error: "write_failed" });
     expect(logs).toEqual(["write_failed: git push exit 128"]);
+  });
+
+  describe("T10: unchanged and duplicate source", () => {
+    it("R5.1: an unchanged result gives 200 with the exact body and no log line", async () => {
+      const { app, logs } = setup(async (note) => ({
+        path: note.path,
+        commit: null,
+        unchanged: true as const,
+      }));
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: true,
+        path: "Inbox/idea.md",
+        commit: null,
+        unchanged: true,
+      });
+      expect(logs).toEqual([]);
+    });
+
+    it("R5.1: unchanged with redactions adds them to the body and logs the pairs", async () => {
+      const redactions = [{ rule: "github_token", count: 2 }];
+      const { app, logs } = setup(async (note) => ({
+        path: note.path,
+        commit: null,
+        unchanged: true as const,
+        redactions,
+      }));
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: true,
+        path: "Inbox/idea.md",
+        commit: null,
+        unchanged: true,
+        redactions,
+      });
+      expect(logs).toEqual(["redacted: github_token=2"]);
+    });
+
+    it("R5.2: DuplicateSourceError gives 409 duplicate_source with the existing path", async () => {
+      const { app, logs } = setup(async () => {
+        throw new DuplicateSourceError("work/x.md");
+      });
+      const response = await post(app, JSON.stringify({ ...valid, path: "inbox/y.md" }));
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "duplicate_source",
+        path: "work/x.md",
+      });
+      expect(logs).toEqual(["duplicate_source rejected"]);
+    });
+
+    it("SourceIndexLimitError gives 500 write_failed and logs the limit", async () => {
+      const { app, logs } = setup(async () => {
+        throw new SourceIndexLimitError();
+      });
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "write_failed" });
+      expect(logs).toEqual(["write_failed: source index limit"]);
+    });
   });
 
   describe("secret scrub", () => {
