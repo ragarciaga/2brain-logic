@@ -329,7 +329,7 @@ describe("POST /authorize: passphrase field and generic error", () => {
     ["duplicated", RIGHT, [["passphrase", WRONG]] as [string, string][]],
     ["empty", "", []],
     ["missing", undefined, []],
-    ["over 1024 bytes", "é".repeat(513), []],
+    ["over 1024 bytes (1025)", `${"é".repeat(512)}a`, []],
   ])("shows the generic page for a %s passphrase without scrypt", async (_n, value, extra) => {
     const h = await harness();
     const res = await post(h, value, { extra });
@@ -442,6 +442,16 @@ describe("POST /authorize: lockout (R4.5)", () => {
     h.clock.t = fifth + 15 * MIN - 1;
     expect((await post(h, RIGHT)).status).toBe(429);
     h.clock.t = fifth + 15 * MIN;
+    expect((await post(h, RIGHT)).status).toBe(302);
+  });
+
+  it("drops an attempt exactly one window old, so 4 counted attempts do not lock", async () => {
+    const h = await harness();
+    await post(h, WRONG);
+    h.clock.t += 14 * MIN;
+    for (let i = 0; i < 3; i++) await post(h, WRONG);
+    h.clock.t += MIN;
+    await post(h, WRONG);
     expect((await post(h, RIGHT)).status).toBe(302);
   });
 
