@@ -5,6 +5,7 @@ const valid = {
   VAULT_DIR: "/data/vault",
   GIT_AUTHOR_NAME: "Test Author",
   GIT_AUTHOR_EMAIL: "author@example.com",
+  INGEST_TOKEN: "fictional-test-token-0123456789-abcdefghij",
 };
 
 describe("loadEnv", () => {
@@ -42,6 +43,45 @@ describe("loadEnv", () => {
   it("throws on a missing GIT_AUTHOR_NAME", () => {
     const { GIT_AUTHOR_NAME: _omit, ...rest } = valid;
     expect(() => loadEnv(rest)).toThrow(/GIT_AUTHOR_NAME/);
+  });
+
+  it("throws on a missing INGEST_TOKEN", () => {
+    const { INGEST_TOKEN: _omit, ...rest } = valid;
+    expect(() => loadEnv(rest)).toThrow(/INGEST_TOKEN/);
+  });
+
+  it("throws on an empty INGEST_TOKEN", () => {
+    expect(() => loadEnv({ ...valid, INGEST_TOKEN: "" })).toThrow(/INGEST_TOKEN/);
+  });
+
+  it("throws on a 31-character INGEST_TOKEN without echoing it", () => {
+    const marker = "short-marker-";
+    const token = marker + "x".repeat(31 - marker.length);
+    expect(token).toHaveLength(31);
+    try {
+      loadEnv({ ...valid, INGEST_TOKEN: token });
+      expect.unreachable();
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toMatch(/INGEST_TOKEN/);
+      expect(message).not.toContain(marker);
+      expect(message).not.toContain(token);
+    }
+  });
+
+  it("accepts a 32-character INGEST_TOKEN", () => {
+    const token = "a".repeat(32);
+    expect(loadEnv({ ...valid, INGEST_TOKEN: token }).INGEST_TOKEN).toBe(token);
+  });
+
+  it("returns an INGEST_TOKEN with surrounding whitespace exactly as given", () => {
+    const token = `  ${"a".repeat(32)}  `;
+    expect(loadEnv({ ...valid, INGEST_TOKEN: token }).INGEST_TOKEN).toBe(token);
+  });
+
+  it("accepts a whitespace-only 32-character INGEST_TOKEN", () => {
+    const token = " ".repeat(32);
+    expect(loadEnv({ ...valid, INGEST_TOKEN: token }).INGEST_TOKEN).toBe(token);
   });
 
   it("throws on a bad GIT_AUTHOR_EMAIL", () => {
