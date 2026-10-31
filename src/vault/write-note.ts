@@ -1,5 +1,6 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
+import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
 import { stringifyNote } from "./frontmatter.js";
 import type { NoteInput } from "./note-schema.js";
@@ -32,6 +33,12 @@ export interface NoteWriterOptions {
   vaultDir: string;
   author: GitAuthor;
   git: GitApi;
+  /**
+   * Optional check of a note against the config just read. It runs inside the write queue, after
+   * the pull and the config load and before any file work; a throw rejects the write and leaves
+   * the vault untouched.
+   */
+  checkNote?: (note: NoteInput, config: VaultConfig) => void | Promise<void>;
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -54,15 +61,24 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
 }
 
 /**
- * Create the single write path into the vault: pull with rebase, write a new file, commit, push.
- * Writes are serialized because they share one working tree.
+ * Create the single write path into the vault: pull with rebase, read the vault config, write a
+ * new file, commit, push. Writes are serialized because they share one working tree. The config
+ * is read again after every pull, so a change pushed from another clone applies to the next write
+ * without a restart; an invalid config throws `ConfigInvalidError` before any file work.
  */
-export function createNoteWriter({ vaultDir, author, git }: NoteWriterOptions): NoteWriter {
+export function createNoteWriter({
+  vaultDir,
+  author,
+  git,
+  checkNote,
+}: NoteWriterOptions): NoteWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
 
   async function writeOne(note: NoteInput): Promise<WriteResult> {
     await git.pullRebase(root, author);
+    const config = await loadVaultConfig(root);
+    await checkNote?.(note, config);
 
     const target = resolve(root, note.path);
     if (!target.startsWith(root + sep)) throw new UnsafePathError();
