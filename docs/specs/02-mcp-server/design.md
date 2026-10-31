@@ -47,7 +47,7 @@ flowchart LR
 | Read tools | code | `search` (ripgrep `--fixed-strings -i --json`, globs `*.md`, excludes `.git` and the archive folder, 2 s timeout), `read` (path rules and realpath inside the vault), `recent` (`git log --name-only --since`) | src/mcp/tools/read.ts, src/git/index.ts | R8.1 to R8.4 |
 | Write tools | code | `save_note`, `save_recipe` (builds the `recipe` type note), `update_properties`, all through `src/vault/` and the shared error mapping | src/mcp/tools/write.ts | R9.1 to R9.5 |
 | Shared error mapping | code | One table from vault errors to codes and detail fields, used by the ingest routes and the tools | src/server/errors.ts | R9.4 |
-| Passphrase CLI | code | `hash-passphrase` reads stdin, checks length, prints the scrypt string | src/cli.ts, src/auth/owner.ts | R10.1, R10.2 |
+| Passphrase CLI | code | `hash-passphrase` reads stdin, checks length, prints `scrypt$<N>$<r>$<p>$<salt base64url>$<key base64url>` | src/cli.ts, src/auth/owner.ts | R10.1, R10.2 |
 
 ## Workflow vs agent
 Workflow. Every step is deterministic code; the AI client is the caller, not part of the service. No LLM call in this feature (R8, R9).
@@ -72,7 +72,7 @@ type AuthStore = {
 ```
 Codes and sign-in attempts stay in memory (60 seconds and 15 minutes). A restart drops pending sign-ins only. Expired grants are removed on each write. No change to the vault or its config.
 
-New env vars (all in `.env.example`): `PUBLIC_BASE_URL`, `MCP_PORT` (3001), `OWNER_PASSPHRASE_HASH`, `ALLOWED_REDIRECT_HOSTS`, `AUTH_STORE_DIR` (`/data/auth`), `TRUST_PROXY_HOPS` (0). Dockerfile: `NODE_OPTIONS=--max-old-space-size=192` (research: RSS levels off near 110 MB with a capped heap). compose.yaml: a named volume for `/data/auth` and the public port published only to the proxy network.
+New env vars (all in `.env.example`): `PUBLIC_BASE_URL`, `MCP_PORT` (3001), `OWNER_PASSPHRASE_HASH`, `ALLOWED_REDIRECT_HOSTS`, `AUTH_STORE_DIR` (`/data/auth`), `TRUST_PROXY_HOPS` (0). Dockerfile: `NODE_OPTIONS=--max-old-space-size=192` (research: RSS levels off near 110 MB with a capped heap). compose.yaml: a named volume for `/data/auth` owned by `node`; no port is published to the host, the proxy reaches `MCP_PORT` over the existing `n8n` network (the proxy route itself is F4).
 
 ## Interfaces and contracts
 ```ts
