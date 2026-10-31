@@ -37,6 +37,9 @@ const RESOURCE = "https://brain.example.com/mcp";
 const NOW = new Date("2026-10-31T23:59:59Z");
 // Built from parts at runtime: the CI secret scan reads every commit.
 const ANT = ["sk", "ant", "api03", "A".repeat(24)].join("-");
+const GHP = ["ghp", "B".repeat(36)].join("_");
+const AWS = ["AKIA", "IOSFODNN7EXAMPLF"].join("");
+const PASS = ["pass", "word"].join("");
 const SENTINEL = "SENTINEL-do-not-leak-9137";
 
 let fixture: GitFixture;
@@ -75,11 +78,15 @@ interface Reply {
 }
 
 /** An SDK client wired to a fresh server and transport per request, as the endpoint does. */
-async function connect(writer: VaultWriter = makeWriter()) {
+async function connect(writer: VaultWriter = makeWriter(), scrubber?: Scrubber) {
   const deps: McpServerDeps = { writer, config: { vaultDir: fixture.vaultDir } };
   const tools = [
     ...createReadTools({ now: () => NOW }),
-    ...createWriteTools({ now: () => NOW, log: (m) => logs.push(m) }),
+    ...createWriteTools({
+      now: () => NOW,
+      log: (m) => logs.push(m),
+      ...(scrubber ? { scrubber } : {}),
+    }),
   ];
   const fetchLike = async (input: string | URL | Request, init?: RequestInit) => {
     const incoming = new Request(input, init);
@@ -346,6 +353,20 @@ describe("save_note (R9.1)", () => {
     });
   });
 
+  it("a secret in the path is unsafe_path and reaches no result, log or git object", async () => {
+    const { call } = await connect();
+    const sha = head();
+    const r = await call("save_note", noteArgs({}, `inbox/${GHP}.md`));
+    expect(r.isError).toBe(true);
+    expect(r.data).toEqual(mapWriteError(new UnsafePathError()).body);
+    expect(r.text).not.toContain(GHP);
+    expect(logs.join("\n")).not.toContain(GHP);
+    expect(head()).toBe(sha);
+    expect(git(fixture.remote, ["log", "--all", "--format=%s%n%b"])).not.toContain(GHP);
+    expect(git(fixture.remote, ["ls-tree", "-r", "--name-only", "main"])).not.toContain(GHP);
+    expect(existsSync(join(fixture.vaultDir, "inbox", `${GHP}.md`))).toBe(false);
+  });
+
   it("D2: never writes under .2brain or any dot folder", async () => {
     const { call } = await connect();
     const sha = head();
@@ -389,7 +410,7 @@ describe("buildRecipe", () => {
       ...DEFAULT_VAULT_CONFIG,
       properties: { ...DEFAULT_VAULT_CONFIG.properties, date: "title" },
     };
-    const built = buildRecipe(args, config, "2026-10-31");
+    const built = buildRecipe(args, config, "2026-10-31", "dup");
     expect(built.ok && built.note.frontmatter).toEqual({
       type: "recipe",
       area: "work",
@@ -403,7 +424,7 @@ describe("buildRecipe", () => {
       ...DEFAULT_VAULT_CONFIG,
       types: { recipe: { value: "recipe" } },
     };
-    const built = buildRecipe(args, config, "2026-10-31");
+    const built = buildRecipe(args, config, "2026-10-31", "dup");
     expect(built.ok && built.note.path).toBe("inbox/dup.md");
   });
 });
@@ -509,6 +530,65 @@ describe("save_recipe (R9.2)", () => {
       expect(logs).toContain("mcp save_recipe: invalid_frontmatter rejected");
       expect(head()).toBe(remoteHead());
       expect(existsSync(join(fixture.vaultDir, "nowhere"))).toBe(false);
+    });
+
+    it.each([
+      ["a GitHub token", `Fix ${GHP} leak`, "ghp"],
+      ["an AWS key", `Rotate ${AWS} now`, "AKIA"],
+      ["a labeled password", `Login ${PASS}=hunter2hunter2 fails`, "hunter2"],
+    ])(
+      "S1: a secret in the title (%s) never reaches the path, commit subjects, result or logs",
+      async (_n, title, marker) => {
+        const { call } = await connect();
+        const r = await call("save_recipe", recipe({ title }));
+        expect(r.isError).toBe(false);
+        const path = r.data.path as string;
+        expect(path).toContain("redacted-");
+        expect(path.toLowerCase()).not.toContain(marker.toLowerCase());
+        const secret = title.includes(GHP) ? GHP : title.includes(AWS) ? AWS : "hunter2hunter2";
+        const everywhere = [
+          r.text,
+          path,
+          logs.join("\n"),
+          git(fixture.remote, ["log", "--all", "--format=%s%n%b"]),
+          git(fixture.remote, ["ls-tree", "-r", "--name-only", "main"]),
+          remoteFile(path),
+        ].join("\n");
+        for (const form of [
+          secret,
+          secret.toLowerCase(),
+          secret.toLowerCase().replace(/[_=:\s]+/g, "-"),
+        ]) {
+          expect(everywhere).not.toContain(form);
+        }
+      },
+    );
+
+    it("S1: a scrubber failure on the title is scrub_failed and nothing is written", async () => {
+      const failing: Scrubber = {
+        scrub: () => {
+          throw new Error(SENTINEL);
+        },
+        scrubFrontmatter: () => {
+          throw new Error(SENTINEL);
+        },
+      };
+      const { call } = await connect(makeWriter(), failing);
+      const sha = head();
+      const r = await call("save_recipe", recipe());
+      expect(r.isError).toBe(true);
+      expect(r.data).toEqual(mapWriteError(new ScrubFailedError()).body);
+      expect(r.text).not.toContain(SENTINEL);
+      expect(logs.join("\n")).not.toContain(SENTINEL);
+      expect(head()).toBe(sha);
+    });
+
+    it("a bad title is refused before the config is pulled or read", async () => {
+      push({ [CONFIG_FILE]: "vault:\n  colour: red\n" });
+      const { call } = await connect();
+      const r = await call("save_recipe", recipe({ title: "!!!" }));
+      expect(r.data.error).toBe("invalid_body");
+      expect(git(fixture.vaultDir, ["ls-files", CONFIG_FILE])).toBe("");
     });
 
     it.each(["!!!", "CON", "日本語"])("the title %s gives invalid_body on title", async (title) => {

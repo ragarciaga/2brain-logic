@@ -9,7 +9,13 @@ import {
 } from "../../config/vault-config.js";
 import { issuesOf, mapWriteError, redactedLogLine } from "../../server/errors.js";
 import { isSafePathSegment, NoteInput } from "../../vault/note-schema.js";
-import { InvalidFrontmatterError, type WriteResult } from "../../vault/write-note.js";
+import {
+  defaultScrubber,
+  InvalidFrontmatterError,
+  type Scrubber,
+  scrubText,
+  type WriteResult,
+} from "../../vault/write-note.js";
 // Types only: server.ts imports WRITE_TOOLS from this module.
 import type { McpServerDeps, McpToolDefinition } from "../server.js";
 
@@ -35,6 +41,11 @@ export interface WriteToolOptions {
   now?: () => Date;
   /** Test seam for the log sink. Defaults to `console.error`. */
   log?: (line: string) => void;
+  /**
+   * The scrubber that builds the recipe file name from the title. Defaults to the real one, the
+   * default of the note writer; a test that gives the writer another scrubber gives it here too.
+   */
+  scrubber?: Scrubber;
 }
 
 export type SavedNote = {
@@ -105,17 +116,36 @@ const invalidTitle = (): RecipeRefusal => ({
 });
 
 /**
- * Build the note a `save_recipe` call saves. Pure: the config and the date come from the caller.
- * Refuses (without building any path) on a bad slug, a missing `recipe` type or an unknown area.
+ * The file name part of a recipe, built from the scrubbed title: a secret in the title becomes
+ * `redacted-<rule>`, never part of the path, the commit message or the remote. Refuses an empty or
+ * reserved slug, and a scrubber failure (`scrub_failed`, nothing written).
+ */
+export function recipeSlug(
+  title: string,
+  scrubber: Scrubber,
+): { ok: true; slug: string } | RecipeRefusal {
+  let scrubbed: string;
+  try {
+    scrubbed = scrubText(scrubber, title).text;
+  } catch (error) {
+    return { ok: false, failure: mapWriteError(error) };
+  }
+  const slug = slugify(scrubbed);
+  if (slug === "" || !isSafePathSegment(`${slug}.md`)) return invalidTitle();
+  return { ok: true, slug };
+}
+
+/**
+ * Build the note a `save_recipe` call saves. Pure: the config, the date and the slug (from
+ * `recipeSlug`) come from the caller. Refuses (without building any path) on a missing `recipe`
+ * type or an unknown area.
  */
 export function buildRecipe(
   args: RecipeArgs,
   config: VaultConfig,
   today: string,
+  slug: string,
 ): { ok: true; note: NoteInput } | RecipeRefusal {
-  const slug = slugify(args.title);
-  if (slug === "" || !isSafePathSegment(`${slug}.md`)) return invalidTitle();
-
   const recipe = config.types.recipe;
   if (recipe === undefined) {
     return {
@@ -165,6 +195,7 @@ const text = (what: string, max: number) =>
 export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinition[] {
   const now = options.now ?? (() => new Date());
   const log = options.log ?? console.error;
+  const scrubber = options.scrubber ?? defaultScrubber;
 
   /** Save a note and shape the answer; the only place that calls the writer. */
   async function save(tool: string, deps: McpServerDeps, input: unknown, build?: BuildStep) {
@@ -177,13 +208,7 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
       let candidate = input;
       if (build !== undefined) {
         const root = resolve(deps.config.vaultDir);
-        let config: VaultConfig;
-        try {
-          config = await deps.writer.withPulled(() => loadVaultConfig(root));
-        } catch (error) {
-          return refuse(mapWriteError(error));
-        }
-        const built = build(config);
+        const built = await build(() => deps.writer.withPulled(() => loadVaultConfig(root)));
         if (!built.ok) return refuse(built.failure);
         candidate = built.note;
       }
@@ -216,7 +241,9 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
     }
   }
 
-  type BuildStep = (config: VaultConfig) => ReturnType<typeof buildRecipe>;
+  type BuildStep = (
+    loadConfig: () => Promise<VaultConfig>,
+  ) => Promise<ReturnType<typeof buildRecipe>>;
 
   const saveNote: McpToolDefinition = {
     name: "save_note",
@@ -262,9 +289,18 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
           }),
         },
         (args) =>
-          save("save_recipe", deps, undefined, (config) =>
-            buildRecipe(args, config, now().toISOString().slice(0, 10)),
-          ),
+          save("save_recipe", deps, undefined, async (loadConfig) => {
+            // The slug check comes before the config pull: a bad title costs no git work.
+            const slug = recipeSlug(args.title, scrubber);
+            if (!slug.ok) return slug;
+            let config: VaultConfig;
+            try {
+              config = await loadConfig();
+            } catch (error) {
+              return { ok: false, failure: mapWriteError(error) };
+            }
+            return buildRecipe(args, config, now().toISOString().slice(0, 10), slug.slug);
+          }),
       );
     },
   };

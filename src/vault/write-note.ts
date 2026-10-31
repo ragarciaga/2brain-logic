@@ -115,7 +115,7 @@ export interface Scrubber {
 }
 
 /** The real scrubber with its default rules. */
-const defaultScrubber: Scrubber = {
+export const defaultScrubber: Scrubber = {
   scrub: (text) => scrub(text),
   scrubFrontmatter: (data) => scrubFrontmatter(data),
 };
