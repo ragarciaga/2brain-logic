@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,14 +42,34 @@ async function harness(opts: Opts = {}) {
   const wall = { t: START };
   const mono = { t: 10_000 };
   const wallNow = () => new Date(wall.t);
-  const store = await openAuthStore({
+  // Every write to disk goes through writeTemp, so `writes.n` counts store writes.
+  const writes = { n: 0 };
+  const io = {
+    ...opts.io,
+    writeTemp: async (file: string, text: string) => {
+      writes.n += 1;
+      if (opts.io?.writeTemp !== undefined) return opts.io.writeTemp(file, text);
+      await writeFile(file, text, { mode: 0o600, flag: "wx" });
+    },
+  };
+  const real = await openAuthStore({
     dir: join(root, "auth"),
     vaultDir: join(root, "vault"),
     now: wallNow,
-    io: opts.io,
+    io,
     log: () => undefined,
   });
-  stores.push(store);
+  stores.push(real);
+  // Signals each update call, so a test can wait for a request to reach the store without timers.
+  const updateWaiters: (() => void)[] = [];
+  const store: AuthStore = {
+    ...real,
+    update: (mutate) => {
+      for (const w of updateWaiters.splice(0)) w();
+      return real.update(mutate);
+    },
+  };
+  const nextUpdate = () => new Promise<void>((r) => updateWaiters.push(r));
   const codes: CodeStore = createCodeStore({ now: () => mono.t });
   const logs: string[] = [];
   const { app } = createPublicApp({
@@ -79,6 +100,8 @@ async function harness(opts: Opts = {}) {
     root,
     app,
     store,
+    writes,
+    nextUpdate,
     codes,
     logs,
     wall,
@@ -339,12 +362,14 @@ describe("POST /token authorization_code", () => {
     it.each(cases)("%s gives 401 and keeps the code", async (_name, run, wantsBasic) => {
       const h = await harness();
       const before = readFileSync(h.file, "utf8");
+      const writesBefore = h.writes.n;
       const res = await run(h);
       await expectError(res, 401, "invalid_client");
       expect(res.headers.get("www-authenticate")).toBe(wantsBasic ? 'Basic realm="oauth"' : null);
       expect(h.codes.size()).toBe(1);
       expect(h.codes.consumedSize()).toBe(0);
       expect(readFileSync(h.file, "utf8")).toBe(before);
+      expect(h.writes.n).toBe(writesBefore);
     });
 
     it("header and body secret together give 400", async () => {
@@ -375,39 +400,46 @@ describe("POST /token authorization_code", () => {
     });
   });
 
-  it("a client evicted between authentication and the write gives 401 and no grant", async () => {
-    let hold = false;
-    let entered: () => void = () => undefined;
-    const enteredP = new Promise<void>((r) => {
-      entered = r;
-    });
-    let release: () => void = () => undefined;
-    const h = await harness({
-      io: {
-        writeTemp: async (file, text) => {
-          if (hold) {
-            hold = false;
-            entered();
-            await new Promise<void>((r) => {
-              release = r;
-            });
-          }
-          const { writeFile } = await import("node:fs/promises");
-          await writeFile(file, text, { mode: 0o600, flag: "wx" });
+  it.each(["none", "client_secret_basic"] as const)(
+    "a %s client evicted between authentication and the write gives 401 and no grant",
+    async (method) => {
+      let hold = false;
+      let entered: () => void = () => undefined;
+      const enteredP = new Promise<void>((r) => {
+        entered = r;
+      });
+      let release: () => void = () => undefined;
+      const h = await harness({
+        io: {
+          writeTemp: async (file, text) => {
+            if (hold) {
+              hold = false;
+              entered();
+              await new Promise<void>((r) => {
+                release = r;
+              });
+            }
+            await writeFile(file, text, { mode: 0o600, flag: "wx" });
+          },
         },
-      },
-    });
-    const c = issue(h);
-    hold = true;
-    const removal = h.store.update((tx) => tx.removeClient(h.clients.none.id));
-    await enteredP;
-    const pending = exchange(h, "none", c);
-    await new Promise((r) => setTimeout(r, 20));
-    release();
-    await removal;
-    await expectError(await pending, 401, "invalid_client");
-    expect(grants(h)).toHaveLength(0);
-  });
+      });
+      const c = issue(h, method);
+      hold = true;
+      const removal = h.store.update((tx) => tx.removeClient(h.clients[method].id));
+      await enteredP;
+      const queued = h.nextUpdate();
+      const pending = exchange(h, method, c);
+      await queued;
+      release();
+      await removal;
+      const res = await pending;
+      await expectError(res, 401, "invalid_client");
+      expect(res.headers.get("www-authenticate")).toBe(
+        method === "client_secret_basic" ? 'Basic realm="oauth"' : null,
+      );
+      expect(grants(h)).toHaveLength(0);
+    },
+  );
 
   describe("invalid_grant", () => {
     it("rejects an expired code and accepts one just inside the ttl", async () => {
@@ -453,8 +485,10 @@ describe("POST /token authorization_code", () => {
       expect(grants(h)[0]?.[1]?.revoked).toBe(true);
       expect(h.logs).toContain("token: code replayed, grant revoked");
       const before = readFileSync(h.file, "utf8");
+      const writesBefore = h.writes.n;
       await expectError(await exchange(h, "none", c), 400, "invalid_grant");
       expect(readFileSync(h.file, "utf8")).toBe(before);
+      expect(h.writes.n).toBe(writesBefore);
     });
 
     it("a replay that lands before attach revokes the grant and releases no token", async () => {
@@ -539,9 +573,11 @@ describe("POST /token refresh_token", () => {
     expect(grants(h)[0]?.[1]?.revoked).toBe(true);
     expect(h.logs).toContain("token: refresh reuse, grant revoked");
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     await expectError(await refresh(h, "none", next.refresh_token), 400, "invalid_grant");
     await expectError(await refresh(h, "none", first.refresh_token), 400, "invalid_grant");
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
   });
 
   it("slides the refresh lifetime from each refresh", async () => {
@@ -570,20 +606,24 @@ describe("POST /token refresh_token", () => {
     const h = await harness();
     const first = await login(h);
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     await expectError(
       await refresh(h, "client_secret_post", first.refresh_token),
       400,
       "invalid_grant",
     );
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
   });
 
   it("an unknown refresh token writes nothing", async () => {
     const h = await harness();
     await login(h);
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     await expectError(await refresh(h, "none", newId()), 400, "invalid_grant");
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
   });
 
   it("rejects a grant whose resource is not the resource URL", async () => {
@@ -600,8 +640,10 @@ describe("POST /token refresh_token", () => {
       }),
     );
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     await expectError(await refresh(h, "none", refreshTok), 400, "invalid_grant");
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
   });
 
   it("answers 500 when the rotation write fails", async () => {
@@ -648,8 +690,10 @@ describe("POST /revoke", () => {
     const h = await harness();
     await login(h);
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     expect((await revokeAs(h, newId())).status).toBe(200);
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
   });
 
   it("a second revoke writes nothing", async () => {
@@ -657,16 +701,20 @@ describe("POST /revoke", () => {
     const t = await login(h);
     await revokeAs(h, t.access_token);
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     expect((await revokeAs(h, t.access_token)).status).toBe(200);
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
   });
 
   it("another client revoking answers 200 and changes nothing", async () => {
     const h = await harness();
     const t = await login(h);
     const before = readFileSync(h.file, "utf8");
+    const writesBefore = h.writes.n;
     expect((await revokeAs(h, t.refresh_token, "client_secret_post")).status).toBe(200);
     expect(readFileSync(h.file, "utf8")).toBe(before);
+    expect(h.writes.n).toBe(writesBefore);
     expect(grants(h)[0]?.[1]?.revoked).toBe(false);
   });
 
@@ -690,6 +738,7 @@ describe("POST /revoke", () => {
     const h = await harness();
     const f = { client_id: h.clients.none.id };
     await expectError(await post(h, f, { path: "revoke" }), 400, "invalid_request");
+    await expectError(await post(h, { token: newId() }, { path: "revoke" }), 401, "invalid_client");
     const bad = await post(
       h,
       { token: newId(), client_id: h.clients.client_secret_post.id, client_secret: newId() },
@@ -702,7 +751,7 @@ describe("POST /revoke", () => {
     const h = await harness();
     for (let i = 0; i < 60; i += 1) await post(h, {}, { path: "token" });
     expect((await post(h, {}, { path: "token" })).status).toBe(429);
-    expect((await post(h, {}, { path: "revoke" })).status).toBe(400);
+    expect((await post(h, {}, { path: "revoke" })).status).toBe(401);
   });
 });
 
@@ -742,7 +791,11 @@ describe("request shape", () => {
     const h = await harness();
     const c = issue(h);
     const q = `?${new URLSearchParams(exchangeFields(h, "none", c) as Record<string, string>)}`;
-    await expectError(await post(h, {}, { query: q }), 400, "invalid_request");
+    await expectError(
+      await post(h, { client_id: h.clients.none.id }, { query: q }),
+      400,
+      "invalid_request",
+    );
     expect(h.codes.size()).toBe(1);
   });
 
@@ -761,6 +814,15 @@ describe("request shape", () => {
     await expectError(await post(h, { ...f, code_verifier: "short" }), 400, "invalid_request");
     await expectError(await post(h, { ...f, redirect_uri: undefined }), 400, "invalid_request");
     await expectError(await post(h, { ...f, grant_type: undefined }), 400, "invalid_request");
+    expect(h.codes.size()).toBe(1);
+  });
+
+  it("no client authentication at all gives 401 and keeps the code", async () => {
+    const h = await harness();
+    const c = issue(h);
+    const res = await post(h, { ...exchangeFields(h, "none", c), client_id: undefined });
+    await expectError(res, 401, "invalid_client");
+    expect(res.headers.get("www-authenticate")).toBeNull();
     expect(h.codes.size()).toBe(1);
   });
 
@@ -790,11 +852,11 @@ describe("request shape", () => {
 
   it("the 61st request in a minute gets 429 with Retry-After, another IP is served", async () => {
     const h = await harness();
-    for (let i = 0; i < 60; i += 1) expect((await post(h, {})).status).toBe(400);
+    for (let i = 0; i < 60; i += 1) expect((await post(h, {})).status).toBe(401);
     const res = await post(h, {});
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
-    expect((await post(h, {}, { ip: "198.51.100.7" })).status).toBe(400);
+    expect((await post(h, {}, { ip: "198.51.100.7" })).status).toBe(401);
   });
 
   it("no request value reaches a body, header or log", async () => {

@@ -99,7 +99,7 @@ export function pkceS256Matches(verifier: string, challenge: string): boolean {
 }
 
 type ClientAuth =
-  | { ok: true; clientId: string }
+  | { ok: true; clientId: string; basic: boolean }
   | { ok: false; status: 400 | 401; error: "invalid_request" | "invalid_client"; basic: boolean };
 
 function authenticateClient(
@@ -126,7 +126,7 @@ function authenticateClient(
   } else {
     clientId = one(map, "client_id");
     if (clientId === undefined) {
-      return { ok: false, status: 400, error: "invalid_request", basic: false };
+      return { ok: false, status: 401, error: "invalid_client", basic: false };
     }
     if (bodyHasSecret) {
       method = "client_secret_post";
@@ -140,7 +140,7 @@ function authenticateClient(
   const client = store.getClient(clientId);
   if (client === undefined || client.authMethod !== method) return fail;
   if (method !== "none" && !store.verifyClientSecret(clientId, secret ?? "")) return fail;
-  return { ok: true, clientId };
+  return { ok: true, clientId, basic };
 }
 
 export interface TokenDeps {
@@ -171,7 +171,7 @@ function success(c: Ctx, body: Record<string, unknown>): Response {
   return c.json(body, 200);
 }
 
-type Prepared = { map: FormMap; clientId: string };
+type Prepared = { map: FormMap; clientId: string; basic: boolean };
 
 /** The shared request checks of both routes. Returns a response on failure. */
 async function prepare(c: Ctx, store: StoreReads): Promise<Prepared | Response> {
@@ -181,7 +181,7 @@ async function prepare(c: Ctx, store: StoreReads): Promise<Prepared | Response> 
   if (hasDuplicate(map)) return fail(c, 400, "invalid_request");
   const auth = authenticateClient(map, c.req.header("authorization"), store);
   if (!auth.ok) return fail(c, auth.status, auth.error, auth.basic);
-  return { map, clientId: auth.clientId };
+  return { map, clientId: auth.clientId, basic: auth.basic };
 }
 
 /** Revokes a grant that exists and is not yet revoked; otherwise changes nothing. */
@@ -204,7 +204,12 @@ export function registerTokenRoutes(app: Hono<PublicAppEnv>, deps: TokenDeps): v
     return out.ok;
   }
 
-  async function authorizationCode(c: Ctx, map: FormMap, clientId: string): Promise<Response> {
+  async function authorizationCode(
+    c: Ctx,
+    map: FormMap,
+    clientId: string,
+    basic: boolean,
+  ): Promise<Response> {
     const resource = c.var.urls.resource;
     const code = one(map, "code");
     const verifier = one(map, "code_verifier");
@@ -256,7 +261,7 @@ export function registerTokenRoutes(app: Hono<PublicAppEnv>, deps: TokenDeps): v
       return "ok" as const;
     });
     if (!out.ok) return fail(c, 500, "server_error");
-    if (out.value === "no_client") return fail(c, 401, "invalid_client");
+    if (out.value === "no_client") return fail(c, 401, "invalid_client", basic);
 
     if (codes.attachGrant(r.codeHash, grantId).replayed) {
       const revoked = await revokeGrantOf(grantId);
@@ -271,7 +276,12 @@ export function registerTokenRoutes(app: Hono<PublicAppEnv>, deps: TokenDeps): v
     });
   }
 
-  async function refreshToken(c: Ctx, map: FormMap, clientId: string): Promise<Response> {
+  async function refreshToken(
+    c: Ctx,
+    map: FormMap,
+    clientId: string,
+    basic: boolean,
+  ): Promise<Response> {
     const resource = c.var.urls.resource;
     const raw = one(map, "refresh_token");
     if (raw === undefined) return fail(c, 400, "invalid_request");
@@ -328,7 +338,7 @@ export function registerTokenRoutes(app: Hono<PublicAppEnv>, deps: TokenDeps): v
         log("token: refresh reuse, grant revoked");
         return fail(c, 400, "invalid_grant");
       case "no_client":
-        return fail(c, 401, "invalid_client");
+        return fail(c, 401, "invalid_client", basic);
       default:
         return fail(c, 400, "invalid_grant");
     }
@@ -341,11 +351,11 @@ export function registerTokenRoutes(app: Hono<PublicAppEnv>, deps: TokenDeps): v
     async (c) => {
       const prepared = await prepare(c, store);
       if (prepared instanceof Response) return prepared;
-      const { map, clientId } = prepared;
+      const { map, clientId, basic } = prepared;
       const grantType = one(map, "grant_type");
       if (grantType === undefined) return fail(c, 400, "invalid_request");
-      if (grantType === "authorization_code") return authorizationCode(c, map, clientId);
-      if (grantType === "refresh_token") return refreshToken(c, map, clientId);
+      if (grantType === "authorization_code") return authorizationCode(c, map, clientId, basic);
+      if (grantType === "refresh_token") return refreshToken(c, map, clientId, basic);
       return fail(c, 400, "unsupported_grant_type");
     },
   );
