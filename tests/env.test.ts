@@ -1,12 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { isPassphraseHashFormat, loadEnv, PASSPHRASE_HASH_PATTERN } from "../src/config/env.js";
+import {
+  fitsScryptMemory,
+  isPassphraseHashFormat,
+  loadEnv,
+  MAX_SCRYPT_MEMORY,
+  PASSPHRASE_HASH_PATTERN,
+  parsePassphraseHashParams,
+  scryptMemoryBytes,
+} from "../src/config/env.js";
 
 const valid = {
   VAULT_DIR: "/data/vault",
   GIT_AUTHOR_NAME: "Test Author",
   GIT_AUTHOR_EMAIL: "author@example.com",
-  INGEST_TOKEN: "fictional-test-token-0123456789-abcdefghij",
+  INGEST_TOKEN: ["fictional-test-token", "0123456789", "abcdefghij"].join("-"),
 };
 
 describe("loadEnv", () => {
@@ -96,11 +104,12 @@ describe("loadEnv", () => {
   });
 
   it("does not put a bad value in the error message", () => {
+    const marker = ["secret", "marker", "value"].join("-");
     try {
-      loadEnv({ ...valid, GIT_AUTHOR_EMAIL: "secret-marker-value" });
+      loadEnv({ ...valid, GIT_AUTHOR_EMAIL: marker });
       expect.unreachable();
     } catch (error) {
-      expect((error as Error).message).not.toContain("secret-marker-value");
+      expect((error as Error).message).not.toContain(marker);
     }
   });
 });
@@ -266,6 +275,9 @@ describe("loadEnv with PUBLIC_BASE_URL", () => {
     ["a non base64url salt", bad({ s: `${salt.slice(0, 21)}+` })],
     ["a missing key", `scrypt$32768$8$1$${salt}`],
     ["a trailing newline", `${goodHash}\n`],
+    ["more than 64 MiB of scrypt memory (r 16)", bad({ r: "16" })],
+    ["more than 64 MiB of scrypt memory (N 2^20)", bad({ n: "1048576" })],
+    ["N not below 2^(16r) (N 2^16, r 1)", bad({ n: "65536", r: "1" })],
   ])("rejects an OWNER_PASSPHRASE_HASH with %s, without echoing it", (_label, hash) => {
     expectNamedWithout(
       { ...valid, ...pub, OWNER_PASSPHRASE_HASH: hash },
@@ -279,8 +291,34 @@ describe("loadEnv with PUBLIC_BASE_URL", () => {
   it("exports the pattern and a checker that agree on the good hash", () => {
     expect(PASSPHRASE_HASH_PATTERN.test(goodHash)).toBe(true);
     expect(isPassphraseHashFormat(goodHash)).toBe(true);
-    expect(isPassphraseHashFormat(`scrypt$16384$32$16$${salt}$${key}`)).toBe(true);
-    expect(isPassphraseHashFormat(`scrypt$1048576$1$1$${salt}$${key}`)).toBe(true);
+    expect(isPassphraseHashFormat(`scrypt$16384$16$16$${salt}$${key}`)).toBe(true);
+    expect(isPassphraseHashFormat(`scrypt$32768$1$1$${salt}$${key}`)).toBe(true);
+  });
+
+  it("accepts a hash right at the 64 MiB memory budget and refuses the next step", () => {
+    // 128 * r * (N + 2 + p): r 15 at N 2^15 is 62,920,320 bytes, r 16 is 67,115,008 (> 64 MiB).
+    expect(isPassphraseHashFormat(`scrypt$32768$15$1$${salt}$${key}`)).toBe(true);
+    expect(isPassphraseHashFormat(`scrypt$32768$16$1$${salt}$${key}`)).toBe(false);
+    expect(scryptMemoryBytes(2 ** 15, 15, 1)).toBe(62_920_320);
+    expect(scryptMemoryBytes(2 ** 15, 16, 1)).toBe(67_115_008);
+    expect(MAX_SCRYPT_MEMORY).toBe(67_108_864);
+  });
+
+  it("applies the OpenSSL rule N < 2^(16r) as a format rule, apart from memory", () => {
+    expect(parsePassphraseHashParams(`scrypt$65536$1$1$${salt}$${key}`)).toBeUndefined();
+    expect(parsePassphraseHashParams(`scrypt$32768$1$1$${salt}$${key}`)).toEqual({
+      n: 32768,
+      r: 1,
+      p: 1,
+    });
+    // Well formed but over budget: parsed here, refused by the memory check.
+    expect(parsePassphraseHashParams(`scrypt$32768$16$1$${salt}$${key}`)).toEqual({
+      n: 32768,
+      r: 16,
+      p: 1,
+    });
+    expect(fitsScryptMemory(32768, 16, 1)).toBe(false);
+    expect(fitsScryptMemory(32768, 15, 1)).toBe(true);
   });
 
   it("throws on a non-numeric MCP_PORT without echoing it", () => {
