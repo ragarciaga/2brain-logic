@@ -719,6 +719,42 @@ describe("PATCH /notes against a real remote", () => {
       expectNothingWritten(before2, meeting, MEETING_PATH);
     });
 
+    it("S1: a set that moves a meeting to a mutable type is 409, so the two-step rewrite fails", async () => {
+      const original = Buffer.from(seedMeeting());
+      const before = head();
+      gitCalls = [];
+      const first = await patch(makeApp(), { path: MEETING_PATH, set: { type: "analysis" } });
+      expect(first.status).toBe(409);
+      expect(await first.json()).toEqual({ ok: false, error: "immutable_body" });
+      expectNothingWritten(before, original, MEETING_PATH);
+      const second = await patch(makeApp(), { path: MEETING_PATH, append: "rewrite" });
+      expect(second.status).toBe(409);
+      expectNothingWritten(before, original, MEETING_PATH);
+    });
+
+    it("S1: a set between two immutable types is allowed", async () => {
+      seed({
+        ".2brain/config.yaml": [
+          "types:",
+          "  meeting:",
+          "    value: meeting",
+          '    folder: "{area}/meetings"',
+          "    immutable_body: true",
+          "  call:",
+          "    value: call",
+          '    folder: "{area}/meetings"',
+          "    immutable_body: true",
+          "",
+        ].join("\n"),
+      });
+      seedMeeting();
+      const response = await patch(makeApp(), { path: MEETING_PATH, set: { type: "call" } });
+      expect(response.status).toBe(200);
+      const stored = parseNote(remoteFile(MEETING_PATH));
+      expect(stored.data.type).toBe("call");
+      expect(stored.content).toBe("Transcript line\n");
+    });
+
     it("R6.3: the type is read under the owner's property name and value", async () => {
       seed({
         ".2brain/config.yaml": [

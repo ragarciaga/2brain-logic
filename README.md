@@ -55,7 +55,8 @@ earlier byte of the body is unchanged. Only the incoming `set` values and the ap
 scrubbed (stored text is never rewritten), and the 200 body carries `redactions` as for a create. An
 append to a note whose type is configured `immutable_body: true` (transcripts), alone or with `set`,
 and an empty `append` included, is 409 `{"ok":false,"error":"immutable_body"}` and nothing is
-written; `set` alone on such a note is allowed. A property change rewrites the frontmatter block
+written; so is a `set` that changes such a note to a type without `immutable_body` (immutability is
+one-way; a change between two immutable types and any other property change are allowed). A property change rewrites the frontmatter block
 (comments and quoting are lost; unquoted dates such as `2026-10-31` stay text); an append alone keeps
 the frontmatter bytes. Either commits `2brain: update <path>`; the answer is 200
 `{"ok":true,"path":"...","commit":"<sha>"}`. If every value in `set` already equals the stored one and

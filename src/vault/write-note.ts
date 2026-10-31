@@ -140,7 +140,8 @@ export interface NoteWriter {
   write(note: NoteInput): Promise<WriteResult>;
   /**
    * Set frontmatter properties of an existing note and/or append text to its body. Earlier body
-   * bytes are never changed; an append to a type configured `immutable_body` is refused.
+   * bytes are never changed; an append to a type configured `immutable_body`, or a set that moves such a note to a type
+   * without it, is refused.
    */
   patch(input: NotePatch): Promise<WriteResult>;
 }
@@ -306,7 +307,9 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
  * non-file there is `NoteNotFoundError`; a symlink is `UnsafePathError`; a note whose frontmatter
  * cannot be read is `InvalidFrontmatterError` with empty lists. Any `append` (an empty one
  * included) on a note whose stored or merged type is configured `immutable_body: true` is
- * `ImmutableBodyError`, checked before validation, scrub or any file work. Only the incoming `set`
+ * `ImmutableBodyError`, and so is a `set` (with or without `append`) that changes a note of such a
+ * type to a type without it (immutability is one-way; a change between two immutable types is
+ * allowed). Both are checked before validation, scrub or any file work. Only the incoming `set`
  * values and the appended text are scrubbed (the stored note is trusted as it is). The appended
  * text goes after the old body bytes, which stay as they are, separated by exactly one blank line
  * (see `appendBody`). With no property change the original bytes plus the suffix are stored, so
@@ -522,12 +525,13 @@ export function createNoteWriter({
 
     const set = input.set ?? {};
     // A transcript body is never modified: refuse any append before validation, scrub or writes.
-    if (
-      input.append !== undefined &&
-      (isImmutableBody(data, config) || isImmutableBody(mergeProperties(data, set), config))
-    ) {
+    // Immutability is one-way: a set cannot move an immutable note to a mutable type either.
+    const storedImmutable = isImmutableBody(data, config);
+    const mergedImmutable = isImmutableBody(mergeProperties(data, set), config);
+    if (input.append !== undefined && (storedImmutable || mergedImmutable)) {
       throw new ImmutableBodyError();
     }
+    if (storedImmutable && !mergedImmutable) throw new ImmutableBodyError();
 
     // Validate the merge as the caller sent it, then scrub only the incoming values and validate
     // what will be stored.
