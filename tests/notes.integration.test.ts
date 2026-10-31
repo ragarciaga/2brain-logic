@@ -12,10 +12,11 @@ import { dirname, join } from "node:path";
 import { inspect } from "node:util";
 import matter from "gray-matter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultGit, ensureClone, type GitApi } from "../src/git/index.js";
+import { defaultGit, ensureClone, type GitApi, GitError, runGit } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
-import { parseNote } from "../src/vault/frontmatter.js";
+import { parseNote, stringifyNote } from "../src/vault/frontmatter.js";
 import { ScrubError, scrub, scrubFrontmatter } from "../src/vault/scrub/index.js";
+import { createSourceIndex } from "../src/vault/source-index.js";
 import {
   createNoteWriter,
   type Scrubber,
@@ -36,7 +37,7 @@ let fixture: GitFixture;
 let gitCalls: string[];
 let logs: string[];
 
-function spyGit(): GitApi {
+function spyGit(overrides: Partial<GitApi> = {}): GitApi {
   return {
     pullRebase: (...args) => {
       gitCalls.push("pullRebase");
@@ -50,16 +51,29 @@ function spyGit(): GitApi {
       gitCalls.push("push");
       return defaultGit.push(...args);
     },
+    headSha: (...args) => {
+      gitCalls.push("headSha");
+      return defaultGit.headSha(...args);
+    },
+    unstageFile: (...args) => {
+      gitCalls.push("unstageFile");
+      return defaultGit.unstageFile(...args);
+    },
+    ...overrides,
   };
 }
 
-function makeWriter() {
-  return createNoteWriter({ vaultDir: fixture.vaultDir, author: TEST_AUTHOR, git: spyGit() });
+function makeWriter(overrides: Partial<GitApi> = {}) {
+  return createNoteWriter({
+    vaultDir: fixture.vaultDir,
+    author: TEST_AUTHOR,
+    git: spyGit(overrides),
+  });
 }
 
-function makeApp() {
+function makeApp(overrides: Partial<GitApi> = {}) {
   return createApp({
-    writer: makeWriter(),
+    writer: makeWriter(overrides),
     ingestToken: TOKEN,
     log: (message) => logs.push(message),
   });
@@ -345,6 +359,30 @@ describe("POST /notes against a real remote", () => {
       const response = await post(makeApp(), note("inbox/ln.md"));
       expect(response.status).toBe(409);
       expect(readdirSync(outside)).toEqual(["victim.md"]);
+    });
+  });
+
+  describe.skipIf(process.platform === "win32")("D4: a symlink at the target is never read", () => {
+    it("a symlink whose size and pointed-to bytes equal the request is still 409", async () => {
+      const outsideDir = mkdtempSync(join(tmpdir(), "2brain-outside-"));
+      try {
+        mkdirSync(join(outsideDir, "d".repeat(100)));
+        const victim = join(outsideDir, "d".repeat(100), "v.md");
+        // The link's size is the length of its target path, so size the body to match it.
+        const base = stringifyNote(note("inbox/ln.md").frontmatter, "").length;
+        const body = "z".repeat(victim.length - base);
+        const sent = note("inbox/ln.md", {}, body);
+        const bytes = stringifyNote(sent.frontmatter, sent.body);
+        expect(bytes.length).toBe(victim.length);
+        writeFileSync(victim, bytes);
+        mkdirSync(join(fixture.vaultDir, "inbox"));
+        symlinkSync(victim, join(fixture.vaultDir, "inbox", "ln.md"));
+        const response = await post(makeApp(), sent);
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ ok: false, error: "note_exists" });
+      } finally {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -789,6 +827,218 @@ describe("POST /notes against a real remote", () => {
       expect(listVault()).toEqual(listingBefore);
       expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
       expect(logs).toEqual(["invalid_frontmatter rejected"]);
+    });
+  });
+
+  describe("T10: idempotent create and source id dedupe", () => {
+    const SECRET = ["sk", "ant", "api03", "C".repeat(24)].join("-");
+
+    function commitCount(): number {
+      return git(fixture.vaultDir, ["log", "--format=%s"])
+        .split("\n")
+        .filter((line) => line.startsWith("2brain: add")).length;
+    }
+
+    it("R5.1 (a): the same create twice gives 201 then 200 unchanged with no commit or push", async () => {
+      const app = makeApp();
+      const sent = note("inbox/a.md", { source_id: "ff-1" }, "body\n");
+      expect((await post(app, sent)).status).toBe(201);
+      gitCalls = [];
+      const shaBefore = remoteSha();
+      const second = await post(app, sent);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual({
+        ok: true,
+        path: "inbox/a.md",
+        commit: null,
+        unchanged: true,
+      });
+      expect(gitCalls).not.toContain("commitFile");
+      expect(gitCalls).not.toContain("push");
+      expect(remoteSha()).toBe(shaBefore);
+      expect(commitCount()).toBe(1);
+    });
+
+    it("R5.1: a retry carrying a secret compares the scrubbed bytes and reports redactions", async () => {
+      const app = makeApp();
+      const sent = note("inbox/s.md", {}, `key ${SECRET}\n`);
+      expect((await post(app, sent)).status).toBe(201);
+      logs = [];
+      const second = await post(app, sent);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual({
+        ok: true,
+        path: "inbox/s.md",
+        commit: null,
+        unchanged: true,
+        redactions: [{ rule: "anthropic_key", count: 1 }],
+      });
+      expect(logs).toEqual(["redacted: anthropic_key=1"]);
+      expect(commitCount()).toBe(1);
+    });
+
+    it("R5.1 (b): after a failed push, the retry is 200 unchanged and does not commit or push", async () => {
+      const badUrl = `file://${join(fixture.root, "missing", "r.git")}`;
+      git(fixture.vaultDir, ["remote", "set-url", "--push", "origin", badUrl]);
+      const app = makeApp();
+      const sent = note("inbox/b.md");
+      expect((await post(app, sent)).status).toBe(500);
+      gitCalls = [];
+      const retry = await post(app, sent);
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({
+        ok: true,
+        path: "inbox/b.md",
+        commit: null,
+        unchanged: true,
+      });
+      expect(commitCount()).toBe(1);
+      expect(gitCalls).not.toContain("commitFile");
+      expect(gitCalls).not.toContain("push");
+    });
+
+    it("R5.1 (c): identical bytes that arrived by pull give 200 unchanged, different bytes 409", async () => {
+      const sent = note("inbox/c.md", { source_id: "c-1" }, "same\n");
+      const bytes = stringifyNote(sent.frontmatter, sent.body);
+      const shaBefore = pushFromElsewhere("same", { "inbox/c.md": bytes });
+      const app = makeApp();
+      const same = await post(app, sent);
+      expect(same.status).toBe(200);
+      expect(((await same.json()) as { unchanged: boolean }).unchanged).toBe(true);
+      expect(remoteSha()).toBe(shaBefore);
+
+      const other = await post(app, note("inbox/c.md", { source_id: "c-1" }, "sama\n"));
+      expect(other.status).toBe(409);
+      expect(await other.json()).toEqual({ ok: false, error: "note_exists" });
+      expect(remoteSha()).toBe(shaBefore);
+    });
+
+    it.each([
+      ["the default name", "source_id", undefined],
+      [
+        "an owner name from the pushed config",
+        "origin_id",
+        "properties:\n  source_id: origin_id\n",
+      ],
+    ])(
+      "R5.2 (d): a second path with the same id gives 409 duplicate_source (%s)",
+      async (_n, name, config) => {
+        if (config !== undefined) pushFromElsewhere("cfg", { ".2brain/config.yaml": config });
+        const app = makeApp();
+        expect((await post(app, note("inbox/a.md", { [name]: "ff-1" }))).status).toBe(201);
+        const headBefore = git(fixture.vaultDir, ["rev-parse", "HEAD"]);
+        const shaBefore = remoteSha();
+        logs = [];
+        const response = await post(app, note("inbox/b.md", { [name]: "ff-1" }));
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          ok: false,
+          error: "duplicate_source",
+          path: "inbox/a.md",
+        });
+        expect(existsSync(join(fixture.vaultDir, "inbox", "b.md"))).toBe(false);
+        expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(headBefore);
+        expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+        expect(remoteSha()).toBe(shaBefore);
+        expect(logs).toEqual(["duplicate_source rejected"]);
+      },
+    );
+
+    it("R5.2: a numeric source id matches the same id sent as a string", async () => {
+      const app = makeApp();
+      expect((await post(app, note("inbox/a.md", { source_id: 42 }))).status).toBe(201);
+      const response = await post(app, note("inbox/b.md", { source_id: "42" }));
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toBe("duplicate_source");
+    });
+
+    it("R5.2 (e): retrying the first path is 200 unchanged; other bytes there are 409 note_exists", async () => {
+      const app = makeApp();
+      const sent = note("inbox/a.md", { source_id: "ff-1" }, "one\n");
+      expect((await post(app, sent)).status).toBe(201);
+      expect((await post(app, sent)).status).toBe(200);
+      const changed = await post(app, note("inbox/a.md", { source_id: "ff-1" }, "two\n"));
+      expect(changed.status).toBe(409);
+      expect(await changed.json()).toEqual({ ok: false, error: "note_exists" });
+    });
+
+    it("D1 (f): the index sees a pulled note and the service's own earlier commit", async () => {
+      const app = makeApp();
+      expect((await post(app, note("inbox/a.md", { source_id: "ff-1" }))).status).toBe(201);
+      pushFromElsewhere("remote-note", {
+        "inbox/r.md": stringifyNote({ ...VALID, source_id: "gm-7" }, "r\n"),
+      });
+      const pulled = await post(app, note("inbox/x.md", { source_id: "gm-7" }));
+      expect(pulled.status).toBe(409);
+      expect(await pulled.json()).toEqual({
+        ok: false,
+        error: "duplicate_source",
+        path: "inbox/r.md",
+      });
+      const own = await post(app, note("inbox/y.md", { source_id: "ff-1" }));
+      expect(own.status).toBe(409);
+      expect(((await own.json()) as { path: string }).path).toBe("inbox/a.md");
+    });
+
+    it("a vault over the index limits fails closed with 500 write_failed", async () => {
+      const app = createApp({
+        writer: createNoteWriter({
+          vaultDir: fixture.vaultDir,
+          author: TEST_AUTHOR,
+          git: spyGit(),
+          sourceIndex: createSourceIndex({ maxEntries: 1 }),
+        }),
+        ingestToken: TOKEN,
+        log: (message) => logs.push(message),
+      });
+      const response = await post(app, note("inbox/a.md", { source_id: "ff-1" }));
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "write_failed" });
+      expect(logs).toEqual(["write_failed: source index limit"]);
+      expect(existsSync(join(fixture.vaultDir, "inbox", "a.md"))).toBe(false);
+    });
+
+    it("D3 (h): a commit that fails before or after add leaves no file and the retry is 201", async () => {
+      const variants: Array<[string, Partial<GitApi>]> = [
+        [
+          "throws before add",
+          {
+            commitFile: async () => {
+              throw new GitError("add", 1);
+            },
+          },
+        ],
+        [
+          "adds then throws",
+          {
+            commitFile: async (dir, relPath) => {
+              await runGit(dir, ["add", "--", relPath]);
+              throw new GitError("commit", 1);
+            },
+          },
+        ],
+      ];
+      for (const [i, [, overrides]] of variants.entries()) {
+        const path = `inbox/h${i}.md`;
+        const failing = makeApp(overrides);
+        expect((await post(failing, note(path))).status).toBe(500);
+        expect(existsSync(join(fixture.vaultDir, path))).toBe(false);
+        expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+        expect((await post(makeApp(), note(path))).status).toBe(201);
+      }
+    });
+
+    it("D3 (h): a commit that lands and then throws keeps the file tracked and the tree clean", async () => {
+      const app = makeApp({
+        commitFile: async (...args) => {
+          await defaultGit.commitFile(...args);
+          throw new GitError("rev-parse", 1);
+        },
+      });
+      expect((await post(app, note("inbox/k.md"))).status).toBe(500);
+      expect(existsSync(join(fixture.vaultDir, "inbox", "k.md"))).toBe(true);
+      expect(git(fixture.vaultDir, ["ls-files", "inbox/k.md"])).toBe("inbox/k.md");
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
     });
   });
 
