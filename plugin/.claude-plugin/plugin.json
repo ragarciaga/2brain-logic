@@ -2,6 +2,11 @@
   "name": "2brain",
   "version": "0.1.0",
   "description": "Capture AI work sessions into a second brain vault over MCP.",
+  "author": {
+    "name": "2brain-logic contributors"
+  },
+  "license": "MIT",
+  "icon": "./icon.png",
   "userConfig": {
     "area": {
       "type": "string",
