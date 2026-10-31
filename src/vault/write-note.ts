@@ -3,7 +3,8 @@ import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/pro
 import { dirname, resolve, sep } from "node:path";
 import { loadVaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
-import { stringifyNote } from "./frontmatter.js";
+import { syncBeforeWrite } from "../git/sync.js";
+import { parseNote, stringifyNote } from "./frontmatter.js";
 import type { NoteInput } from "./note-schema.js";
 import {
   type ScrubFrontmatterResult,
@@ -117,6 +118,10 @@ export interface NoteWriterOptions {
   scrubber?: Scrubber;
   /** Defaults to one index per writer; tests inject small limits. */
   sourceIndex?: SourceIndex;
+  /** Clock for the date in a conflict copy name (UTC day). Defaults to the system clock. */
+  now?: () => Date;
+  /** Receives the `conflicts_kept: <n>` line. Defaults to `console.error`. */
+  log?: (message: string) => void;
 }
 
 /**
@@ -168,7 +173,10 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
 
 /**
  * Create the single write path into the vault: refuse a path that matches a scrub rule
- * (`UnsafePathError`, before any git work), pull with rebase, read the vault config, validate
+ * (`UnsafePathError`, before any git work), pull with rebase (on a rebase conflict the sync in
+ * src/git/sync.ts keeps both versions: the remote one at its path, the local one as
+ * `<name> (conflict YYYY-MM-DD).md`, scrubbed like any note, committed and pushed, and the write
+ * goes on), read the vault config, validate
  * the frontmatter and path against it, scrub secrets from the frontmatter and the body, validate
  * the scrubbed frontmatter again. If the target already holds a regular file with the same bytes
  * as the scrubbed note, the result is `unchanged` (no commit, no push); other content there is
@@ -189,9 +197,24 @@ export function createNoteWriter({
   git,
   scrubber = defaultScrubber,
   sourceIndex = createSourceIndex(),
+  now = () => new Date(),
+  log = console.error,
 }: NoteWriterOptions): NoteWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
+
+  /** Scrub a conflict copy like a created note. Any failure is `ScrubFailedError`. */
+  function prepareCopy(text: string): string {
+    let parsed: ReturnType<typeof parseNote>;
+    try {
+      parsed = parseNote(text);
+    } catch {
+      throw new ScrubFailedError();
+    }
+    const scrubbed = scrubNote(scrubber, parsed.data, parsed.content);
+    if (scrubbed.redactions.length === 0) return text;
+    return stringifyNote(scrubbed.frontmatter, scrubbed.body);
+  }
 
   async function writeOne(note: NoteInput): Promise<WriteResult> {
     // A secret in the path would reach the file name, the commit message and the remote. The path
@@ -204,7 +227,8 @@ export function createNoteWriter({
     }
     if (pathHasSecret) throw new UnsafePathError();
 
-    await git.pullRebase(root, author);
+    const { conflicts } = await syncBeforeWrite(root, { git, author, now, prepareCopy });
+    if (conflicts > 0) log(`conflicts_kept: ${conflicts}`);
     const config = await loadVaultConfig(root);
     const verdict = validateFrontmatter(note.frontmatter, note.path, config);
     if (!verdict.ok) {
