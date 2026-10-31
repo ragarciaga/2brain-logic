@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadVaultConfig } from "../src/config/vault-config.js";
 import {
   defaultGit,
@@ -279,17 +279,22 @@ describe.skipIf(!rgAvailable)("search (R8.1)", () => {
     expect(r.isError).toBe(true);
     expect(r.data).toEqual({ ok: false, error: "search_timeout" });
     // Under heavy load the kill can land before the fake wrote its pid file.
-    if (existsSync(pidFile)) await expectGone(pidFile);
+    if (pidFileReady(pidFile)) await expectGone(pidFile);
   });
 });
 
 /** How long the fake rg or git sleeps; far longer than any bound the tests wait for. */
 const FAKE_SLEEP_MS = 30_000;
 
+/** True once the fake child has written its pid (the file exists before it is filled). */
+function pidFileReady(pidFile: string): boolean {
+  return existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "";
+}
+
 /** Waits until the fake child has written its pid file, i.e. it is really running. */
 async function waitForStart(pidFile: string): Promise<void> {
   for (let i = 0; i < 1500; i += 1) {
-    if (existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "") return;
+    if (pidFileReady(pidFile)) return;
     await new Promise((done) => setTimeout(done, 20));
   }
   throw new Error("the fake child never started");
@@ -310,6 +315,10 @@ function fakeSlowExe(dir: string, name: string): { exe: string; pidFile: string 
 
 async function expectGone(pidFile: string): Promise<void> {
   const pid = Number(readFileSync(pidFile, "utf8"));
+  // Never signal pid 0 or a negative pid: that reaches a whole process group.
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error(`refusing to signal an invalid pid read from the pid file: ${pid}`);
+  }
   for (let i = 0; i < 40; i += 1) {
     try {
       process.kill(pid, 0);
@@ -323,6 +332,22 @@ async function expectGone(pidFile: string): Promise<void> {
 }
 
 describe("abort signal reaches the child processes", () => {
+  it("expectGone refuses an empty or zero pid file without signalling", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "2brain-pidfile-"));
+    extraDirs.push(dir);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      for (const content of ["", "0", "-5", "abc"]) {
+        const pidFile = join(dir, "x.pid");
+        writeFileSync(pidFile, content);
+        await expect(expectGone(pidFile)).rejects.toThrow(/invalid pid/);
+      }
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it("aborting a running search stops rg and answers search_timeout quickly", async () => {
     const dir = mkdtempSync(join(tmpdir(), "2brain-fake-rg-"));
     extraDirs.push(dir);
