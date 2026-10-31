@@ -72,7 +72,7 @@ async function harness(
   const { app } = createPublicApp({
     baseUrl: "https://brain.example.com",
     log: (line) => logs.push(line),
-    auth: { store, allowedRedirectHosts: hosts, trustProxyHops: 0 },
+    auth: { store, allowedRedirectHosts: hosts, trustProxyHops: 0, ownerPassphraseHash: "unused" },
   });
   const post = (body: string | Uint8Array | null, options: PostOptions = {}) => {
     const headers = new Headers();

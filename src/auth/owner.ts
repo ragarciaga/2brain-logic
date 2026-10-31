@@ -79,6 +79,108 @@ export async function hashPassphrase(passphrase: string): Promise<string> {
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64url")}$${key.toString("base64url")}`;
 }
 
+/** Sign-in lockout (R4.5): 5 counted attempts inside 15 minutes lock the key for 15 minutes. */
+export const SIGNIN_LOCKOUT = Object.freeze({
+  maxAttempts: 5,
+  windowMs: 900_000,
+  lockMs: 900_000,
+  maxEntries: 2000,
+});
+
+export type LockoutResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly retryAfterSeconds: number };
+
+export interface SignInLockout {
+  /** Whether `key` may try now. Counts nothing. */
+  check(key: string): LockoutResult;
+  /**
+   * Counts one attempt. The 5th inside the window returns ok and starts the lock, so the next
+   * request is refused by `check`. Refuses when the table is full of live entries (fail closed).
+   */
+  record(key: string): LockoutResult;
+  /** Clears the key after a right passphrase. */
+  reset(key: string): void;
+  size(): number;
+}
+
+export interface SignInLockoutOptions {
+  /** Clock in milliseconds. Defaults to the monotonic `performance.now()`. */
+  now?: () => number;
+  /** Override for tests of the bound. */
+  maxEntries?: number;
+}
+
+type LockEntry = { attempts: number[]; lockedUntil?: number };
+
+/**
+ * Sliding log of the last counted attempts per key (a /64 or IPv4 key from `rateKey`). Memory
+ * only. A live entry is never evicted: at capacity a new key is refused, because evicting would
+ * hand an attacker a fresh count.
+ */
+export function createSignInLockout(options: SignInLockoutOptions = {}): SignInLockout {
+  const now = options.now ?? (() => performance.now());
+  const maxEntries = options.maxEntries ?? SIGNIN_LOCKOUT.maxEntries;
+  const { maxAttempts, windowMs, lockMs } = SIGNIN_LOCKOUT;
+  const entries = new Map<string, LockEntry>();
+
+  const seconds = (ms: number): number => Math.max(1, Math.ceil(ms / 1000));
+  const expiry = (entry: LockEntry): number =>
+    Math.max((entry.attempts.at(-1) ?? 0) + windowMs, entry.lockedUntil ?? 0);
+
+  function live(key: string, at: number): LockEntry | undefined {
+    const entry = entries.get(key);
+    if (entry === undefined) return undefined;
+    if (at >= expiry(entry)) {
+      entries.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
+  return {
+    check(key) {
+      const at = now();
+      const entry = live(key, at);
+      if (entry?.lockedUntil !== undefined && at < entry.lockedUntil) {
+        return { ok: false, retryAfterSeconds: seconds(entry.lockedUntil - at) };
+      }
+      return { ok: true };
+    },
+
+    record(key) {
+      const at = now();
+      let entry = live(key, at);
+      if (entry?.lockedUntil !== undefined && at < entry.lockedUntil) {
+        return { ok: false, retryAfterSeconds: seconds(entry.lockedUntil - at) };
+      }
+      if (entry === undefined) {
+        if (entries.size >= maxEntries) {
+          for (const other of entries.keys()) live(other, at);
+        }
+        if (entries.size >= maxEntries) {
+          return { ok: false, retryAfterSeconds: seconds(windowMs) };
+        }
+        entry = { attempts: [] };
+        entries.set(key, entry);
+      }
+      entry.attempts = entry.attempts.filter((t) => at - t < windowMs);
+      entry.attempts.push(at);
+      if (entry.attempts.length > maxAttempts) entry.attempts.shift();
+      if (entry.attempts.length >= maxAttempts) entry.lockedUntil = at + lockMs;
+      return { ok: true };
+    },
+
+    reset(key) {
+      entries.delete(key);
+    },
+
+    size() {
+      return entries.size;
+    },
+  };
+}
+
 /**
  * True when the passphrase matches the stored hash. False for a wrong passphrase, for a passphrase
  * that is not a string at runtime (checked before normalizing, so an object with its own

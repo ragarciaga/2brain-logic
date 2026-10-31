@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { registerAuthorizeRoute } from "../auth/oauth/authorize.js";
+import { type CodeStore, createCodeStore } from "../auth/oauth/codes.js";
 import { registerDiscoveryRoutes } from "../auth/oauth/metadata.js";
 import { registerClientRoute } from "../auth/oauth/register.js";
 import type { AuthStore } from "../auth/oauth/store.js";
@@ -46,7 +47,7 @@ export interface PublicAppOptions {
   log?: (line: string) => void;
   /**
    * What the OAuth routes need. Without it only the discovery documents are served and
-   * `POST /register` and `GET /authorize` answer 404.
+   * `POST /register`, `GET /authorize` and `POST /authorize` answer 404.
    */
   auth?: {
     store: AuthStore;
@@ -54,8 +55,16 @@ export interface PublicAppOptions {
     allowedRedirectHosts: readonly string[];
     /** `TRUST_PROXY_HOPS`. */
     trustProxyHops: number;
+    /** `OWNER_PASSPHRASE_HASH`. Never logged. */
+    ownerPassphraseHash: string;
     /** Test seam for the rate limiter clock. */
     rateNow?: () => number;
+    /** Test seam for the sign-in lockout and code clocks. */
+    now?: () => number;
+    /** Test seam: the code store, so a test can read what was issued. Production never sets it. */
+    codes?: CodeStore;
+    /** Test seam: replaces the scrypt check. Production never sets it. */
+    verifyPassphrase?: (passphrase: string, stored: string) => Promise<boolean>;
   };
 }
 
@@ -79,7 +88,7 @@ export function buildPublicUrls(baseUrl: string): PublicUrls {
 /**
  * The public Hono app, served on `MCP_PORT`. It serves the discovery documents (RFC 9728 and
  * RFC 8414) and, when `auth` is given, `POST /register` (RFC 7591) and `GET /authorize` (the
- * sign-in page); every other path answers 404
+ * sign-in page) and `POST /authorize` (the owner sign-in); every other path answers 404
  * (Hono's default), including the ingest routes: the ingest API never answers here, with or
  * without the ingest token. Later tasks mount their routes on this app from `PUBLIC_PATHS`.
  *
@@ -122,9 +131,18 @@ export function createPublicApp({ baseUrl, log = console.error, auth }: PublicAp
   registerDiscoveryRoutes(app);
   if (auth !== undefined) {
     registerClientRoute(app, { ...auth, log });
+    // One code store per app; the token route (T10) reuses it.
+    const codes = auth.codes ?? createCodeStore({ now: auth.now });
     registerAuthorizeRoute(app, {
       store: auth.store,
       allowedRedirectHosts: auth.allowedRedirectHosts,
+      ownerPassphraseHash: auth.ownerPassphraseHash,
+      trustProxyHops: auth.trustProxyHops,
+      codes,
+      rateNow: auth.rateNow,
+      now: auth.now,
+      verifyPassphrase: auth.verifyPassphrase,
+      log,
     });
   }
 

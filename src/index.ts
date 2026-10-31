@@ -47,6 +47,7 @@ async function main(): Promise<void> {
       store: authStore,
       allowedRedirectHosts: ALLOWED_REDIRECT_HOSTS,
       trustProxyHops: TRUST_PROXY_HOPS,
+      ownerPassphraseHash: env.publicApp.OWNER_PASSPHRASE_HASH,
     },
   });
   await startServer(publicApp, { host: env.HOST, port: MCP_PORT });
