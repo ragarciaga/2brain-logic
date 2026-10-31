@@ -173,6 +173,7 @@ describe("GET /authorize: redirect URI matching", () => {
     ["case", URI, "https://Claude.ai/api/mcp/auth_callback"],
     ["uppercase scheme", URI, "HTTPS://claude.ai/api/mcp/auth_callback"],
     ["dot segments", URI, "https://claude.ai/a/../api/mcp/auth_callback"],
+    ["non-canonical loopback", LOOP, "http://127.0.0.1:5678/a/../cb"],
     ["fragment", URI, `${URI}#frag`],
     ["credentials", URI, "https://u:p@claude.ai/api/mcp/auth_callback"],
     ["unparseable", URI, "not a url"],
@@ -312,6 +313,20 @@ describe("GET /authorize: redirect errors (R4.3)", () => {
       without(good(id, { state: "s".repeat(2048) }), "code_challenge"),
     );
     expect(edge.searchParams.get("state")).toHaveLength(2048);
+    const twice = await failing((id) => [...good(id), ["state", "b"]]);
+    expect(twice.searchParams.get("error")).toBe("invalid_request");
+    expect(twice.searchParams.has("state")).toBe(false);
+  });
+
+  it("appends after a bare question mark without a second separator", async () => {
+    const h = await harness();
+    const registered = "https://claude.ai/cb?";
+    const id = await h.client([registered]);
+    const res = await h.app.request(
+      query(without(good(id, { redirect_uri: registered }), "code_challenge")),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toMatch(/^https:\/\/claude\.ai\/cb\?error=/);
   });
 
   it("unsupported_response_type for token", async () => {
