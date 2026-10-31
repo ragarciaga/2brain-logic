@@ -1,0 +1,17 @@
+{
+  "title": "CaptureResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "session_note", "recipes", "people_updated", "already_saved", "detail"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["saved", "nothing_to_save", "mcp_unavailable", "session_type_missing", "failed"]
+    },
+    "session_note": { "type": ["string", "null"] },
+    "recipes": { "type": "array", "items": { "type": "string" } },
+    "people_updated": { "type": "array", "items": { "type": "string" } },
+    "already_saved": { "type": "boolean" },
+    "detail": { "type": "string", "maxLength": 120 }
+  }
+}
