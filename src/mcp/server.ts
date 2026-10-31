@@ -55,8 +55,8 @@ export interface McpToolDefinition {
 }
 
 /**
- * The tool registry: the read tools and the write tools. No tool deletes, moves or archives a
- * file (R9.5). T14 adds `update_properties`.
+ * The tool registry: the read tools (`search`, `read`, `recent`) and the write tools (`save_note`,
+ * `save_recipe`, `update_properties`). No tool deletes, moves or archives a file (R9.5).
  */
 export const MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   ...READ_TOOLS,
