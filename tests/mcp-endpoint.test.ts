@@ -30,7 +30,10 @@ afterEach(() => {
 });
 
 const deps: McpServerDeps = {
-  writer: { write: async () => ({ path: "x.md", commit: "abc" }) },
+  writer: {
+    write: async () => ({ path: "x.md", commit: "abc" }),
+    patch: async () => ({ path: "x.md", commit: "abc" }),
+  },
   config: { vaultDir: "/nonexistent-vault" },
 };
 
