@@ -78,7 +78,7 @@ describe("buildInvocation", () => {
     const out = buildInvocation(readSettings({}), env, paths);
     expect(env).toStrictEqual(copy);
     if ("error" in out) throw new Error("unexpected error");
-    expect(out.env).toStrictEqual(copy);
+    expect(out.env).toStrictEqual({ ...copy, TWOBRAIN_CAPTURE: "1" });
     expect(out.env).not.toBe(env);
   });
 
