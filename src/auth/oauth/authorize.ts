@@ -1,10 +1,21 @@
 import type { Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { PUBLIC_PATHS, type PublicAppEnv } from "../../mcp/app.js";
+import { createSignInLockout, verifyPassphrase } from "../owner.js";
+import { clientIp, RATE_RULES, rateKey, rateLimit } from "../rate-limit.js";
+import type { CodeStore } from "./codes.js";
 import { isAllowedRedirectUri } from "./register.js";
 import type { StoreReads } from "./store.js";
 
 /**
  * `GET /authorize` (R4.1 to R4.3, R4.6): the request checks and the owner sign-in page.
+ * `POST /authorize` (R4.4, R4.5): the owner sign-in. Wrong passphrases show the page again with
+ * one fixed error; 5 counted attempts in 15 minutes from one IP key lock it for 15 minutes. A
+ * right passphrase issues a single-use code (see codes.ts) and redirects with it.
+ *
+ * - The POST reads only the urlencoded body, never the query, and refuses any Origin other than
+ *   the configured issuer before a lockout count or scrypt. Page errors come before the Origin
+ *   check, so a cross-origin POST never produces a redirect.
  *
  * - Order is the control against open redirects: a bad client or redirect URI answers a fixed 400
  *   page and never redirects. Only after both are proven does any failure redirect to the client.
@@ -45,6 +56,11 @@ export interface AuthorizeDeps {
 }
 
 export const AUTHORIZE_LIMITS = Object.freeze({ maxStateLength: 2048 });
+
+export const AUTHORIZE_POST_MAX_BODY_BYTES = 32 * 1024;
+export const MAX_PASSPHRASE_BYTES = 1024;
+/** Verifications in flight at once; past it a sign-in gets 429 and is not counted. */
+export const MAX_PENDING_VERIFICATIONS = 4;
 
 export const ERROR_DESCRIPTIONS: Readonly<Record<AuthorizeError, string>> = Object.freeze({
   invalid_request: "The authorization request is invalid",
@@ -206,8 +222,15 @@ function stripUnsafe(text: string): string {
 const hidden = (name: string, value: string): Markup =>
   html`<input type="hidden" name="${name}" value="${value}">`;
 
-/** The sign-in page. `actionPath` is a relative path. */
-export function renderSignInPage(request: ValidAuthorizeRequest, actionPath: string): string {
+/** The one error text of a failed sign-in: it never says why. */
+export const SIGNIN_ERROR = "Sign-in failed. Check the passphrase and try again.";
+
+/** The sign-in page. `actionPath` is a relative path. `showError` adds the fixed error text. */
+export function renderSignInPage(
+  request: ValidAuthorizeRequest,
+  actionPath: string,
+  showError = false,
+): string {
   const name = stripUnsafe(request.clientName ?? "");
   const redirectHost = new URL(request.redirectUri).host;
   const fields = [
@@ -228,6 +251,7 @@ export function renderSignInPage(request: ValidAuthorizeRequest, actionPath: str
 </head>
 <body>
 <h1>Sign in to your second brain</h1>
+${showError ? html`<p role="alert">${SIGNIN_ERROR}</p>` : new Markup("")}
 <p>Redirect host: <strong>${redirectHost}</strong></p>
 <p>Redirect address: <strong>${request.redirectUri}</strong></p>
 <p>${declared} (self-declared, not verified).</p>
@@ -241,17 +265,51 @@ ${new Markup(fields.map((field) => field.text).join("\n"))}
 `.text;
 }
 
-/** The fixed 400 page: no request value. */
-export function renderErrorPage(): string {
+function fixedPage(title: string, message: string): string {
   return html`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Authorization error</title>
+<title>${title}</title>
 </head>
 <body>
-<h1>Authorization error</h1>
-<p>This authorization request cannot be completed. Return to the application and try again.</p>
+<h1>${title}</h1>
+<p>${message}</p>
+</body>
+</html>
+`.text;
+}
+
+/** The fixed 400 page: no request value. */
+export function renderErrorPage(): string {
+  return fixedPage(
+    "Authorization error",
+    "This authorization request cannot be completed. Return to the application and try again.",
+  );
+}
+
+/** The fixed 403 page for a request from another origin. */
+export function renderForbiddenPage(): string {
+  return fixedPage("Request refused", "This request was not sent from the sign-in page.");
+}
+
+/** The fixed 429 page: no request value. */
+export function renderTooManyPage(): string {
+  return fixedPage("Too many attempts", "Too many sign-in attempts. Try again later.");
+}
+
+/** The same-origin page for a loopback redirect: a meta refresh and a link to `url`. */
+export function renderContinuePage(url: string): string {
+  return html`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=${url}">
+<title>Signed in</title>
+</head>
+<body>
+<h1>Signed in</h1>
+<p><a href="${url}">Continue</a></p>
 </body>
 </html>
 `.text;
@@ -285,14 +343,22 @@ export function redirectWithParams(
   redirectUri: string,
   entries: Readonly<Record<string, string | undefined>>,
 ): Response {
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  return c.redirect(buildRedirectUrl(redirectUri, entries), 302);
+}
+
+/** `redirectUri` with the entries appended, without re-encoding what is already there. */
+export function buildRedirectUrl(
+  redirectUri: string,
+  entries: Readonly<Record<string, string | undefined>>,
+): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(entries)) {
     if (value !== undefined) params.append(key, value);
   }
   const separator = redirectUri.endsWith("?") ? "" : new URL(redirectUri).search === "" ? "?" : "&";
-  c.header("Cache-Control", "no-store");
-  c.header("Referrer-Policy", "no-referrer");
-  return c.redirect(`${redirectUri}${separator}${params.toString()}`, 302);
+  return `${redirectUri}${separator}${params.toString()}`;
 }
 
 /** The answer for a failed check: the 400 page or the error redirect. */
@@ -313,16 +379,146 @@ export function signInPageResponse(
   c: Context,
   request: ValidAuthorizeRequest,
   actionPath: string,
+  showError = false,
+  status: 200 | 500 = 200,
 ): Response {
   setPageHeaders(c, request.redirectUri);
-  return c.html(renderSignInPage(request, actionPath), 200);
+  return c.html(renderSignInPage(request, actionPath, showError), status);
 }
 
-/** Mounts `GET /authorize` on the public app. */
-export function registerAuthorizeRoute(app: Hono<PublicAppEnv>, deps: AuthorizeDeps): void {
+/** What `POST /authorize` needs on top of the request checks. */
+export interface AuthorizePostDeps extends AuthorizeDeps {
+  /** `OWNER_PASSPHRASE_HASH`. Never logged. */
+  ownerPassphraseHash: string;
+  /** `TRUST_PROXY_HOPS`. */
+  trustProxyHops: number;
+  codes: CodeStore;
+  /** Test seam for the rate limiter clock. */
+  rateNow?: () => number;
+  /** Test seam for the lockout clock. */
+  now?: () => number;
+  /** Test seam: replaces the scrypt check. Production never sets it. */
+  verifyPassphrase?: (passphrase: string, stored: string) => Promise<boolean>;
+  /** Fixed, value-free lines only. */
+  log: (line: string) => void;
+}
+
+const FORM_TYPE = "application/x-www-form-urlencoded";
+
+/** Parses urlencoded text into a null-prototype map that keeps every duplicate. */
+function parseForm(text: string): AuthorizeParams {
+  const map: Record<string, string[]> = Object.create(null);
+  for (const [name, value] of new URLSearchParams(text)) {
+    const list = Object.hasOwn(map, name) ? map[name] : undefined;
+    if (list === undefined) map[name] = [value];
+    else list.push(value);
+  }
+  return map;
+}
+
+/** Mounts `GET /authorize` (the sign-in page) on the public app. */
+function registerAuthorizeGet(app: Hono<PublicAppEnv>, deps: AuthorizeDeps): void {
   app.get(PUBLIC_PATHS.authorize, (c) => {
     const check = checkAuthorizeRequest(c.req.queries(), c.var.urls.resource, deps);
     if (check.kind !== "ok") return authorizeFailureResponse(c, check);
     return signInPageResponse(c, check.request, PUBLIC_PATHS.authorize);
   });
+}
+
+/** Mounts `GET /authorize` and `POST /authorize` on the public app. */
+export function registerAuthorizeRoute(app: Hono<PublicAppEnv>, deps: AuthorizePostDeps): void {
+  registerAuthorizeGet(app, deps);
+  const verify = deps.verifyPassphrase ?? verifyPassphrase;
+  const lockout = createSignInLockout({ now: deps.now });
+  let pending = 0;
+
+  const plain = (c: Context, status: 400 | 403 | 429 | 500, body: string): Response => {
+    setPageHeaders(c);
+    return c.html(body, status);
+  };
+  const tooMany = (c: Context, retryAfterSeconds: number): Response => {
+    c.header("Retry-After", String(retryAfterSeconds));
+    return plain(c, 429, renderTooManyPage());
+  };
+
+  app.post(
+    PUBLIC_PATHS.authorize,
+    rateLimit(RATE_RULES.signin, { trustProxyHops: deps.trustProxyHops, now: deps.rateNow }),
+    bodyLimit({
+      maxSize: AUTHORIZE_POST_MAX_BODY_BYTES,
+      onError: (c) => plain(c, 400, renderErrorPage()),
+    }),
+    async (c) => {
+      const type = (c.req.header("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+      if (type !== FORM_TYPE) return plain(c, 400, renderErrorPage());
+      const map = parseForm(await c.req.text());
+
+      const check = checkAuthorizeRequest(map, c.var.urls.resource, deps);
+      if (check.kind === "page_error") return authorizeFailureResponse(c, check);
+      if (c.req.header("origin") !== c.var.urls.issuer) {
+        return plain(c, 403, renderForbiddenPage());
+      }
+      if (check.kind === "redirect_error") return authorizeFailureResponse(c, check);
+
+      // Lockout check, cap and record run together with no await between them.
+      const key = rateKey(clientIp(c, deps.trustProxyHops));
+      const locked = lockout.check(key);
+      if (!locked.ok) {
+        deps.log("authorize: signin locked");
+        return tooMany(c, locked.retryAfterSeconds);
+      }
+      if (pending >= MAX_PENDING_VERIFICATIONS) {
+        deps.log("authorize: verify cap reached");
+        return tooMany(c, 1);
+      }
+      const recorded = lockout.record(key);
+      if (!recorded.ok) {
+        deps.log("authorize: signin locked");
+        return tooMany(c, recorded.retryAfterSeconds);
+      }
+
+      const request = check.request;
+      const given = Object.hasOwn(map, "passphrase") ? (map.passphrase ?? []) : [];
+      const value = given.length === 1 ? given[0] : undefined;
+      if (
+        typeof value !== "string" ||
+        value === "" ||
+        Buffer.byteLength(value, "utf8") > MAX_PASSPHRASE_BYTES
+      ) {
+        deps.log("authorize: signin failed");
+        return signInPageResponse(c, request, PUBLIC_PATHS.authorize, true);
+      }
+
+      let ok: boolean;
+      pending += 1;
+      try {
+        ok = await verify(value, deps.ownerPassphraseHash);
+      } catch {
+        deps.log("authorize: passphrase check failed");
+        return signInPageResponse(c, request, PUBLIC_PATHS.authorize, true, 500);
+      } finally {
+        pending -= 1;
+      }
+      if (!ok) {
+        deps.log("authorize: signin failed");
+        return signInPageResponse(c, request, PUBLIC_PATHS.authorize, true);
+      }
+
+      lockout.reset(key);
+      deps.log("authorize: signin ok");
+      const code = deps.codes.issue({
+        clientId: request.clientId,
+        redirectUri: request.redirectUri,
+        codeChallenge: request.codeChallenge,
+        resource: request.resource,
+      });
+      const entries = { code, state: request.state };
+      if (new URL(request.redirectUri).hostname === "[::1]") {
+        setPageHeaders(c);
+        c.header("Referrer-Policy", "no-referrer");
+        return c.html(renderContinuePage(buildRedirectUrl(request.redirectUri, entries)), 200);
+      }
+      return redirectWithParams(c, request.redirectUri, entries);
+    },
+  );
 }

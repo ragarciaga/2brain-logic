@@ -38,7 +38,14 @@ async function harness(hosts: readonly string[] = HOSTS, withAuth = true) {
     createPublicApp({
       baseUrl: "https://brain.example.com",
       log: () => undefined,
-      auth: withAuth ? { store, allowedRedirectHosts: allowed, trustProxyHops: 0 } : undefined,
+      auth: withAuth
+        ? {
+            store,
+            allowedRedirectHosts: allowed,
+            trustProxyHops: 0,
+            ownerPassphraseHash: "unused",
+          }
+        : undefined,
     }).app;
   const app = make(hosts);
   async function client(redirectUris: string[], name?: string): Promise<string> {
@@ -436,12 +443,6 @@ describe("checkAuthorizeRequest export (D2)", () => {
 });
 
 describe("routing", () => {
-  it("answers 404 to POST /authorize for now", async () => {
-    const h = await harness();
-    const res = await h.app.request("/authorize", { method: "POST" });
-    expect(res.status).toBe(404);
-  });
-
   it("answers 404 to GET /authorize without auth", async () => {
     const h = await harness(HOSTS, false);
     const res = await h.app.request("/authorize");
