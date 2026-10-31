@@ -49,6 +49,13 @@ const EXPECTED_TOOLS = ["search", "read", "recent", "save_note", "save_recipe"];
 const sha256Hex = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
+const rgAvailable = spawnSync("rg", ["--version"]).status === 0;
+if (!rgAvailable) {
+  console.warn(
+    "rg is not installed: the flow test checks the search_failed answer instead of hits",
+  );
+}
+
 const randomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 // Built from parts so no source line holds a token-shaped literal.
 const INGEST_TOKEN = ["ingest", randomHex(16), "flow"].join("-");
@@ -329,10 +336,18 @@ describe("OAuth connector flow from the built entry point", () => {
 
     const found = (await mcp.callTool({ name: "search", arguments: { query: SEEDED_WORD } })) as {
       isError?: boolean;
-      structuredContent?: { results?: Array<{ path: string }> };
+      structuredContent?: { error?: string; results?: Array<{ path: string }> };
     };
-    expect(found.isError).not.toBe(true);
-    expect(found.structuredContent?.results?.map((r) => r.path)).toContain(SEEDED_PATH);
+    if (rgAvailable) {
+      expect(found.isError).not.toBe(true);
+      expect(found.structuredContent?.results?.map((r) => r.path)).toContain(SEEDED_PATH);
+    } else {
+      // Without ripgrep the tool answers a fixed code and leaks no path or process output.
+      expect(found.isError).toBe(true);
+      expect(found.structuredContent).toEqual({ ok: false, error: "search_failed" });
+      expect(JSON.stringify(found)).not.toContain(SEEDED_PATH);
+      expect(JSON.stringify(found)).not.toContain(fixture.vaultDir);
+    }
 
     const saved = (await mcp.callTool({
       name: "save_note",
