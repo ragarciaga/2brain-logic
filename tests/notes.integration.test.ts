@@ -16,7 +16,12 @@ import { defaultGit, ensureClone, type GitApi } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
 import { parseNote } from "../src/vault/frontmatter.js";
 import { ScrubError, scrub, scrubFrontmatter } from "../src/vault/scrub/index.js";
-import { createNoteWriter, type Scrubber, ScrubFailedError } from "../src/vault/write-note.js";
+import {
+  createNoteWriter,
+  type Scrubber,
+  ScrubFailedError,
+  scrubNote,
+} from "../src/vault/write-note.js";
 import {
   createGitFixture,
   type GitFixture,
@@ -616,15 +621,15 @@ describe("POST /notes against a real remote", () => {
     it("R4.3: body and frontmatter counts are combined, sorted by rule id, one log line", async () => {
       const response = await post(
         makeApp(),
-        note("inbox/b.md", { ref: `x ${GHP}`, links: { primary: GHP } }, `${GHP.length}\n${ANT}\n`),
+        note("inbox/b.md", { ref: `x ${GHP}`, links: { primary: GHP } }, `${GHP}\n${ANT}\n`),
       );
       expect(response.status).toBe(201);
       const text = await response.text();
       expect(JSON.parse(text).redactions).toEqual([
         { rule: "anthropic_key", count: 1 },
-        { rule: "github_token", count: 2 },
+        { rule: "github_token", count: 3 },
       ]);
-      expect(logs).toEqual(["redacted: anthropic_key=1, github_token=2"]);
+      expect(logs).toEqual(["redacted: anthropic_key=1, github_token=3"]);
       for (const output of [text, ...logs]) {
         expect(output).not.toContain(ANT);
         expect(output).not.toContain(GHP);
@@ -644,7 +649,8 @@ describe("POST /notes against a real remote", () => {
       expect(Object.keys(result).sort()).toEqual(["commit", "path"]);
     });
 
-    const failures: Array<[string, Scrubber]> = [
+    // The path check runs `scrub` first, so a failing `scrub` stops before any git call.
+    const failures: Array<[string, Scrubber, string[]]> = [
       [
         "ScrubError from scrub",
         {
@@ -653,6 +659,7 @@ describe("POST /notes against a real remote", () => {
           },
           scrubFrontmatter: (data) => scrubFrontmatter(data),
         },
+        [],
       ],
       [
         "RangeError from scrubFrontmatter",
@@ -662,6 +669,7 @@ describe("POST /notes against a real remote", () => {
             throw new RangeError(`MARK${GHP}`);
           },
         },
+        ["pullRebase"],
       ],
       [
         "a string thrown from scrub",
@@ -671,19 +679,20 @@ describe("POST /notes against a real remote", () => {
           },
           scrubFrontmatter: (data) => scrubFrontmatter(data),
         },
+        [],
       ],
     ];
 
     it.each(failures)(
       "R4.4: %s gives 500 scrub_failed and writes nothing",
-      async (_n, scrubber) => {
+      async (_n, scrubber, expectedCalls) => {
         const shaBefore = remoteSha();
         const listingBefore = listVault();
         const response = await post(appWith(scrubber), note("inbox/sub/x.md", {}, `${ANT}\n`));
         expect(response.status).toBe(500);
         const text = await response.text();
         expect(JSON.parse(text)).toEqual({ ok: false, error: "scrub_failed" });
-        expect(gitCalls).toEqual(["pullRebase"]);
+        expect(gitCalls).toEqual(expectedCalls);
         expect(remoteSha()).toBe(shaBefore);
         expect(listVault()).toEqual(listingBefore);
         expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
@@ -694,6 +703,30 @@ describe("POST /notes against a real remote", () => {
         }
       },
     );
+
+    it("R4.4: a scrubber result whose hits are not iterable gives ScrubFailedError", () => {
+      const malformed: Scrubber = {
+        scrub: (text) => ({ text, hits: 5 as unknown as Map<string, number> }),
+        scrubFrontmatter: (data) => ({ data, hits: new Map() }),
+      };
+      expect(() => scrubNote(malformed, {}, "x")).toThrow(ScrubFailedError);
+    });
+
+    it("R4.1: a path that matches a scrub rule gives 400 unsafe_path and leaks nowhere", async () => {
+      const shaBefore = remoteSha();
+      const listingBefore = listVault();
+      const response = await post(makeApp(), note(`inbox/${GHP}.md`));
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({ ok: false, error: "unsafe_path" });
+      expect(gitCalls).toEqual([]);
+      expect(remoteSha()).toBe(shaBefore);
+      expect(listVault()).toEqual(listingBefore);
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+      expect(logs).toEqual(["unsafe_path rejected"]);
+      const history = gitRaw(fixture.remote, ["log", "--all", "-p", "--format=%B%n%s"]);
+      for (const output of [text, ...logs, history]) expect(output).not.toContain(GHP);
+    });
 
     it("R4.4: the real scrubber on a 200,000-level object or a cycle gives ScrubFailedError", async () => {
       const deep: Record<string, unknown> = {};

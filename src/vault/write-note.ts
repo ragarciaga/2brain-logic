@@ -114,15 +114,15 @@ export function scrubNote(
 ): { frontmatter: Record<string, unknown>; body: string; redactions: Redaction[] } {
   let scrubbedFrontmatter: ScrubFrontmatterResult;
   let scrubbedBody: ScrubResult;
+  const counts = new Map<string, number>();
   try {
     scrubbedFrontmatter = scrubber.scrubFrontmatter(frontmatter);
     scrubbedBody = scrubber.scrub(body);
+    for (const hits of [scrubbedFrontmatter.hits, scrubbedBody.hits]) {
+      for (const [rule, count] of hits) counts.set(rule, (counts.get(rule) ?? 0) + count);
+    }
   } catch {
     throw new ScrubFailedError();
-  }
-  const counts = new Map<string, number>();
-  for (const hits of [scrubbedFrontmatter.hits, scrubbedBody.hits]) {
-    for (const [rule, count] of hits) counts.set(rule, (counts.get(rule) ?? 0) + count);
   }
   const redactions = [...counts]
     .map(([rule, count]) => ({ rule, count }))
@@ -150,7 +150,8 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
 }
 
 /**
- * Create the single write path into the vault: pull with rebase, read the vault config, validate
+ * Create the single write path into the vault: refuse a path that matches a scrub rule
+ * (`UnsafePathError`, before any git work), pull with rebase, read the vault config, validate
  * the frontmatter and path against it, scrub secrets from the frontmatter and the body, validate
  * the scrubbed frontmatter again, write a new file, commit, push. Writes are serialized because
  * they share one working tree. The config is read again after every pull, so a change pushed from
@@ -171,6 +172,16 @@ export function createNoteWriter({
   let queue: Promise<unknown> = Promise.resolve();
 
   async function writeOne(note: NoteInput): Promise<WriteResult> {
+    // A secret in the path would reach the file name, the commit message and the remote. The path
+    // is never rewritten (a placeholder contains `:`): any rule match refuses it.
+    let pathHasSecret: boolean;
+    try {
+      pathHasSecret = scrubber.scrub(note.path).hits.size > 0;
+    } catch {
+      throw new ScrubFailedError();
+    }
+    if (pathHasSecret) throw new UnsafePathError();
+
     await git.pullRebase(root, author);
     const config = await loadVaultConfig(root);
     const verdict = validateFrontmatter(note.frontmatter, note.path, config);

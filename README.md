@@ -33,7 +33,8 @@ curl -X POST http://127.0.0.1:3000/notes \
 
 `POST /notes` pulls with rebase, reads the vault config, validates the frontmatter and the path
 against it, scrubs secrets from the frontmatter and the body (each match is stored as
-`[REDACTED:<rule>]`), validates the scrubbed frontmatter again, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>` and pushes. Every route
+`[REDACTED:<rule>]`; a path that contains a scrub-rule match is refused with 400 `unsafe_path`
+and never rewritten), validates the scrubbed frontmatter again, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>` and pushes. Every route
 except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the answer is 401
 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for a missing or
 wrong token, 409 when the path already exists (it never overwrites), 413 for a body over 1 MB, 415
@@ -43,7 +44,7 @@ the vault's `.2brain/config.yaml` is invalid (the body names only the file and t
 `{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
 
 When the scrub redacted anything, the 201 body also carries `"redactions":[{"rule":"<id>","count":<n>}]`
-(rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line;
+(rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line (several pairs are joined with ", " on that one line);
 without redactions the key is absent.
 
 A note needs the four canonical properties (`type`, `area`, `date`, `source` by default; the vault
