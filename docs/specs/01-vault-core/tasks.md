@@ -17,9 +17,10 @@ archive (which reuse the sync), then packaging.
 - Files: src/config/vault-config.ts, src/config/defaults.ts, vault-template/**, vault-template/.2brain/config.yaml, tests/vault-config.test.ts, tests/template.test.ts
 - Verify: `npm test -- tests/vault-config.test.ts tests/template.test.ts`; cases: absent config gives the defaults; mapped owner property names are exposed by the loaded config; an unknown key and a wrong-typed value each throw `ConfigInvalidError` with the file and key path; the template config parses to exactly the defaults object; every configured type folder (with `{area}` expanded per area) exists in the template; the template has no names, domains or emails other than example.com
 - Issue: #12
-- Status: todo
+- Status: done
 
 ### Decision log
+- 2026-10-31: README.md placeholders, extensible type keys, optional version, sections replace defaults; Tier B. Outcome: reviews pass after 1 kickback, PR #30.
 
 ## T2: Require INGEST_TOKEN at startup
 - Purpose: the service refuses to start without a strong ingest token and never echoes its value
@@ -29,7 +30,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/config/env.ts, .env.example, README.md, tests/env.test.ts
 - Verify: `npm test -- tests/env.test.ts`; missing INGEST_TOKEN, an empty value and a 31-character value each throw an error that names INGEST_TOKEN and does not contain the supplied value; a 32-character value passes; the full-object expectation includes the token
 - Issue: #13
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -41,7 +42,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/auth/ingest-token.ts, src/server/app.ts, src/index.ts, tests/auth.test.ts, tests/app.test.ts, tests/notes.integration.test.ts, tests/start.test.ts
 - Verify: `npm test -- tests/auth.test.ts tests/app.test.ts tests/notes.integration.test.ts tests/start.test.ts`; POST /notes and an unknown route with no header, a non-Bearer scheme, a wrong token and a different-length token each return 401 `unauthorized` with zero writer and git calls; GET /health without a token returns 200 `{ ok: true }`; with a wrong header value and a failing writer, neither logs nor response bodies contain the header value or the real token; the existing 413, 415, 400 and 409 cases still pass with the token
 - Issue: #14
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -53,7 +54,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/vault/note-schema.ts, src/git/index.ts, tests/note-schema.test.ts, tests/app.test.ts, tests/git.test.ts
 - Verify: `npm test -- tests/note-schema.test.ts tests/app.test.ts tests/git.test.ts`; `NoteInput` rejects a leading `:`, each of `<>:"|?*`, a segment ending in a dot, one ending in a space, and CON, PRN, AUX, NUL, COM1, LPT1 in any case and with an extension (`con.md`), while a normal path passes; app.test.ts returns 400 with no writer call for one case per group; git.test.ts, with untracked `a.md` and `[ab].md` in a real repository, commits only `[ab].md` through `commitFile`
 - Issue: #15
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -63,9 +64,9 @@ archive (which reuse the sync), then packaging.
 - Size: M
 - Depends on: none
 - Files: src/vault/scrub/rules.ts, src/vault/scrub/index.ts, tests/scrub.test.ts, tests/fixtures/scrub/positive.json, tests/fixtures/scrub/negative.json
-- Verify: `npm test -- tests/scrub.test.ts`, failing if any of these is false: (1) every rule in the exported list (private key block, AWS access key id, GitHub token, Slack token, Anthropic key, OpenAI key, Google API key, Stripe secret key, JWT, Bearer value, labeled password/secret/token/API key assignment, Luhn-valid card, IBAN) has at least one positive and one negative fixture; (2) 0 misses on positives, the output containing `[REDACTED:<rule>]` for the expected rule; (3) 0 matches on negatives, including digit runs that fail Luhn; (4) `scrub` returns `hits` per rule, is idempotent on redacted text, and picks the specific rule on overlap (`sk-ant-` is Anthropic, not OpenAI); (5) `scrubFrontmatter` replaces matches in every string value of a nested object and leaves non-strings untouched; (6) a rule that throws surfaces as `ScrubError`. Fixture secrets are synthetic.
+- Verify: `npm test -- tests/scrub.test.ts`, failing if any of these is false: (1) every rule in the exported list (private key block, AWS access key id, GitHub token, Slack token, Anthropic key, OpenAI key, Google API key, Stripe secret key, JWT, Bearer value, labeled password/secret/token/API key assignment, Luhn-valid card, IBAN) has at least one positive and one negative fixture; (2) 0 misses on positives, the output containing `[REDACTED:<rule>]` for the expected rule; (3) 0 matches on negatives, including digit runs that fail Luhn; (4) `scrub` returns `hits` per rule, is idempotent on redacted text, and picks the specific rule on overlap (`sk-ant-` is Anthropic, not OpenAI); (5) `scrubFrontmatter` replaces matches in every string value of a nested object, checks numbers and bigints as strings (a hit becomes the placeholder string) and leaves other non-strings untouched; (6) a rule that throws surfaces as `ScrubError`. Fixture secrets are synthetic.
 - Issue: #16
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -77,7 +78,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/vault/validate.ts, tests/validate.test.ts
 - Verify: `npm test -- tests/validate.test.ts`; asserts the error contract (code `invalid_frontmatter` or `wrong_folder`, missing owner property names, the property named, the expected folder with `{area}` expanded); owner-mapped property names; a type with no folder accepts any safe path; a missing or invalid area reports `invalid_frontmatter`, not a folder error
 - Issue: #17
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -89,7 +90,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/vault/write-note.ts, src/server/app.ts, src/index.ts, tests/notes.integration.test.ts, tests/app.test.ts
 - Verify: `npm test -- tests/notes.integration.test.ts tests/app.test.ts`; a config with an unknown key and one with a wrong-typed value each give 503 `config_invalid` naming `.2brain/config.yaml` and the key path, with no commit and no file; an invalid config at startup does not exit the process; a commit pushed from `cloneElsewhere` that adds an area is accepted by the next create without a restart, where the same create was rejected before
 - Issue: #18
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -101,7 +102,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/vault/write-note.ts, src/server/app.ts, tests/notes.integration.test.ts, tests/app.test.ts
 - Verify: `npm test -- tests/notes.integration.test.ts tests/app.test.ts`; through POST /notes: missing owner property names listed in 400 `invalid_frontmatter`; unknown type; unknown area; bad date; a path outside the type folder gives 400 `wrong_folder` with the expected folder; none leaves a file or a commit
 - Issue: #19
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -113,7 +114,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/vault/write-note.ts, src/server/app.ts, tests/notes.integration.test.ts, tests/app.test.ts
 - Verify: `npm test -- tests/notes.integration.test.ts tests/app.test.ts`; a secret in the body and in a string frontmatter value is stored as `[REDACTED:<rule>]` and the 201 body has `redactions` as `{ rule, count }`; the log line holds only rule names and counts; an injected scrubber that throws gives 500 `scrub_failed`, no file and no commit
 - Issue: #20
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -195,7 +196,7 @@ archive (which reuse the sync), then packaging.
 - Files: src/cli.ts, tests/cli.integration.test.ts
 - Verify: `npm test -- tests/cli.integration.test.ts`; the CLI exports `main(argv, io)` that returns the exit code and resolves the template as `../vault-template` relative to `import.meta.url` (same relative path from `src/cli.ts` and `dist/cli.js`); `init-vault <dir>` on a missing and on an empty directory copies every template file including `.2brain/config.yaml` (tree compared with the template); on a directory with some of those files it copies only the missing ones, leaves existing bytes unchanged and prints the skipped paths; on a path that is a file it returns 1 and writes nothing; a second run copies nothing
 - Issue: #27
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -207,6 +208,6 @@ archive (which reuse the sync), then packaging.
 - Files: Dockerfile, compose.yaml, tests/compose.test.ts
 - Verify: `npm test -- tests/compose.test.ts`; the test parses compose.yaml with `parseYamlConfig` and asserts that service `brain` has a `healthcheck` whose `test` runs `node -e` with a fetch of `/health` using `process.env.PORT` with 3000 as fallback, plus `interval`, `timeout` and `retries`; it reads the Dockerfile and asserts that the final stage copies `vault-template` to `/app/vault-template` so `/app/dist/cli.js` resolves `../vault-template`; both fail on today's files; `docker-build` CI stays green
 - Issue: #28
-- Status: todo
+- Status: done
 
 ### Decision log
