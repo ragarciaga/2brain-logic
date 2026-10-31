@@ -17,7 +17,47 @@ export const DIGEST_MAX = 150000;
 export const HEAD = 30000;
 export const TAIL = 120000;
 
-const COMMAND_TAGS = ["<command-name>", "<local-command-stdout>", "<local-command-stderr>"];
+const COMMAND_TAGS = [
+  "<bash-input>",
+  "<bash-stdout>",
+  "<bash-stderr>",
+  "<command-message>",
+  "<command-name>",
+  "<command-args>",
+  "<local-command-stdout>",
+  "<local-command-stderr>",
+];
+
+const LABEL_LINE = /^(?:USER:|ASSISTANT:|TOOL |RESULT:|\[\d+ characters left out\])/;
+
+/**
+ * Makes transcript text safe to place after a label: every continuation line gets two
+ * spaces, so only builder lines start at column 0.
+ * @param {string} text
+ * @returns {string}
+ */
+function indent(text) {
+  return text.replace(/\r\n?|\n/g, "\n  ");
+}
+
+/**
+ * First line of `text`, capped at RESULT_CAP, with " [...]" appended when anything was cut.
+ * @param {string} text
+ * @returns {string}
+ */
+function firstLine(text) {
+  const nl = text.search(/[\r\n]/);
+  const line = nl < 0 ? text : text.slice(0, nl);
+  const more = nl >= 0 && text.slice(nl).trim() !== "";
+  const capped = takeStart(line, RESULT_CAP);
+  return capped.length < line.length || more ? `${capped} [...]` : capped;
+}
+
+/** @param {string} text */
+function startsWithCommandTag(text) {
+  const head = text.trimStart();
+  return COMMAND_TAGS.some((tag) => head.startsWith(tag));
+}
 
 /**
  * @param {unknown} value
@@ -69,7 +109,10 @@ export function cutDigest(text) {
   const head = takeStart(text, HEAD);
   const tail = takeEnd(text, TAIL);
   const omitted = text.length - head.length - tail.length;
-  return `${head}\n[${omitted} characters left out]\n${tail}`;
+  // A tail that starts mid-line must not look like a builder line.
+  const safeTail =
+    LABEL_LINE.test(tail) && text[text.length - tail.length - 1] !== "\n" ? `  ${tail}` : tail;
+  return `${head}\n[${omitted} characters left out]\n${safeTail}`;
 }
 
 /**
@@ -107,7 +150,7 @@ function resultText(content) {
  * @returns {string}
  */
 function toolLine(block) {
-  const name = typeof block.name === "string" ? block.name : "unknown";
+  const name = (typeof block.name === "string" ? block.name : "unknown").replace(/\p{Cc}/gu, " ");
   const input = isObject(block.input) ? block.input : {};
   const arg =
     typeof input.command === "string"
@@ -115,7 +158,7 @@ function toolLine(block) {
       : typeof input.file_path === "string"
         ? input.file_path
         : "";
-  return arg === "" ? `TOOL ${name}` : `TOOL ${name}: ${arg}`;
+  return arg === "" ? `TOOL ${name}` : `TOOL ${name}: ${firstLine(arg)}`;
 }
 
 /**
@@ -203,7 +246,7 @@ export function buildDigest(lines, opts = {}) {
       if (skip > 0 && userPrompts <= skip) continue;
       for (const block of blocks) {
         if (block.type === "text" && typeof block.text === "string" && block.text.trim() !== "") {
-          out.push(`ASSISTANT: ${block.text}`);
+          out.push(`ASSISTANT: ${indent(block.text)}`);
         } else if (block.type === "tool_use") {
           out.push(toolLine(block));
         }
@@ -212,22 +255,19 @@ export function buildDigest(lines, opts = {}) {
     }
 
     const first = firstText(blocks);
-    const isPrompt =
-      first !== undefined &&
-      first.trim() !== "" &&
-      !COMMAND_TAGS.some((tag) => first.startsWith(tag));
+    const isPrompt = first !== undefined && first.trim() !== "" && !startsWithCommandTag(first);
     if (isPrompt) {
       userPrompts += 1;
       if (lineage === null && typeof entry.uuid === "string") lineage = entry.uuid;
-      if (userPrompts > skip) out.push(`USER: ${first}`);
+      if (userPrompts > skip) out.push(`USER: ${indent(first)}`);
       continue;
     }
     if (skip > 0 && userPrompts <= skip) continue;
     // Not a prompt: only tool results are kept; command-tag entries stay out of the text.
-    if (first !== undefined && COMMAND_TAGS.some((tag) => first.startsWith(tag))) continue;
+    if (first !== undefined && startsWithCommandTag(first)) continue;
     for (const block of blocks) {
       if (block.type === "tool_result") {
-        out.push(`RESULT: ${takeStart(resultText(block.content), RESULT_CAP)}`);
+        out.push(`RESULT: ${indent(takeStart(resultText(block.content), RESULT_CAP))}`);
       }
     }
   }
