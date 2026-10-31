@@ -10,7 +10,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src tests evals vitest.config.ts vitest.evals.config.ts",
+    "lint": "biome check src tests evals plugin .claude-plugin vitest.config.ts vitest.evals.config.ts",
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
     "evals": "vitest run --config vitest.evals.config.ts",
