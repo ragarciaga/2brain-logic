@@ -647,6 +647,7 @@ describe("LABEL_KEY", () => {
     ["DB_PASS", "WORD_PROD"],
     ["API", "_KEY_V2"],
     ["GITHUB_", "TOKEN_RO"],
+    ["GITHUB_", "TOKEN_RO_V2"],
     ["smtp_pass", "word_2"],
     ["pass", "word1"],
   ])("accepts %s%s", (a, b) => {

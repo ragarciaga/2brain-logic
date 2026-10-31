@@ -5,7 +5,8 @@
  *
  * Design limits that keep a hostile 1 MiB note from stalling a write:
  * - every left boundary is a one-character lookbehind, every quantifier before a required token is
- *   bounded, and the unbounded ones sit at the end of a pattern with nothing after them;
+ *   bounded, and an unbounded one either ends the pattern or runs over a class that excludes the
+ *   token that follows it (the quoted-value body excludes its quote, see `quotedValue`);
  * - a rule that validates a candidate (IBAN, card) does it in `select`, which resumes by offset, so
  *   the total work stays linear in the input.
  */

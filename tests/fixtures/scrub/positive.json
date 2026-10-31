@@ -487,6 +487,11 @@
     },
     {
       "rule": "labeled_secret",
+      "parts": ["DB_PASS", "WORD_PROD_RO=", "abcd1234", "efgh"],
+      "expected": "DB_PASSWORD_PROD_RO=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
       "parts": ["API", "_KEY_V2=", "abcd1234", "efgh"],
       "expected": "API_KEY_V2=[REDACTED:labeled_secret]"
     },
