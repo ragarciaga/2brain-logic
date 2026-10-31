@@ -74,6 +74,16 @@ describe("loadEnv", () => {
     expect(loadEnv({ ...valid, INGEST_TOKEN: token }).INGEST_TOKEN).toBe(token);
   });
 
+  it("returns an INGEST_TOKEN with surrounding whitespace exactly as given", () => {
+    const token = `  ${"a".repeat(32)}  `;
+    expect(loadEnv({ ...valid, INGEST_TOKEN: token }).INGEST_TOKEN).toBe(token);
+  });
+
+  it("accepts a whitespace-only 32-character INGEST_TOKEN", () => {
+    const token = " ".repeat(32);
+    expect(loadEnv({ ...valid, INGEST_TOKEN: token }).INGEST_TOKEN).toBe(token);
+  });
+
   it("throws on a bad GIT_AUTHOR_EMAIL", () => {
     expect(() => loadEnv({ ...valid, GIT_AUTHOR_EMAIL: "not-an-email" })).toThrow(
       /GIT_AUTHOR_EMAIL/,
