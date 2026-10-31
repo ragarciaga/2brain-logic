@@ -5,10 +5,14 @@
  *
  * Design limits that keep a hostile 1 MiB note from stalling a write:
  * - every left boundary is a one-character lookbehind, every quantifier before a required token is
- *   bounded, and an unbounded one either ends the pattern or runs over a class that excludes the
- *   token that follows it (the quoted-value body excludes its quote, see `quotedValue`);
- * - a rule that validates a candidate (IBAN, card) does it in `select`, which resumes by offset, so
- *   the total work stays linear in the input.
+ *   bounded, and an unbounded one either ends the pattern, runs over a class that excludes the
+ *   token that follows it (the quoted-value body excludes its quote, see `quotedValue`), or is a
+ *   lazy body that stops at the first closing marker or at the end of the text (`private_key`; the
+ *   lazy lookaheads of `escapedValue` stop at their line);
+ * - the label candidate of `labeled_secret` has no left boundary, but its length is capped at 64
+ *   characters; the words are judged by `isLabelKey` on that candidate only, never on the text;
+ * - a rule that validates a candidate (IBAN, card, label) does it in `select`, which resumes by
+ *   offset, so the total work stays linear in the input.
  */
 
 /** A half-open range `[start, end)` inside the text a rule is asked to redact. */
@@ -30,11 +34,25 @@ export interface ScrubRule {
    * Narrows or validates what was found. Returns the earliest span at or after `from`, or null.
    * The caller asks again from the end of each span, so a found value holding several secrets
    * yields several spans. Read by offset; never slice inside a loop (that would be quadratic).
+   * `groups` holds the named groups of the match (`keep`, `secret` and any others).
    */
-  select?: (found: string, from: number) => ScrubSpan | null;
+  select?: (
+    found: string,
+    from: number,
+    groups: Readonly<Record<string, string | undefined>>,
+  ) => ScrubSpan | null;
 }
 
 export const REDACTED_PREFIX = "[REDACTED:";
+
+/** True when a matched value, past an opening quote (escaped or not), already is a placeholder. */
+export function startsRedacted(found: string): boolean {
+  let offset = found.charAt(0) === "\\" ? 1 : 0;
+  const quote = found.charAt(offset);
+  if (quote === '"' || quote === "'" || quote === "`") offset++;
+  else offset = 0;
+  return found.startsWith(REDACTED_PREFIX, offset);
+}
 
 // ---------------------------------------------------------------------------------------------
 // Helpers
@@ -186,23 +204,81 @@ export function ibanValid(value: string): boolean {
 // ---------------------------------------------------------------------------------------------
 // Labeled assignments
 
-// Label words may be joined by one space, underscore, dot or hyphen ("Secret Access Key").
-const LABEL_CORE =
-  "password|passwd|pwd|passphrase|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key|credentials?";
-const LABEL_SUFFIX = "(?:[ _.-]?(?:access[ _-]?)?key)?";
-// A tail segment that makes the name something else than a secret ("token_count", "api_key_name").
-const LABEL_TAIL_DENY =
-  "count|ids?|types?|length|len|limit|max|min|size|url|uri|names?|path|file|ttl|expiry|expires|header|endpoint|policy|hint|prompt";
-const LABEL_SEGMENT = `[_.-](?!(?:${LABEL_TAIL_DENY})(?![A-Za-z0-9]))[A-Za-z0-9]{1,12}`;
-// Up to two identifier segments ("SECRET_KEY_BASE", "DB_PASSWORD_PROD") or a short number.
-const LABEL_TAIL = `(?:(?:${LABEL_SEGMENT}){0,2}|\\d{1,3})`;
-const LABEL = `(?:${LABEL_CORE})${LABEL_SUFFIX}${LABEL_TAIL}`;
+// The pattern only finds a candidate label (an identifier of up to 64 characters, or up to 4 short
+// words joined by single spaces) right before an assignment separator. `isLabelKey` judges the
+// words, so a new spelling of a label needs no new regex branch.
+const LABEL_WORD = "[A-Za-z][A-Za-z0-9_.-]";
+const LABEL_CANDIDATE = `(?:${LABEL_WORD}{0,14}(?: ${LABEL_WORD}{0,14}){1,3}|${LABEL_WORD}{0,63})`;
+
+// A word that names a secret on its own ("apikey" is the lowercase form of "APIKey"), and the
+// words that name one when they follow "api", "access" or "private" ("API Key").
+const LABEL_CORE_WORDS: ReadonlySet<string> = new Set([
+  "password",
+  "passwd",
+  "pwd",
+  "passphrase",
+  "secret",
+  "token",
+  "credential",
+  "credentials",
+  "apikey",
+]);
+const LABEL_KEY_PREFIXES: ReadonlySet<string> = new Set(["api", "access", "private"]);
+// A last word that makes the name something else than a secret ("token_count", "api_key_name").
+const LABEL_LAST_DENIED: ReadonlySet<string> = new Set([
+  "count",
+  "id",
+  "ids",
+  "type",
+  "types",
+  "length",
+  "len",
+  "limit",
+  "max",
+  "min",
+  "size",
+  "url",
+  "uri",
+  "name",
+  "names",
+  "path",
+  "file",
+  "ttl",
+  "expiry",
+  "expires",
+  "header",
+  "endpoint",
+  "policy",
+  "hint",
+  "prompt",
+]);
+
+/** Splits a label into lowercase words at non-letters (so digit runs too) and camelCase edges. */
+function labelWords(label: string): string[] {
+  return label
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .split(/[^A-Za-z]+/)
+    .filter((word) => word !== "")
+    .map((word) => word.toLowerCase());
+}
 
 /**
- * A frontmatter key that names a secret (`clientSecret`, `aws_secret_access_key`, `SECRET_KEY`,
- * `Secret Key`). Not global, so `test` has no state.
+ * True when a label (a text label before `=` or `:`, or a frontmatter key) names a secret: its
+ * words hold a core word (`password`, `secret`, `token`, `api` + `key`, ...) and the last word is
+ * not one that turns it into something else (`count`, `url`, `name`, ...). Only the last 4 spaced
+ * words and the last 64 characters are read, which is also the most the text pattern can match.
  */
-export const LABEL_KEY = new RegExp(`^[A-Za-z0-9_.-]{0,40}${LABEL}$`, "i");
+export function isLabelKey(label: string): boolean {
+  const words = labelWords(label.split(" ").slice(-4).join(" ").slice(-64));
+  const last = words[words.length - 1];
+  if (last === undefined || LABEL_LAST_DENIED.has(last)) return false;
+  return words.some(
+    (word, at) =>
+      LABEL_CORE_WORDS.has(word) ||
+      (word === "key" && at > 0 && LABEL_KEY_PREFIXES.has(words[at - 1] as string)),
+  );
+}
 
 /**
  * A quoted value takes backslash escapes and has no upper length: the group has two alternatives
@@ -214,19 +290,46 @@ function quotedValue(quote: string): string {
   return [`${quote}${body}{6,}${quote}`, `${quote}(?!${body}*${quote})[^\\r\\n]{6,}`].join("|");
 }
 
+/**
+ * The same for a value that sits inside an already JSON-encoded string: it opens and closes with
+ * an escaped quote (backslash, then the quote). The lookahead is lazy and stays on its line.
+ */
+function escapedValue(quote: string): string {
+  const open = String.raw`\\${quote}`;
+  const body = String.raw`(?:[^\\\r\n]|\\(?!${quote})[^\r\n]){6,}`;
+  return [`${open}${body}${open}`, String.raw`${open}(?![^\r\n]*?${open})[^\r\n]{6,}`].join("|");
+}
+
 const LABELED_VALUE = [
   quotedValue('"'),
   quotedValue("'"),
   quotedValue(String.raw`\x60`),
+  escapedValue('"'),
+  escapedValue("'"),
+  // A quote that closes again within 5 characters and is followed by 5 or more unspaced ones
+  // ('it''s-...', "ab""...", 'O'Brien-...') takes the rest of its unspaced run, from after the
+  // opening quote. A short value that is simply closed ("abcde") is not a secret and is kept.
+  ...['"', "'", String.raw`\x60`].map(
+    (quote) => String.raw`${quote}[^\s${quote}]{0,5}${quote}\S{5,}`,
+  ),
   String.raw`[^\s"'\x60]{6,}`,
 ].join("|");
 
-function selectLabeled(found: string, from: number): ScrubSpan | null {
-  if (from !== 0) return null;
+const LABELED_PATTERN = new RegExp(
+  `(?<keep>(?<label>${LABEL_CANDIDATE})(?:\\\\?["'\\x60])?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?<secret>${LABELED_VALUE})`,
+  "gi",
+);
+
+/** The part of a matched value to redact: quotes (escaped ones too) stay; a placeholder is kept. */
+function valueSpan(found: string): ScrubSpan | null {
   let start = 0;
   let end = found.length;
   const first = found.charAt(0);
-  if (first === '"' || first === "'" || first === "`") {
+  const second = found.charAt(1);
+  if (first === "\\" && (second === '"' || second === "'")) {
+    start = 2;
+    if (found.length >= 4 && found.endsWith(`\\${second}`)) end = found.length - 2;
+  } else if (first === '"' || first === "'" || first === "`") {
     start = 1;
     if (found.length >= 2 && found.endsWith(first)) {
       // The last quote closes the value only when an even number of backslashes precedes it.
@@ -237,6 +340,37 @@ function selectLabeled(found: string, from: number): ScrubSpan | null {
   }
   if (isPlaceholder(found.slice(start, end))) return null;
   return { start, end };
+}
+
+const NESTED_SKIPS = 32;
+
+function selectLabeled(
+  found: string,
+  from: number,
+  groups: Readonly<Record<string, string | undefined>>,
+): ScrubSpan | null {
+  if (isLabelKey(groups.label ?? "")) return from === 0 ? valueSpan(found) : null;
+  // The label names something else ("url", "token_count"), but its value may still hold a labeled
+  // secret ("url=https://host/?password=..."). The scan steps over at most NESTED_SKIPS labels
+  // that name something else and resumes at `from`, so the total work stays linear.
+  const scan = new RegExp(LABELED_PATTERN.source, LABELED_PATTERN.flags);
+  scan.lastIndex = from;
+  let skipped = 0;
+  for (let m = scan.exec(found); m !== null; m = scan.exec(found)) {
+    const keep = m.groups?.keep ?? "";
+    if (!isLabelKey(m.groups?.label ?? "")) {
+      if (++skipped >= NESTED_SKIPS) break;
+      scan.lastIndex = m.index + keep.length;
+      continue;
+    }
+    const nested = m.groups?.secret ?? "";
+    const span = startsRedacted(nested) ? null : valueSpan(nested);
+    if (span) {
+      const offset = m.index + keep.length;
+      return { start: offset + span.start, end: offset + span.end };
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -288,10 +422,21 @@ function digitAt(text: string, offset: number): number {
   return code >= 48 && code <= 57 ? code - 48 : -1;
 }
 
+/** Digit group lengths of a card written in several groups ("4-6-5" is 4 digits, 6 digits, 5). */
+const CARD_GROUP_SHAPES: ReadonlySet<string> = new Set([
+  "4-4-4-4",
+  "4-4-4-4-3",
+  "4-6-5",
+  "4-6-4",
+  "4-4-4-1",
+  "4-4-4-3",
+]);
+
 /**
  * Offset after the longest Luhn-valid window of 13 to 19 digits that starts at `start` (a group
  * start) and ends at the end of a digit group, or -1. A group is a run of digits between
- * separators (a space or a hyphen) or the ends of the text.
+ * separators (a space or a hyphen) or the ends of the text. A window of one group is any run of
+ * 13 to 19 digits; a window of several groups must have one of the `CARD_GROUP_SHAPES`.
  */
 function longestCardEnd(found: string, start: number): number {
   // Sums by index parity from the left; which parity doubles depends on the window length.
@@ -299,15 +444,24 @@ function longestCardEnd(found: string, start: number): number {
   const doubled = [0, 0];
   let best = -1;
   let offset = start;
+  let shape = ""; // lengths of the closed groups, "4-4-"
+  let groupLength = 0;
   for (let count = 1; ; count++) {
     const digit = digitAt(found, offset);
+    groupLength++;
     const parity = (count - 1) & 1;
     plain[parity] = (plain[parity] as number) + digit;
     doubled[parity] = (doubled[parity] as number) + (DOUBLED[digit] as number);
     if (count >= 13) {
       const last = (count - 1) & 1;
       const total = (plain[last] as number) + (doubled[last ^ 1] as number);
-      if (total % 10 === 0 && digitAt(found, offset + 1) < 0) best = offset + 1;
+      if (
+        total % 10 === 0 &&
+        digitAt(found, offset + 1) < 0 &&
+        (shape === "" || CARD_GROUP_SHAPES.has(`${shape}${groupLength}`))
+      ) {
+        best = offset + 1;
+      }
     }
     if (count === 19) break;
     let next = -1;
@@ -317,6 +471,8 @@ function longestCardEnd(found: string, start: number): number {
       digitAt(found, offset + 2) >= 0
     ) {
       next = offset + 2;
+      shape += `${groupLength}-`;
+      groupLength = 0;
     }
     if (next < 0) break;
     offset = next;
@@ -409,10 +565,7 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
   },
   {
     id: "labeled_secret",
-    pattern: new RegExp(
-      `(?<keep>${LABEL}["'\\x60]?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?<secret>${LABELED_VALUE})`,
-      "gi",
-    ),
+    pattern: LABELED_PATTERN,
     select: selectLabeled,
   },
   {

@@ -1,10 +1,17 @@
-import { isPlaceholder, LABEL_KEY, REDACTED_PREFIX, SCRUB_RULES, type ScrubRule } from "./rules.js";
+import {
+  isLabelKey,
+  isPlaceholder,
+  REDACTED_PREFIX,
+  SCRUB_RULES,
+  type ScrubRule,
+  startsRedacted,
+} from "./rules.js";
 
 export {
   IBAN_LENGTHS,
   ibanValid,
+  isLabelKey,
   isPlaceholder,
-  LABEL_KEY,
   luhnValid,
   SCRUB_RULES,
   type ScrubRule,
@@ -41,12 +48,6 @@ function placeholder(id: string): string {
   return `${REDACTED_PREFIX}${id}]`;
 }
 
-function startsRedacted(found: string): boolean {
-  const offset =
-    found.charAt(0) === '"' || found.charAt(0) === "'" || found.charAt(0) === "`" ? 1 : 0;
-  return found.startsWith(REDACTED_PREFIX, offset);
-}
-
 /** Applies one rule with a single `replace` pass and returns the new text and the hit count. */
 function applyRule(text: string, rule: ScrubRule): { text: string; count: number } {
   if (!RULE_ID.test(rule.id) || !rule.pattern.global) throw new ScrubError(rule.id);
@@ -57,7 +58,7 @@ function applyRule(text: string, rule: ScrubRule): { text: string; count: number
     const last = args[args.length - 1];
     const groups =
       typeof last === "object" && last !== null
-        ? (last as { keep?: string; secret?: string })
+        ? (last as Record<string, string | undefined>)
         : undefined;
     const keep = groups?.keep;
     const hidden = groups?.secret;
@@ -75,7 +76,7 @@ function applyRule(text: string, rule: ScrubRule): { text: string; count: number
     let position = 0;
     let spans = 0;
     for (let from = 0; ; ) {
-      const span = rule.select(found, from);
+      const span = rule.select(found, from, groups ?? {});
       if (span === null) break;
       if (
         !Number.isInteger(span.start) ||
@@ -179,7 +180,7 @@ function scrubValue(
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        scrubValue(item, LABEL_KEY.test(key), rules, hits),
+        scrubValue(item, isLabelKey(key), rules, hits),
       ]),
     );
   }
@@ -187,7 +188,7 @@ function scrubValue(
 }
 
 /**
- * Scrubs every string in a nested object. A key that names a secret (see `LABEL_KEY`) makes its
+ * Scrubs every string in a nested object. A key that names a secret (see `isLabelKey`) makes its
  * value, and the elements of an array under it, count as labeled. Numbers and bigints are checked
  * as text and become the placeholder string on a hit. The input is never mutated; keys, booleans,
  * null, Dates and other objects pass through unchanged.

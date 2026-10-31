@@ -277,6 +277,50 @@
     {
       "rule": "card_number",
       "parts": ["ref ", "5466", " 4807", " 8460", " 3931", " ok"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["Ref ", "958-3025666-", "4696152"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["call 795 428 ", "4486 660 533 ", "9668 ok"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["ref 274 015 ", "244 446 0462 ok"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["ref 62 8991 ", "5739 5534 25 ok"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["max_to", "kens: ", "1234567"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["DB_PASS", "WORD_URL: ", "https://x.example.com/a"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["secre", "tary: ", "Johnson-Smith"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\"pass", "word\":\"abc\"}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\\\"pass", "word\\\":\\\"abc\\\"}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: 'abcde' and more"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["sort_", "key: ", "alphabetical"]
     }
   ],
   "frontmatter": [
@@ -339,6 +383,24 @@
       "field": "token_limit",
       "kind": "number",
       "parts": ["40960", "000"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "max_tokens",
+      "kind": "number",
+      "parts": ["1234567"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "DB_PASSWORD_URL",
+      "kind": "string",
+      "parts": ["https://x.example.com/a"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "token_count_2",
+      "kind": "string",
+      "parts": ["abcdefghij"]
     }
   ]
 }

@@ -312,7 +312,7 @@
     },
     {
       "rule": "labeled_secret",
-      "parts": ["refresh", "Token=\"", "abcdef", "12345", "\""],
+      "parts": ["refresh", "Token=", "\"abcdef", "12345\""],
       "expected": "refreshToken=\"[REDACTED:labeled_secret]\""
     },
     {
@@ -529,6 +529,116 @@
       "rule": "labeled_secret",
       "parts": ["pass", "word=\"", "abcdefg\\\"", "\nnext line\n"],
       "expected": "password=\"[REDACTED:labeled_secret]\nnext line\n"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["amex ", "3782", " 822463", " 10005", "."],
+      "expected": "amex [REDACTED:card_number]."
+    },
+    {
+      "rule": "card_number",
+      "parts": ["diners ", "3056", " 930902", " 5904"],
+      "expected": "diners [REDACTED:card_number]"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["visa13 ", "4222", " 2222", " 2222", " 2"],
+      "expected": "visa13 [REDACTED:card_number]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["db", "PasswordProd=", "abcd1234", "efgh"],
+      "expected": "dbPasswordProd=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["secret", "KeyBase: ", "abcd1234", "efgh"],
+      "expected": "secretKeyBase: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["api", "KeyV2=", "abcd1234", "efgh"],
+      "expected": "apiKeyV2=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "wordHash=", "abcd1234", "efgh"],
+      "expected": "passwordHash=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["DB_PASS", "WORD_US_EAST_1=", "abcd1234", "efgh"],
+      "expected": "DB_PASSWORD_US_EAST_1=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word1234=", "abcd1234", "efgh"],
+      "expected": "password1234=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["PASS", "WORD2_PROD=", "abcd1234", "efgh"],
+      "expected": "PASSWORD2_PROD=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["DB_PASS", "WORD_URL_ENCODED=", "abcd1234", "efgh"],
+      "expected": "DB_PASSWORD_URL_ENCODED=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["AWS", "SecretKey=", "abcd1234", "efgh"],
+      "expected": "AWSSecretKey=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["x.api", ".key=", "abcd1234", "efgh"],
+      "expected": "x.api.key=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["my pass", "word is: ", "hunter", "2xyz"],
+      "expected": "my password is: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: 'it''s-", "abcd1234", "efgh'"],
+      "expected": "password: '[REDACTED:labeled_secret]'"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["PASS", "WORD='it'\\''s-", "abcd1234", "efgh'"],
+      "expected": "PASSWORD='[REDACTED:labeled_secret]'"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: 'O'Brien-", "abcd1234efgh", "'"],
+      "expected": "password: '[REDACTED:labeled_secret]'"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word=\"ab\"\"", "abcd1234", "efgh\""],
+      "expected": "password=\"[REDACTED:labeled_secret]\""
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\\\"pass", "word\\\":\\\"", "abcd1234", "efgh5678", "\\\"}"],
+      "expected": "{\\\"password\\\":\\\"[REDACTED:labeled_secret]\\\"}"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word=\\\"", "abcdef", "1234\nnext"],
+      "expected": "password=\\\"[REDACTED:labeled_secret]\nnext"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["url=https://host.example.com/?pass", "word=", "hunter2xyz"],
+      "expected": "url=https://host.example.com/?password=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["args: --pass", "word=", "hunter2xyz"],
+      "expected": "args: --password=[REDACTED:labeled_secret]"
     }
   ],
   "frontmatter": [
@@ -622,6 +732,48 @@
       "field": "passphrase",
       "kind": "string",
       "parts": ["a b c d", " e f g"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "dbPasswordProd",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "secretKeyBase",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "apiKeyV2",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "passwordHash",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "DB_PASSWORD_US_EAST_1",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "AWSSecretKey",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "my password",
+      "kind": "string",
+      "parts": ["abcd1234", "efgh"]
     }
   ]
 }

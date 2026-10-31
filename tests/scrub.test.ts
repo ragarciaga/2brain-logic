@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   IBAN_LENGTHS,
   ibanValid,
+  isLabelKey,
   isPlaceholder,
-  LABEL_KEY,
   luhnValid,
   SCRUB_RULES,
   ScrubError,
@@ -215,10 +215,13 @@ describe("overlap, order and boundaries (D2, D6)", () => {
   });
 });
 
+/** The group lengths a card of several groups may have; a single group has 13 to 19 digits. */
+const CARD_SHAPES = ["4-4-4-4", "4-4-4-4-3", "4-6-5", "4-6-4", "4-4-4-1", "4-4-4-3"];
+
 /**
  * Independent brute force for the card rule: every Luhn-valid window of 13 to 19 digits that
- * starts at the start of a digit run or right after a separator and ends at the end of the run or
- * right before a separator.
+ * starts at the start of a digit run or right after a separator, ends at the end of the run or
+ * right before a separator, and whose group lengths are a single group or one of CARD_SHAPES.
  */
 function cardOracle(input: string): { text: string; count: number } {
   const luhn = (digits: number[]) => {
@@ -258,7 +261,13 @@ function cardOracle(input: string): { text: string; count: number } {
       if (!groupStart(start)) continue;
       let end = -1;
       for (let len = 13; len <= 19 && start + len <= digits.length; len++) {
-        if (groupEnd(start + len) && luhn(digits.slice(start, start + len))) end = start + len;
+        if (!groupEnd(start + len) || !luhn(digits.slice(start, start + len))) continue;
+        const lengths = [1];
+        for (let k = start + 1; k < start + len; k++) {
+          if (groupStart(k)) lengths.push(1);
+          else lengths[lengths.length - 1] = (lengths[lengths.length - 1] as number) + 1;
+        }
+        if (lengths.length === 1 || CARD_SHAPES.includes(lengths.join("-"))) end = start + len;
       }
       if (end < 0) continue;
       const current = merged[merged.length - 1];
@@ -277,15 +286,48 @@ function cardOracle(input: string): { text: string; count: number } {
 describe("card windows (D6)", () => {
   const cardRule = ruleById("card_number");
 
-  it("matches a brute-force oracle on seeded random digit runs", () => {
-    let state = 20241031;
-    const next = (limit: number) => {
-      // mulberry32
+  // mulberry32
+  const seeded = (seed: number) => {
+    let state = seed;
+    return (limit: number) => {
       state = (state + 0x6d2b79f5) | 0;
       let t = Math.imul(state ^ (state >>> 15), 1 | state);
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
       return (((t ^ (t >>> 14)) >>> 0) % limit) | 0;
     };
+  };
+  const luhnOk = (digits: string) => {
+    let sum = 0;
+    for (let i = 0; i < digits.length; i++) {
+      let d = Number(digits.charAt(digits.length - 1 - i));
+      if (i % 2 === 1) {
+        d *= 2;
+        if (d > 9) d -= 9;
+      }
+      sum += d;
+    }
+    return sum % 10 === 0;
+  };
+  /** Random digits in the given group lengths; `valid` fixes the last digit so Luhn holds. */
+  const grouped = (next: (limit: number) => number, lengths: number[], valid: boolean) => {
+    let digits = "";
+    for (const length of lengths) for (let i = 0; i < length; i++) digits += String(next(10));
+    if (valid) {
+      const head = digits.slice(0, -1);
+      const last = [...Array(10).keys()].find((d) => luhnOk(`${head}${d}`));
+      digits = `${head}${last}`;
+    }
+    const parts: string[] = [];
+    let at = 0;
+    for (const length of lengths) {
+      parts.push(digits.slice(at, at + length));
+      at += length;
+    }
+    return parts;
+  };
+
+  it("matches a brute-force oracle on seeded random digit runs", () => {
+    const next = seeded(20241031);
     const separators = ["", "", "", " ", "-"];
     let redacted = 0;
     for (let round = 0; round < 400; round++) {
@@ -303,9 +345,39 @@ describe("card windows (D6)", () => {
       const actual = scrub(input, [cardRule]);
       expect(actual.text).toBe(expected.text);
       expect(actual.hits.get("card_number") ?? 0).toBe(expected.count);
+    }
+    // Runs in card-like groupings, valid and not, on both sides of the shape whitelist.
+    const shapes = [
+      [16],
+      [13],
+      [19],
+      [4, 4, 4, 4],
+      [4, 4, 4, 4, 3],
+      [4, 6, 5],
+      [4, 6, 4],
+      [4, 4, 4, 1],
+      [4, 4, 4, 3],
+      [4, 4, 4, 4, 4],
+      [4, 4, 4],
+      [3, 3, 3, 3, 4],
+      [5, 5, 5],
+      [6, 6, 6],
+      [2, 4, 4, 4, 2],
+      [3, 7, 7],
+      [4, 5, 6],
+      [4, 4, 8],
+    ];
+    for (let round = 0; round < 600; round++) {
+      const lengths = shapes[next(shapes.length)] as number[];
+      const joiner = [" ", "-"][next(2)] as string;
+      const input = `ref ${grouped(next, lengths, next(2) === 0).join(joiner)} ok`;
+      const expected = cardOracle(input);
+      const actual = scrub(input, [cardRule]);
+      expect(actual.text).toBe(expected.text);
+      expect(actual.hits.get("card_number") ?? 0).toBe(expected.count);
       redacted += expected.count;
     }
-    expect(redacted).toBeGreaterThan(50);
+    expect(redacted).toBeGreaterThan(100);
   });
 
   it("starts the next span at the group that follows the end of the previous one", () => {
@@ -375,6 +447,53 @@ describe("card windows (D6)", () => {
       }
       expect(plain).toBe(200);
       expect(grouped).toBe(200);
+    }
+  });
+
+  it("leaves runs in groupings outside the whitelist alone, Luhn-valid or not", () => {
+    const next = seeded(20261031);
+    const outside = [
+      [3, 3, 3, 3, 4],
+      [2, 4, 4, 4, 2],
+      [5, 5, 5, 5],
+      [6, 6, 6, 6],
+      [3, 7, 7],
+      [3, 3, 4, 3, 3, 4],
+    ];
+    for (const lengths of outside) {
+      let valid = 0;
+      for (let round = 0; round < 300; round++) {
+        const makeValid = round % 2 === 0;
+        const parts = grouped(next, lengths, makeValid);
+        const input = `ref ${parts.join([" ", "-"][next(2)] as string)} ok`;
+        // A sub-window can be card-shaped (3-3-4-3-3-4 holds none, but check the oracle anyway).
+        expect(cardOracle(input).count).toBe(0);
+        expect(scrub(input, [cardRule]).text).toBe(input);
+        if (makeValid && luhnOk(parts.join(""))) valid++;
+      }
+      expect(valid).toBe(150);
+    }
+  });
+
+  it("redacts each whitelisted grouping of a Luhn-valid card", () => {
+    const next = seeded(7102026);
+    const inside = [
+      [13],
+      [16],
+      [19],
+      [4, 4, 4, 4],
+      [4, 4, 4, 4, 3],
+      [4, 6, 5],
+      [4, 6, 4],
+      [4, 4, 4, 1],
+      [4, 4, 4, 3],
+    ];
+    for (const lengths of inside) {
+      for (let round = 0; round < 20; round++) {
+        const joiner = [" ", "-"][next(2)] as string;
+        const input = `ref ${grouped(next, lengths, true).join(joiner)} ok`;
+        expect(scrub(input, [cardRule]).text).toBe(`ref ${MARK("card_number")} ok`);
+      }
     }
   });
 });
@@ -452,6 +571,93 @@ describe("labeled values", () => {
   it("keeps the quotes around a redacted quoted value", () => {
     const input = `${join("pass", "word")}: "${join("hunter", "2xyz")}" and more`;
     expect(scrub(input).text).toBe(`${join("pass", "word")}: "${MARK("labeled_secret")}" and more`);
+  });
+
+  it("redacts a quoted value that closes within 5 characters and runs on (YAML, shell, SQL)", () => {
+    const secret = join("abcd1234", "efgh");
+    const upper = join("PASS", "WORD");
+    const shapes: Array<[string, string]> = [
+      [`${label}: 'it''s-${secret}'`, `${label}: '${MARK("labeled_secret")}'`],
+      [`${upper}='it'\\''s-${secret}'`, `${upper}='${MARK("labeled_secret")}'`],
+      [`${label}: 'O'Brien-${secret}'`, `${label}: '${MARK("labeled_secret")}'`],
+      [`${label}="ab""${secret}"`, `${label}="${MARK("labeled_secret")}"`],
+      [`${label}=\`ab\`\`${secret}\``, `${label}=\`${MARK("labeled_secret")}\``],
+      [`${label}="abcde"fghijk`, `${label}="${MARK("labeled_secret")}`],
+      [`${label}='' ${secret}`, `${label}='' ${secret}`],
+    ];
+    for (const [input, expected] of shapes) expect(scrub(input).text).toBe(expected);
+  });
+
+  it("keeps a quoted value that is closed within 5 characters when fewer than 5 follow", () => {
+    for (const input of [
+      `${label}='ab'cde`,
+      `{"${label}":"abc"}`,
+      `${label}="abcde", "other":1`,
+      `${label}='ab' and more things`,
+    ]) {
+      const result = scrub(input);
+      expect(result.text).toBe(input);
+      expect(result.hits.size).toBe(0);
+    }
+  });
+
+  it("redacts a value inside a JSON string that was encoded twice, up to its escaped quote", () => {
+    const secret = join("abcd1234", "efgh5678");
+    const input = `{\\"${label}\\":\\"${secret}\\",\\"user\\":\\"bob\\"}`;
+    const result = scrub(input);
+    expect(result.text).toBe(
+      `{\\"${label}\\":\\"${MARK("labeled_secret")}\\",\\"user\\":\\"bob\\"}`,
+    );
+    expect([...result.hits]).toEqual([["labeled_secret", 1]]);
+    const single = scrub(`{\\'${label}\\': \\'${secret}\\'}`);
+    expect(single.text).toBe(`{\\'${label}\\': \\'${MARK("labeled_secret")}\\'}`);
+    // Without a closing escaped quote on the line, the value runs to the end of the line.
+    expect(scrub(`${label}=\\"${secret}\nnext`).text).toBe(
+      `${label}=\\"${MARK("labeled_secret")}\nnext`,
+    );
+    // A value that is too short, or already redacted, is kept.
+    for (const kept of [
+      `{\\"${label}\\":\\"abc\\"}`,
+      `{\\"${label}\\":\\"${MARK("labeled_secret")}\\"}`,
+    ]) {
+      expect(scrub(kept).text).toBe(kept);
+    }
+  });
+
+  it("finds a labeled secret inside the value of a label that names something else", () => {
+    const secret = join("hunter", "2xyz");
+    const input = `url=https://host.example.com/?${label}=${secret} and ${join("to", "ken")}_count=1234567`;
+    expect(scrub(input).text).toBe(
+      `url=https://host.example.com/?${label}=${MARK("labeled_secret")} and ${join("to", "ken")}_count=1234567`,
+    );
+    const quoted = scrub(`cmd="run --${label}=${secret} now"`);
+    expect(quoted.text).toBe(`cmd="run --${label}=${MARK("labeled_secret")} now"`);
+    expect([...quoted.hits]).toEqual([["labeled_secret", 1]]);
+    // Several nested secrets in one value are all found, each counted once.
+    const several = scrub(`note="a ${label}=${secret} b ${label}: ${secret}2 c"`);
+    expect(several.hits.get("labeled_secret")).toBe(2);
+    expect(several.text).not.toContain(secret);
+  });
+
+  it("reads the label by its words: spelling variants of a secret label are labels", () => {
+    const secret = join("abcd1234", "efgh");
+    for (const name of [
+      join("db", "PasswordProd"),
+      join("DB_PASS", "WORD_US_EAST_1"),
+      join("secret", "KeyBase"),
+      join("AWS", "SecretKey"),
+      join("x.api", ".key"),
+      join("my pass", "word is"),
+    ]) {
+      expect(scrub(`${name}: ${secret}`).text).toBe(`${name}: ${MARK("labeled_secret")}`);
+    }
+    for (const name of [
+      join("max_to", "kens"),
+      join("DB_PASS", "WORD_URL"),
+      join("secre", "tary"),
+    ]) {
+      expect(scrub(`${name}: ${secret}`).text).toBe(`${name}: ${secret}`);
+    }
   });
 });
 
@@ -630,7 +836,7 @@ describe("scrubFrontmatter (R4.1)", () => {
   });
 });
 
-describe("LABEL_KEY", () => {
+describe("isLabelKey", () => {
   it.each([
     ["pass", "word"],
     ["client", "Secret"],
@@ -643,36 +849,67 @@ describe("LABEL_KEY", () => {
     ["Sec", "ret Key"],
     ["API", " Key"],
     ["Secret", " Access Key"],
+    ["my pass", "word"],
     ["SECRET", "_KEY_BASE"],
     ["DB_PASS", "WORD_PROD"],
+    ["DB_PASS", "WORD_US_EAST_1"],
+    ["DB_PASS", "WORD_URL_ENCODED"],
     ["API", "_KEY_V2"],
     ["GITHUB_", "TOKEN_RO"],
-    ["GITHUB_", "TOKEN_RO_V2"],
     ["smtp_pass", "word_2"],
     ["pass", "word1"],
+    ["pass", "word1234"],
+    ["PASS", "WORD2_PROD"],
+    ["pass", "word_a_b_c"],
+    ["secret", "KeyBase"],
+    ["db", "PasswordProd"],
+    ["api", "KeyV2"],
+    ["pass", "wordHash"],
+    ["API", "Key"],
+    ["AWS", "SecretKey"],
+    ["x.api", ".key"],
+    ["private", "Key"],
+    ["access", "Key"],
+    ["a", "pikey"],
+    ["pw", "d"],
+    ["pass", "wd"],
+    ["pass", "phrase"],
   ])("accepts %s%s", (a, b) => {
-    expect(LABEL_KEY.test(join(a as string, b as string))).toBe(true);
+    expect(isLabelKey(join(a as string, b as string))).toBe(true);
   });
 
   it.each([
     ["secre", "tary"],
     ["to", "ken_count"],
+    ["to", "ken_count_2"],
     ["pass", "word_policy"],
     ["api", "_key_name"],
     ["to", "ken_limit"],
     ["secret", "_key_max_size"],
-    ["pass", "word_a_b_c"],
-    ["pass", "word1234"],
+    ["DB_PASS", "WORD_URL"],
+    ["max_to", "kens"],
+    ["to", "kenizer"],
+    ["pass", "wordless"],
+    ["access_key", "_id"],
+    ["mon", "key"],
+    ["key", "board"],
+    ["api", ""],
+    ["sort_", "key"],
+    ["primary ", "key"],
+    ["ke", "y"],
     ["ti", "tle"],
-    ["my pass", "word"],
     ["", ""],
   ])("rejects %s%s", (a, b) => {
-    expect(LABEL_KEY.test(join(a as string, b as string))).toBe(false);
+    expect(isLabelKey(join(a as string, b as string))).toBe(false);
   });
 
-  it("is not a stateful global regex", () => {
-    expect(LABEL_KEY.global).toBe(false);
-    expect(LABEL_KEY.sticky).toBe(false);
+  it("reads only the last 4 words and the last 64 characters", () => {
+    const word = join("pass", "word");
+    expect(isLabelKey(`${word} one two three four`)).toBe(false);
+    expect(isLabelKey(`${word} one two three`)).toBe(true);
+    expect(isLabelKey(`${word}_${"x".repeat(50)}`)).toBe(true);
+    expect(isLabelKey(`${word}_${"x".repeat(70)}`)).toBe(false);
+    expect(isLabelKey(`${"x".repeat(100)}_${word}`)).toBe(true);
   });
 });
 
@@ -895,6 +1132,17 @@ describe("failures surface as ScrubError (D3, D7)", () => {
     expect(result.hits.get("pair")).toBe(4);
   });
 
+  it("hands the named groups of the match to select, and an empty object when there are none", () => {
+    const seen: Array<Record<string, string | undefined>> = [];
+    const record: ScrubRule["select"] = (_found, _from, groups) => {
+      seen.push({ ...groups });
+      return null;
+    };
+    scrub("k=abc", [{ id: "named", pattern: /(?<keep>k=)(?<secret>[a-z]+)/g, select: record }]);
+    scrub("abc", [{ id: "plain", pattern: /[a-z]+/g, select: record }]);
+    expect(seen).toEqual([{ keep: "k=", secret: "abc" }, {}]);
+  });
+
   it("leaves a match alone when select finds nothing", () => {
     const rule: ScrubRule = { id: "none", pattern: /[a-z]+/g, select: () => null };
     const result = scrub("abc", [rule]);
@@ -953,6 +1201,24 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["api key words", repeat("api key ")],
     ["label tails", repeat(join("pass", "word_ab_cd_"))],
     ["label tail digits", repeat(join("pass", "word123"))],
+    ["camelCase identifiers", repeat("clientSecretValueXyz")],
+    ["camelCase pairs", repeat("aB")],
+    ["camelCase words joined by spaces", repeat("clientSecret ")],
+    ["15 character words joined by spaces", repeat("aaaaaaaaaaaaaaa ")],
+    ["dotted identifier", repeat("a.b-c_")],
+    ["labels that name something else", repeat("a=bbbbbb ")],
+    ["token_count runs", repeat("token_count=")],
+    ["token_count runs with values", repeat("token_count=bbbbbb ")],
+    ["a value holding token_count runs", `x=${repeat("token_count=bbbbbb&")}`],
+    ["a quoted value holding labels", `x="${repeat(join("a=bbbbbb pass", "word=cccccc "))}"`],
+    ["short closed single quotes", repeat(join("pass", "word='ab'"))],
+    ["short closed double quotes", repeat(join("pass", 'word="ab"'))],
+    ["short closed then more", repeat(join("pass", "word='ab'cdefg"))],
+    ["escaped short values", repeat(join("pass", 'word=\\"ab\\"'))],
+    ["double-encoded JSON", repeat(join('{\\"pass', 'word\\":\\"ab\\"}'))],
+    ["escaped open quote then lines", `${join("pass", 'word=\\"')}${repeat("ab cd\n")}`],
+    ["3-3-3-3-4 digit groups", repeat("123 456 789 012 3456 ")],
+    ["4-6-5 digit groups", repeat("1234 567890 12345 ")],
     ["escaped quotes after an open quote", `${join("pass", 'word="')}${repeat('\\"a')}`],
     ["closed quoted value", `${join("pass", 'word="')}${repeat("a1b2")}"`],
     ["digits grouped by spaces", repeat("1234 ")],
