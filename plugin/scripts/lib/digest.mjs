@@ -28,6 +28,11 @@ const COMMAND_TAGS = [
   "<local-command-stderr>",
 ];
 
+/** Every character a reader may treat as a line break. */
+const LINE_BREAK = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
+const LINE_BREAK_ALL = new RegExp(LINE_BREAK.source, "g");
+const NAME_UNSAFE = /[\p{Cc}\u2028\u2029]/gu;
+
 const LABEL_LINE = /^(?:USER:|ASSISTANT:|TOOL |RESULT:|\[\d+ characters left out\])/;
 
 /**
@@ -37,7 +42,7 @@ const LABEL_LINE = /^(?:USER:|ASSISTANT:|TOOL |RESULT:|\[\d+ characters left out
  * @returns {string}
  */
 function indent(text) {
-  return text.replace(/\r\n?|\n/g, "\n  ");
+  return text.replace(LINE_BREAK_ALL, "\n  ");
 }
 
 /**
@@ -46,7 +51,8 @@ function indent(text) {
  * @returns {string}
  */
 function firstLine(text) {
-  const nl = text.search(/[\r\n]/);
+  const match = LINE_BREAK.exec(text);
+  const nl = match ? match.index : -1;
   const line = nl < 0 ? text : text.slice(0, nl);
   const more = nl >= 0 && text.slice(nl).trim() !== "";
   const capped = takeStart(line, RESULT_CAP);
@@ -150,7 +156,7 @@ function resultText(content) {
  * @returns {string}
  */
 function toolLine(block) {
-  const name = (typeof block.name === "string" ? block.name : "unknown").replace(/\p{Cc}/gu, " ");
+  const name = (typeof block.name === "string" ? block.name : "unknown").replace(NAME_UNSAFE, " ");
   const input = isObject(block.input) ? block.input : {};
   const arg =
     typeof input.command === "string"
