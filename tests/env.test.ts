@@ -401,4 +401,19 @@ describe(".env.example", () => {
     expect(text).toMatch(/^PUBLIC_BASE_URL=$/m);
     expect(text).toMatch(/^OWNER_PASSPHRASE_HASH=$/m);
   });
+
+  it("lists every NAME= key exactly once", () => {
+    const keys = [...text.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]);
+    expect(keys.length).toBeGreaterThan(0);
+    const repeated = keys.filter((key, i) => keys.indexOf(key) !== i);
+    expect(repeated).toEqual([]);
+  });
+});
+
+describe("README.md", () => {
+  const text = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+  it("has exactly one Configuration heading", () => {
+    expect(text.match(/^## Configuration$/gm)).toHaveLength(1);
+  });
 });
