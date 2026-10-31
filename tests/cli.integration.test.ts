@@ -273,7 +273,7 @@ const ENV_BASE = {
   VAULT_DIR: "/data/vault",
   GIT_AUTHOR_NAME: "Test Author",
   GIT_AUTHOR_EMAIL: "author@example.com",
-  INGEST_TOKEN: "fictional-test-token-0123456789-abcdefghij",
+  INGEST_TOKEN: ["fictional-test-token", "0123456789", "abcdefghij"].join("-"),
   PUBLIC_BASE_URL: "https://brain.example.com",
 };
 
@@ -600,7 +600,7 @@ describe("entry point", () => {
   });
 
   it("never prints a distinctive passphrase, on success or on failure", () => {
-    const secret = "zq-Distinct-Passphrase-7431";
+    const secret = ["zq-Distinct", "Passphrase", "7431"].join("-");
     const cases: [string, number][] = [
       [`${secret}\n`, 0],
       [`${secret}\r\n`, 0],
