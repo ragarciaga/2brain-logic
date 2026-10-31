@@ -187,16 +187,32 @@ export async function logChangedPaths(
     {},
     signal ? { signal } : {},
   );
+  return parseLogRecords(out, marker, since);
+}
+
+/**
+ * Parse `git log -z --name-only --format=%x1e<marker>%cI` output. Tolerates the layout variants of
+ * different git versions (date then NUL then optional newline, or newline then NUL). With `since`,
+ * records older than it are dropped here too, so a `--since` that git misparsed cannot widen the
+ * result.
+ */
+export function parseLogRecords(
+  out: Buffer,
+  marker: string,
+  since?: Date,
+): Array<{ path: string; date: string }> {
+  const floor = since === undefined ? undefined : Math.floor(since.getTime() / 1000) * 1000;
   const seen = new Map<string, string>();
   for (const record of out.toString("latin1").split(`\x1e${marker}`).slice(1)) {
-    // With -z the date ends at a NUL, then a newline, then the NUL-terminated names.
-    const end = record.indexOf("\0");
+    // The date ends at the first NUL or newline; the names follow, NUL-separated.
+    const end = record.search(/[\0\n]/);
     if (end < 0) continue;
     const date = record.slice(0, end);
     // Defense in depth next to the marker: a header must be a strict ISO 8601 committer date.
     if (!ISO_DATE.test(date)) continue;
+    if (floor !== undefined && Date.parse(date) < floor) continue;
     // latin1 maps bytes 1:1, so names can be re-sliced into the original bytes and decoded strictly.
-    const names = Buffer.from(record.slice(end + 1).replace(/^\n/, ""), "latin1");
+    const names = Buffer.from(record.slice(end).replace(/^[\0\n]+/, ""), "latin1");
     for (const raw of splitNul(names)) {
       let path: string;
       try {

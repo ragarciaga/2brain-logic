@@ -28,9 +28,13 @@ import { createNoteWriter, type VaultWriter } from "../src/vault/write-note.js";
 import { createGitFixture, type GitFixture, git, TEST_AUTHOR } from "./helpers/git-fixture.js";
 
 const RESOURCE = "https://brain.example.com/mcp";
-const NOW = new Date("2030-01-01T12:00:00Z");
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
+// Derived from the real clock (rounded down to the hour) so fixture commits are in the past, as in
+// production; a fixed future date made git's --since behave differently across git versions.
+const NOW = new Date(Math.floor(Date.now() / HOUR) * HOUR);
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * DAY).toISOString();
+const dayPrefix = (n: number) => new RegExp(`^${daysAgo(n).slice(0, 10)}`);
 
 const rgAvailable = spawnSync("rg", ["--version"]).status === 0;
 if (!rgAvailable) {
@@ -44,7 +48,8 @@ const clients: Client[] = [];
 const extraDirs: string[] = [];
 
 beforeEach(async () => {
-  fixture = createGitFixture();
+  // The seed commit is older than any window the tests ask for, so it never shows up in `recent`.
+  fixture = createGitFixture(daysAgo(200));
   logs = [];
   await ensureClone(fixture.vaultDir, fixture.remote);
 });
@@ -505,7 +510,7 @@ describe("recent (R8.3)", () => {
         path: "inbox/six.md",
         title: "Six",
         type: "idea",
-        date: expect.stringMatching(/^2029-12-26/),
+        date: expect.stringMatching(dayPrefix(6)),
       },
     ]);
   });
@@ -525,7 +530,7 @@ describe("recent (R8.3)", () => {
     const { call } = await connect();
     const r = await call("recent", {});
     expect(list(r).map((n) => n.path)).toEqual(["inbox/twice.md", "inbox/mid.md", "inbox/old.md"]);
-    expect(list(r)[0]?.date).toMatch(/^2029-12-31/);
+    expect(list(r)[0]?.date).toMatch(dayPrefix(1));
   });
 
   it("reports the newest commit date of a path when the history has clock skew", async () => {
@@ -535,7 +540,7 @@ describe("recent (R8.3)", () => {
     expect(list(await call("recent", {}))).toEqual([
       expect.objectContaining({
         path: "inbox/skew.md",
-        date: expect.stringMatching(/^2029-12-30/),
+        date: expect.stringMatching(dayPrefix(2)),
       }),
     ]);
   });
@@ -557,7 +562,7 @@ describe("recent (R8.3)", () => {
     const { call } = await connect();
     const r = await call("recent", {});
     expect(list(r)).toEqual([
-      expect.objectContaining({ path: "inbox/z.md", date: expect.stringMatching(/^2029-12-27/) }),
+      expect.objectContaining({ path: "inbox/z.md", date: expect.stringMatching(dayPrefix(5)) }),
     ]);
   });
 
