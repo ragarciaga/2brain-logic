@@ -109,7 +109,7 @@ flowchart LR
 | Runtime | Node.js LTS | 24.22.2 | https://nodejs.org/docs/latest-v24.x/api/ |
 | Language | TypeScript (strict) | 7.0.2 | https://www.typescriptlang.org/docs/ |
 | HTTP | Hono + @hono/node-server | 4.13.14 / 2.1.5 | https://hono.dev/docs/ |
-| MCP | @modelcontextprotocol/sdk | 1.32.2 | https://github.com/modelcontextprotocol/typescript-sdk |
+| MCP | @modelcontextprotocol/server (ADR 0013) | 2.4.0 | https://github.com/modelcontextprotocol/typescript-sdk |
 | Validation | Zod | 4.6.7 | https://zod.dev |
 | LLM | @anthropic-ai/sdk | 1.3.0 | https://docs.claude.com/en/api/client-sdks |
 | Frontmatter | gray-matter | 4.0.3 | https://github.com/jonschlinkert/gray-matter |
@@ -154,7 +154,7 @@ See docs/v2.md. Hard non-goals:
   `recent`, `update_properties`).
 - ADVISORY: git conflicts (default: keep both versions as `<note> (conflict YYYY-MM-DD).md` and
   alert; until Telegram exists, the alert is a log line).
-- DEFERRED: OAuth implementation benchmark (to the F2 spec).
+- RESOLVED: OAuth implementation, built-in authorization server (docs/research/mcp-oauth/REPORT.md, ADR 0014).
 - DEFERRED: speech-to-text provider benchmark (to the F6 spec).
 - DEFERRED: whether the Fireflies API can rename and delete transcripts (to the F5 spec).
 - DEFERRED: access to the author's work Gmail and Drive from the reference n8n (F5 and F6 specs,
