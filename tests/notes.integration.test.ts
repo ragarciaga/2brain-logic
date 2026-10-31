@@ -16,6 +16,8 @@ import {
   TEST_AUTHOR,
 } from "./helpers/git-fixture.js";
 
+const TOKEN = "fictional-integration-token-0123456789-abcdef";
+
 let fixture: GitFixture;
 let gitCalls: string[];
 let logs: string[];
@@ -42,14 +44,18 @@ function makeWriter() {
 }
 
 function makeApp() {
-  return createApp({ writer: makeWriter(), log: (message) => logs.push(message) });
+  return createApp({
+    writer: makeWriter(),
+    ingestToken: TOKEN,
+    log: (message) => logs.push(message),
+  });
 }
 
 function post(app: ReturnType<typeof createApp>, payload: unknown) {
   return app.request("/notes", {
     method: "POST",
     body: typeof payload === "string" ? payload : JSON.stringify(payload),
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
   });
 }
 
@@ -136,6 +142,30 @@ describe("POST /notes against a real remote", () => {
     git(fixture.remote, ["merge-base", "--is-ancestor", otherSha, commit]);
     expect(remoteSha()).toBe(commit);
     expect(gitCalls[0]).toBe("pullRebase");
+  });
+
+  describe("D1: a request without a valid token changes nothing and never reaches git", () => {
+    const variants: Array<[string, Record<string, string>]> = [
+      ["no header", {}],
+      ["a Basic scheme", { authorization: `Basic ${TOKEN}` }],
+      ["a wrong token of the same length", { authorization: `Bearer ${TOKEN.slice(0, -1)}X` }],
+      ["a token of a different length", { authorization: `Bearer ${TOKEN}X` }],
+    ];
+
+    it.each(variants)("%s returns 401", async (_name, extra) => {
+      const shaBefore = remoteSha();
+      const listingBefore = listVault();
+      const response = await makeApp().request("/notes", {
+        method: "POST",
+        body: JSON.stringify({ path: "denied.md", frontmatter: {}, body: "x\n" }),
+        headers: { "content-type": "application/json", ...extra },
+      });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ ok: false, error: "unauthorized" });
+      expect(gitCalls).toEqual([]);
+      expect(remoteSha()).toBe(shaBefore);
+      expect(listVault()).toEqual(listingBefore);
+    });
   });
 
   describe("D5: a malformed request changes nothing and never reaches git", () => {

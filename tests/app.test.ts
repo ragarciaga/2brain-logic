@@ -4,12 +4,15 @@ import { createApp } from "../src/server/app.js";
 import type { NoteInput } from "../src/vault/note-schema.js";
 import { NoteExistsError, type NoteWriter, UnsafePathError } from "../src/vault/write-note.js";
 
+const TOKEN = "fictional-app-token-0123456789-abcdefghijk";
+const AUTH = { authorization: `Bearer ${TOKEN}` };
+
 function setup(write?: NoteWriter["write"]) {
   const writer = {
     write: vi.fn(write ?? (async (note: NoteInput) => ({ path: note.path, commit: "abc123" }))),
   };
   const logs: string[] = [];
-  const app = createApp({ writer, log: (message) => logs.push(message) });
+  const app = createApp({ writer, ingestToken: TOKEN, log: (message) => logs.push(message) });
   return { app, writer, logs };
 }
 
@@ -23,7 +26,7 @@ function post(
   return app.request("/notes", {
     method: "POST",
     body,
-    headers: headers ?? { "content-type": "application/json" },
+    headers: { ...AUTH, ...(headers ?? { "content-type": "application/json" }) },
   });
 }
 
@@ -93,6 +96,7 @@ describe("POST /notes", () => {
     const request = new Request("http://localhost/notes", {
       method: "POST",
       body: new TextEncoder().encode(JSON.stringify(valid)),
+      headers: AUTH,
     });
     request.headers.delete("content-type");
     expect(request.headers.get("content-type")).toBeNull();
@@ -115,6 +119,59 @@ describe("POST /notes", () => {
     const response = await post(app, JSON.stringify({ ...valid, body: "x".repeat(1024 * 1024) }));
     expect(response.status).toBe(413);
     expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it("returns 401, not 413, for an oversized body without a token", async () => {
+    const { app, writer } = setup();
+    const response = await app.request("/notes", {
+      method: "POST",
+      body: JSON.stringify({ ...valid, body: "x".repeat(1024 * 1024) }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(response.status).toBe(401);
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it("R1.4: a rejected request leaks neither the header value nor the real token", async () => {
+    const marker = "HEADERMARKER";
+    const { app, logs } = setup(async () => {
+      throw new Error(TOKEN);
+    });
+    const consoleSpies = [
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+      vi.spyOn(console, "log").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+    ];
+    const response = await post(app, JSON.stringify(valid), {
+      "content-type": "application/json",
+      authorization: `Bearer ${marker}`,
+    });
+    expect(response.status).toBe(401);
+    const text = await response.text();
+    for (const output of [text, ...logs, JSON.stringify(consoleSpies.map((s) => s.mock.calls))]) {
+      expect(output).not.toContain(marker);
+      expect(output).not.toContain(TOKEN);
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("R1.4: a failing write with the correct token leaks the token nowhere", async () => {
+    const { app, logs } = setup(async () => {
+      throw new Error(`leak ${TOKEN}`);
+    });
+    const consoleSpies = [
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+      vi.spyOn(console, "log").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+    ];
+    const response = await post(app, JSON.stringify(valid));
+    expect(response.status).toBe(500);
+    const text = await response.text();
+    for (const output of [text, ...logs, JSON.stringify(consoleSpies.map((s) => s.mock.calls))]) {
+      expect(output).not.toContain(TOKEN);
+      expect(output).not.toContain("leak");
+    }
+    vi.restoreAllMocks();
   });
 
   it("returns 409 when the note exists", async () => {

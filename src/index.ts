@@ -14,7 +14,7 @@ async function main(): Promise<void> {
     author: { name: env.GIT_AUTHOR_NAME, email: env.GIT_AUTHOR_EMAIL },
     git: defaultGit,
   });
-  const app = createApp({ writer });
+  const app = createApp({ writer, ingestToken: env.INGEST_TOKEN });
   await startServer(app, { host: env.HOST, port: env.PORT });
   console.log(
     `2brain listening on ${env.HOST}:${env.PORT} (archive folder: ${config.vault.archive_folder})`,

@@ -25,18 +25,22 @@ curl http://127.0.0.1:3000/health
 # {"ok":true}
 
 curl -X POST http://127.0.0.1:3000/notes \
+  -H "authorization: Bearer $INGEST_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"path":"Inbox/hello.md","frontmatter":{"title":"Hello"},"body":"First note.\n"}'
 # {"ok":true,"path":"Inbox/hello.md","commit":"<sha>"}
 ```
 
 `POST /notes` pulls with rebase, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>`
-and pushes. It answers 400 for a bad body or path, 409 when the path already exists (it never
-overwrites), 415 unless the content type is `application/json`, and 500 when git fails.
+and pushes. Every route except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the
+answer is 401 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for
+a missing or wrong token, 409 when the path already exists (it never overwrites), 413 for a body
+over 1 MB, 415 unless the content type is `application/json`, and 500 when git fails.
 
-> **Do not connect real n8n flows to `/notes` yet.** The endpoint has no authentication and no
-> secret scrubbing (both arrive with the vault safety work in
-> [ADR 0008](docs/adr/0008-vault-safety.md)). Until then, use it only with a throwaway vault.
+> **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
+> ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) but still has no secret scrubbing (it arrives
+> with the vault safety work in [ADR 0008](docs/adr/0008-vault-safety.md)). Until then, use it only
+> with a throwaway vault.
 
 SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyChecking=no`.
 
@@ -49,7 +53,7 @@ Environment variables (see `.env.example`):
 | `VAULT_DIR` | Directory of the vault clone. Required. |
 | `VAULT_REMOTE` | Repository to clone when `VAULT_DIR` is not a repository yet. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | Identity on commits. Required. |
-| `INGEST_TOKEN` | Required, at least 32 characters; the service exits at startup without it. Requests are not checked against it yet. |
+| `INGEST_TOKEN` | Required, at least 32 characters; the service exits at startup without it. Every request except `GET /health` must send it as `Authorization: Bearer <token>`; the value is compared exactly, so do not pad it with spaces. |
 | `PORT` | Listening port. Default `3000`. |
 | `HOST` | Listening address. Default `127.0.0.1`. |
 | `ANTHROPIC_API_KEY` | Listed for later work; the skeleton does not read it. |
