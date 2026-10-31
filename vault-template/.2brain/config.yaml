@@ -34,3 +34,4 @@ types:
   idea: { value: idea, folder: inbox }
   daily: { value: daily, folder: daily }
   review: { value: review, folder: reviews }
+  session: { value: session, folder: "{area}/sessions" }

@@ -32,6 +32,15 @@ describe("vault template config", () => {
     expect(raw).toStrictEqual(DEFAULT_VAULT_CONFIG);
   });
 
+  it("declares the session type last, in the code defaults and in the template", () => {
+    const raw = parseYamlConfig(readFileSync(join(TEMPLATE, ".2brain", "config.yaml"), "utf8"));
+    const expected = { value: "session", folder: "{area}/sessions" };
+    for (const config of [raw as typeof DEFAULT_VAULT_CONFIG, DEFAULT_VAULT_CONFIG]) {
+      expect(config.types.session).toStrictEqual(expected);
+      expect(Object.keys(config.types).at(-1)).toBe("session");
+    }
+  });
+
   it("loads to exactly the default config", async () => {
     expect(await loadVaultConfig(TEMPLATE)).toStrictEqual(DEFAULT_VAULT_CONFIG);
   });
