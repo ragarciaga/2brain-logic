@@ -294,6 +294,9 @@ describe("PATCH /notes against a real remote", () => {
     expect(stored.data.date).toBe("2026-10-31");
     expect(stored.data.title).toBe("t");
     expect(stored.content).toBe("Body\n");
+    // The re-dump quotes the date-like string; the value is the same text.
+    expect(remoteFile("inbox/obs.md")).toContain("\ndate: '2026-10-31'\n");
+    expect(remoteFile("inbox/obs.md")).not.toContain("date: 2026-10-31");
   });
 
   it("an unquoted date in a no-op set is unchanged and the bytes stay", async () => {
@@ -540,6 +543,35 @@ describe("PATCH /notes against a real remote", () => {
     });
     expect(vaultFile("inbox/b.md").equals(bytes)).toBe(true);
     expect(head()).toBe(before);
+  });
+
+  it("a set that repeats the note's own source_id is not a duplicate and still applies the rest", async () => {
+    seedIdea("inbox/a.md", { source_id: "id-1" });
+    const before = head();
+    const response = await patch(makeApp(), {
+      path: "inbox/a.md",
+      set: { source_id: "id-1", title: "beta" },
+    });
+    expect(response.status).toBe(200);
+    expect(head()).not.toBe(before);
+    expect(await response.json()).toEqual({ ok: true, path: "inbox/a.md", commit: head() });
+    const data = parseNote(remoteFile("inbox/a.md")).data;
+    expect(data.title).toBe("beta");
+    expect(data.source_id).toBe("id-1");
+  });
+
+  it("duplicate detection uses the source id property name from the vault config", async () => {
+    seed({ ".2brain/config.yaml": "properties:\n  source_id: origin_id\n" });
+    seedIdea("inbox/a.md", { origin_id: "id-1" });
+    seedIdea("inbox/b.md", { origin_id: "id-2" });
+    const before = head();
+    const dup = await patch(makeApp(), { path: "inbox/b.md", set: { origin_id: "id-1" } });
+    expect(dup.status).toBe(409);
+    expect(await dup.json()).toEqual({ ok: false, error: "duplicate_source", path: "inbox/a.md" });
+    expect(head()).toBe(before);
+    // The default name is just a property now: giving it a taken value is fine.
+    const free = await patch(makeApp(), { path: "inbox/b.md", set: { source_id: "id-1" } });
+    expect(free.status).toBe(200);
   });
 
   it("a set that gives source_id an unused value succeeds, and the index then finds it", async () => {
