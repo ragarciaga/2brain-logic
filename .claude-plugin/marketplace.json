@@ -1,0 +1,14 @@
+{
+  "name": "2brain-logic",
+  "description": "Plugins for the 2brain second brain.",
+  "owner": {
+    "name": "2brain-logic"
+  },
+  "plugins": [
+    {
+      "name": "2brain",
+      "source": "./plugin",
+      "description": "Capture AI work sessions into a second brain vault over MCP."
+    }
+  ]
+}
