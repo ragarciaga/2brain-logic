@@ -42,6 +42,16 @@ describe("parseLogRecords", () => {
     expect(parseLogRecords(out, M)).toEqual([]);
   });
 
+  it("accepts a Z date in the layout git 2.56 prints for UTC", () => {
+    const out = Buffer.from("\x1eMK2026-10-29T13:24:18Z\0\na.md\0");
+    expect(parseLogRecords(out, "MK")).toEqual([{ path: "a.md", date: "2026-10-29T13:24:18Z" }]);
+  });
+
+  it("rejects a malformed zone suffix", () => {
+    const out = Buffer.from("\x1eMK2026-10-29T13:24:18ZZ\0\na.md\0");
+    expect(parseLogRecords(out, "MK")).toEqual([]);
+  });
+
   it("drops records older than since, whatever git returned", () => {
     const out = Buffer.from(`${RS}${M}${D1}\0\ninbox/a.md\0${RS}${M}${D2}\0\ninbox/c.md\0`);
     expect(parseLogRecords(out, M, new Date("2026-10-25T00:00:00Z"))).toEqual([

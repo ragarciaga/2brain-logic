@@ -156,7 +156,7 @@ export async function unstageFile(dir: string, relPath: string): Promise<void> {
   await runGit(dir, ["reset", "-q", "--", relPath]);
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 /**
