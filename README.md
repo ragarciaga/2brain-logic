@@ -111,9 +111,14 @@ docker compose up --build
 ```
 
 The service joins the external network named by `N8N_NETWORK` (default `n8n`) and publishes no
-ports, so only containers on that network can reach it. The memory limit is 512 MB. Compose
-overrides `VAULT_DIR` to `/data/vault` (a named volume) and `HOST` to `0.0.0.0` inside the
-container. The image includes git and ripgrep, and the default vault template, so
+ports, so only containers on that network can reach it, including the public MCP app on
+`MCP_PORT`. The memory limit is 512 MB, and the image caps the V8 heap at 192 MB through
+`NODE_OPTIONS=--max-old-space-size=192`. Compose overrides `VAULT_DIR` to `/data/vault` (a named
+volume), `AUTH_STORE_DIR` to `/data/auth` (a second named volume, `auth`, so OAuth tokens survive
+a restart and stay out of the vault repository) and `HOST` to `0.0.0.0` inside the container.
+The image creates `/data/auth` owned by `node` with mode 0700; the store refuses a directory
+writable by others. Do not bind mount a vault subfolder at `/data/auth`: the container cannot
+detect that, and the OAuth state would be committed with the vault. The image includes git and ripgrep, and the default vault template, so
 `node dist/cli.js init-vault <dir>` works inside the container.
 
 Compose runs a healthcheck every 30 seconds: `node` inside the container sends `GET /health` to
