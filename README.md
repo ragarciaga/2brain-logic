@@ -32,13 +32,19 @@ curl -X POST http://127.0.0.1:3000/notes \
 ```
 
 `POST /notes` pulls with rebase, reads the vault config, validates the frontmatter and the path
-against it, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>` and pushes. Every route
+against it, scrubs secrets from the frontmatter and the body (each match is stored as
+`[REDACTED:<rule>]`), validates the scrubbed frontmatter again, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>` and pushes. Every route
 except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the answer is 401
 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for a missing or
 wrong token, 409 when the path already exists (it never overwrites), 413 for a body over 1 MB, 415
-unless the content type is `application/json`, 500 when git fails, and 503 `config_invalid` when
+unless the content type is `application/json`, 500 when git fails, 500 `scrub_failed` when the
+scrub cannot finish (nothing is written), and 503 `config_invalid` when
 the vault's `.2brain/config.yaml` is invalid (the body names only the file and the key:
 `{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
+
+When the scrub redacted anything, the 201 body also carries `"redactions":[{"rule":"<id>","count":<n>}]`
+(rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line;
+without redactions the key is absent.
 
 A note needs the four canonical properties (`type`, `area`, `date`, `source` by default; the vault
 config can rename them). `type` must be one of the configured type values, `area` one of the
@@ -55,9 +61,9 @@ Each write reads the vault config right after the pull, so a config change pushe
 clone applies to the next write without a restart.
 
 > **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
-> ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) but still has no secret scrubbing (it arrives
-> with the vault safety work in [ADR 0008](docs/adr/0008-vault-safety.md)). Until then, use it only
-> with a throwaway vault.
+> ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) and scrubs secrets on create, but a retry of
+> the same request is not idempotent yet and merge conflicts and push failures are not recovered
+> yet. Until then, use it only with a throwaway vault.
 
 SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyChecking=no`.
 
@@ -65,22 +71,22 @@ SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyCheck
 
 Environment variables (see `.env.example`):
 
-| Variable | Meaning |
-| --- | --- |
-| `VAULT_DIR` | Directory of the vault clone. Required. |
-| `VAULT_REMOTE` | Repository to clone when `VAULT_DIR` is not a repository yet. |
-| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | Identity on commits. Required. |
-| `INGEST_TOKEN` | Required, at least 32 characters; the service exits at startup without it. Every request except `GET /health` must send it as `Authorization: Bearer <token>`; the value is compared exactly, so do not pad it with spaces. |
-| `PORT` | Listening port. Default `3000`. |
-| `HOST` | Listening address. Default `127.0.0.1`. |
-| `PUBLIC_BASE_URL` | Origin of the public MCP endpoint (https, or http for `localhost` or `127.0.0.1`; no path, query or credentials). Empty or unset: MCP stays disabled and the five variables below are not read. |
-| `OWNER_PASSPHRASE_HASH` | Required when `PUBLIC_BASE_URL` is set: `scrypt$N$r$p$salt$key` (16 byte salt and 32 byte key in base64url; N a power of two from 2^14 to 2^20 and below 2^(16r), r 1 to 32, p 1 to 16, and one scrypt call within 64 MiB: 128 * r * (N + 2 + p) bytes). Create it with `node dist/cli.js hash-passphrase`, which reads the passphrase (12 characters or more) from standard input. Quote it in `.env`, it contains `$`. |
-| `MCP_PORT` | Port of the MCP listener. Default `3001`. |
-| `AUTH_STORE_DIR` | Directory for the OAuth state. Default `/data/auth`. Must not be inside `VAULT_DIR`. |
-| `TRUST_PROXY_HOPS` | Number of reverse proxies in front of the service. Default `0`. |
-| `ALLOWED_REDIRECT_HOSTS` | Comma separated bare host names an OAuth client may redirect to. Default `claude.ai,claude.com,chatgpt.com`. |
-| `ANTHROPIC_API_KEY` | Listed for later work; the skeleton does not read it. |
-| `N8N_NETWORK` | Compose only: name of the external Docker network. Default `n8n`. |
+| Variable                              | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `VAULT_DIR`                           | Directory of the vault clone. Required.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `VAULT_REMOTE`                        | Repository to clone when `VAULT_DIR` is not a repository yet.                                                                                                                                                                                                                                                                                                                                                            |
+| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | Identity on commits. Required.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `INGEST_TOKEN`                        | Required, at least 32 characters; the service exits at startup without it. Every request except `GET /health` must send it as `Authorization: Bearer <token>`; the value is compared exactly, so do not pad it with spaces.                                                                                                                                                                                              |
+| `PORT`                                | Listening port. Default `3000`.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `HOST`                                | Listening address. Default `127.0.0.1`.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `PUBLIC_BASE_URL`                     | Origin of the public MCP endpoint (https, or http for `localhost` or `127.0.0.1`; no path, query or credentials). Empty or unset: MCP stays disabled and the five variables below are not read.                                                                                                                                                                                                                          |
+| `OWNER_PASSPHRASE_HASH`               | Required when `PUBLIC_BASE_URL` is set: `scrypt$N$r$p$salt$key` (16 byte salt and 32 byte key in base64url; N a power of two from 2^14 to 2^20 and below 2^(16r), r 1 to 32, p 1 to 16, and one scrypt call within 64 MiB: 128 * r * (N + 2 + p) bytes). Create it with `node dist/cli.js hash-passphrase`, which reads the passphrase (12 characters or more) from standard input. Quote it in `.env`, it contains `$`. |
+| `MCP_PORT`                            | Port of the MCP listener. Default `3001`.                                                                                                                                                                                                                                                                                                                                                                                |
+| `AUTH_STORE_DIR`                      | Directory for the OAuth state. Default `/data/auth`. Must not be inside `VAULT_DIR`.                                                                                                                                                                                                                                                                                                                                     |
+| `TRUST_PROXY_HOPS`                    | Number of reverse proxies in front of the service. Default `0`.                                                                                                                                                                                                                                                                                                                                                          |
+| `ALLOWED_REDIRECT_HOSTS`              | Comma separated bare host names an OAuth client may redirect to. Default `claude.ai,claude.com,chatgpt.com`.                                                                                                                                                                                                                                                                                                             |
+| `ANTHROPIC_API_KEY`                   | Listed for later work; the skeleton does not read it.                                                                                                                                                                                                                                                                                                                                                                    |
+| `N8N_NETWORK`                         | Compose only: name of the external Docker network. Default `n8n`.                                                                                                                                                                                                                                                                                                                                                        |
 
 The vault holds its own settings in `.2brain/config.yaml` (format version 1): the archive and
 inbox folders (`vault.archive_folder`, default `archive`; `vault.inbox_folder`, default `inbox`),

@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultGit, ensureClone, type GitApi } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
 import { parseNote } from "../src/vault/frontmatter.js";
-import { createNoteWriter } from "../src/vault/write-note.js";
+import { ScrubError, scrub, scrubFrontmatter } from "../src/vault/scrub/index.js";
+import { createNoteWriter, type Scrubber, ScrubFailedError } from "../src/vault/write-note.js";
 import {
   createGitFixture,
   type GitFixture,
@@ -555,6 +556,195 @@ describe("POST /notes against a real remote", () => {
       const stored = parseNote(remoteFile("anywhere/x.md"));
       expect(stored.data).toEqual(sent.frontmatter);
       expect(stored.content).toBe(sent.body);
+    });
+  });
+
+  describe("R4: secret scrub", () => {
+    // Built from parts at runtime: the CI secret scan reads every commit.
+    const ANT = ["sk", "ant", "api03", "A".repeat(24)].join("-");
+    const GHP = ["ghp", "B".repeat(36)].join("_");
+
+    function appWith(scrubber: Scrubber) {
+      return createApp({
+        writer: createNoteWriter({
+          vaultDir: fixture.vaultDir,
+          author: TEST_AUTHOR,
+          git: spyGit(),
+          scrubber,
+        }),
+        ingestToken: TOKEN,
+        log: (message) => logs.push(message),
+      });
+    }
+
+    it("R4.1/R4.3: body secrets are stored as placeholders and counted", async () => {
+      const response = await post(makeApp(), note("inbox/s.md", {}, `a ${ANT} b ${ANT}\n`));
+      expect(response.status).toBe(201);
+      const text = await response.text();
+      expect(JSON.parse(text).redactions).toEqual([{ rule: "anthropic_key", count: 2 }]);
+      const stored = remoteFile("inbox/s.md");
+      expect(parseNote(stored).content).toBe(
+        "a [REDACTED:anthropic_key] b [REDACTED:anthropic_key]\n",
+      );
+      expect(stored).not.toContain(ANT);
+      expect(gitRaw(fixture.remote, ["log", "-p", "main"])).not.toContain(ANT);
+      expect(text).not.toContain(ANT);
+      expect(logs).toEqual(["redacted: anthropic_key=2"]);
+    });
+
+    it("R4.1: top-level and nested frontmatter strings are scrubbed, the rest is unchanged", async () => {
+      const sent = note("inbox/f.md", {
+        ref: `see ${GHP}`,
+        links: { primary: GHP, other: "https://example.com" },
+        tags: ["a", `t ${GHP}`],
+      });
+      const response = await post(makeApp(), sent);
+      expect(response.status).toBe(201);
+      const stored = remoteFile("inbox/f.md");
+      expect(stored).not.toContain(GHP);
+      expect(parseNote(stored).data).toEqual({
+        ...sent.frontmatter,
+        ref: "see [REDACTED:github_token]",
+        links: { primary: "[REDACTED:github_token]", other: "https://example.com" },
+        tags: ["a", "t [REDACTED:github_token]"],
+      });
+      expect(((await response.json()) as { redactions: unknown }).redactions).toEqual([
+        { rule: "github_token", count: 3 },
+      ]);
+    });
+
+    it("R4.3: body and frontmatter counts are combined, sorted by rule id, one log line", async () => {
+      const response = await post(
+        makeApp(),
+        note("inbox/b.md", { ref: `x ${GHP}`, links: { primary: GHP } }, `${GHP.length}\n${ANT}\n`),
+      );
+      expect(response.status).toBe(201);
+      const text = await response.text();
+      expect(JSON.parse(text).redactions).toEqual([
+        { rule: "anthropic_key", count: 1 },
+        { rule: "github_token", count: 2 },
+      ]);
+      expect(logs).toEqual(["redacted: anthropic_key=1, github_token=2"]);
+      for (const output of [text, ...logs]) {
+        expect(output).not.toContain(ANT);
+        expect(output).not.toContain(GHP);
+      }
+    });
+
+    it("R4.3: with nothing to redact the body has no redactions key and nothing is logged", async () => {
+      const response = await post(makeApp(), note("inbox/n.md"));
+      expect(response.status).toBe(201);
+      const json = (await response.json()) as { commit: string };
+      expect(json).toEqual({ ok: true, path: "inbox/n.md", commit: remoteSha() });
+      expect(logs).toEqual([]);
+    });
+
+    it("R4.3: the writer result has no redactions key when nothing was redacted", async () => {
+      const result = await makeWriter().write(note("inbox/w.md"));
+      expect(Object.keys(result).sort()).toEqual(["commit", "path"]);
+    });
+
+    const failures: Array<[string, Scrubber]> = [
+      [
+        "ScrubError from scrub",
+        {
+          scrub: () => {
+            throw new ScrubError("x");
+          },
+          scrubFrontmatter: (data) => scrubFrontmatter(data),
+        },
+      ],
+      [
+        "RangeError from scrubFrontmatter",
+        {
+          scrub: (text) => scrub(text),
+          scrubFrontmatter: () => {
+            throw new RangeError(`MARK${GHP}`);
+          },
+        },
+      ],
+      [
+        "a string thrown from scrub",
+        {
+          scrub: () => {
+            throw `MARK${GHP}`;
+          },
+          scrubFrontmatter: (data) => scrubFrontmatter(data),
+        },
+      ],
+    ];
+
+    it.each(failures)(
+      "R4.4: %s gives 500 scrub_failed and writes nothing",
+      async (_n, scrubber) => {
+        const shaBefore = remoteSha();
+        const listingBefore = listVault();
+        const response = await post(appWith(scrubber), note("inbox/sub/x.md", {}, `${ANT}\n`));
+        expect(response.status).toBe(500);
+        const text = await response.text();
+        expect(JSON.parse(text)).toEqual({ ok: false, error: "scrub_failed" });
+        expect(gitCalls).toEqual(["pullRebase"]);
+        expect(remoteSha()).toBe(shaBefore);
+        expect(listVault()).toEqual(listingBefore);
+        expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+        expect(logs).toEqual(["scrub_failed"]);
+        for (const output of [text, ...logs]) {
+          expect(output).not.toContain("MARK");
+          expect(output).not.toContain(ANT);
+        }
+      },
+    );
+
+    it("R4.4: the real scrubber on a 200,000-level object or a cycle gives ScrubFailedError", async () => {
+      const deep: Record<string, unknown> = {};
+      let cursor = deep;
+      for (let i = 0; i < 200_000; i++) {
+        const next: Record<string, unknown> = {};
+        cursor.n = next;
+        cursor = next;
+      }
+      cursor.leaf = GHP;
+      const cyclic: Record<string, unknown> = { leaf: GHP };
+      cyclic.self = cyclic;
+
+      const shaBefore = remoteSha();
+      const listingBefore = listVault();
+      for (const extra of [{ deep }, { cyclic }]) {
+        let caught: unknown;
+        try {
+          await makeWriter().write(note("inbox/sub/y.md", extra));
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(ScrubFailedError);
+        expect((caught as Error).cause).toBeUndefined();
+        expect((caught as Error).message).toBe("Secret scrub failed");
+        expect(inspect(caught, { depth: 5 })).not.toContain(GHP);
+      }
+      expect(remoteSha()).toBe(shaBefore);
+      expect(listVault()).toEqual(listingBefore);
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+    });
+
+    it("D1: a source that is valid as sent but invalid once redacted gives 400 and writes nothing", async () => {
+      pushFromElsewhere("sources", { ".2brain/config.yaml": `sources:\n  - ${GHP}\n` });
+      git(fixture.vaultDir, ["pull", "--rebase"]);
+      const shaBefore = remoteSha();
+      const listingBefore = listVault();
+      const response = await post(makeApp(), note("inbox/d.md", { source: GHP }));
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({
+        ok: false,
+        error: "invalid_frontmatter",
+        missing: [],
+        invalid: ["source"],
+      });
+      expect(text).not.toContain(GHP);
+      expect(remoteSha()).toBe(shaBefore);
+      expect(listVault()).toEqual(listingBefore);
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+      expect(logs).toEqual(["invalid_frontmatter rejected"]);
     });
   });
 
