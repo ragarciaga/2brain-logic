@@ -12,7 +12,7 @@ Requires Node 24 (see `.nvmrc`), git, and a Git repository that holds your vault
 
 ```bash
 npm ci
-cp .env.example .env   # then set VAULT_REMOTE, GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL
+cp .env.example .env   # then set VAULT_REMOTE, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL and INGEST_TOKEN
 npm start
 ```
 
@@ -49,6 +49,7 @@ Environment variables (see `.env.example`):
 | `VAULT_DIR` | Directory of the vault clone. Required. |
 | `VAULT_REMOTE` | Repository to clone when `VAULT_DIR` is not a repository yet. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | Identity on commits. Required. |
+| `INGEST_TOKEN` | Required, at least 32 characters; the service exits at startup without it. Requests are not checked against it yet. |
 | `PORT` | Listening port. Default `3000`. |
 | `HOST` | Listening address. Default `127.0.0.1`. |
 | `ANTHROPIC_API_KEY` | Listed for later work; the skeleton does not read it. |
