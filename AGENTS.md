@@ -28,7 +28,7 @@ Product context: docs/brief.md (greenfield).
 - Node.js 24.22.2 LTS (https://nodejs.org/docs/latest-v24.x/api/)
 - TypeScript 7.0.2, strict (https://www.typescriptlang.org/docs/)
 - Hono 4.13.14 + @hono/node-server 2.1.5 (https://hono.dev/docs/)
-- @modelcontextprotocol/sdk 1.32.2 (https://github.com/modelcontextprotocol/typescript-sdk)
+- @modelcontextprotocol/server 2.4.0, @modelcontextprotocol/client 2.4.0 for tests (https://github.com/modelcontextprotocol/typescript-sdk), see docs/adr/0013-mcp-sdk-v2.md
 - Zod 4.6.7 (https://zod.dev)
 - @anthropic-ai/sdk 1.3.0 (https://docs.claude.com/en/api/client-sdks)
 - gray-matter 4.0.3 (https://github.com/jonschlinkert/gray-matter)

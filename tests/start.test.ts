@@ -1,5 +1,6 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { join, resolve } from "node:path";
@@ -118,6 +119,66 @@ async function waitForHealth(url: string, child: ChildProcess): Promise<void> {
   throw new Error("the service did not answer /health in time");
 }
 
+/** Two distinct free ports at once, so neither can be handed out twice. */
+async function twoFreePorts(): Promise<[number, number]> {
+  const probes = [createServer(), createServer()];
+  const ports = await Promise.all(
+    probes.map(
+      (probe) =>
+        new Promise<number>((resolvePort, reject) => {
+          probe.once("error", reject);
+          probe.listen(0, "127.0.0.1", () => resolvePort((probe.address() as AddressInfo).port));
+        }),
+    ),
+  );
+  await Promise.all(probes.map((probe) => new Promise<void>((done) => probe.close(() => done()))));
+  return [ports[0] as number, ports[1] as number];
+}
+
+/** Resolve on any HTTP response, whatever its status. */
+async function waitForAnyResponse(url: string, child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error("the service exited before it listened");
+    try {
+      await fetch(url);
+      return;
+    } catch {
+      // not listening yet
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("the service did not answer in time");
+}
+
+/** Wait until the collected output contains the text. */
+async function waitForOutput(read: () => string, text: string, child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (read().includes(text)) return;
+    if (child.exitCode !== null) throw new Error(`the service exited before printing ${text}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`the output never contained ${text}`);
+}
+
+/** A well-formed OWNER_PASSPHRASE_HASH (16 byte salt, 32 byte key), different on every call. */
+function goodHash(): string {
+  return `scrypt$32768$8$1$${randomBytes(16).toString("base64url")}$${randomBytes(32).toString("base64url")}`;
+}
+
+function countLines(output: string, text: string): number {
+  return output.split("\n").filter((line) => line.includes(text)).length;
+}
+
+async function stop(child: ChildProcess): Promise<void> {
+  child.kill();
+  await new Promise<void>((resolveClose) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolveClose();
+    else child.once("close", () => resolveClose());
+  });
+}
+
 describe("built entry point", () => {
   beforeAll(async () => {
     await execFileAsync(
@@ -176,6 +237,62 @@ describe("built entry point", () => {
     }
   });
 
+  it("R2.3: keeps running with an invalid vault config, logs it and answers writes with 503", async () => {
+    const fixture = createGitFixture();
+    const seed = fixture.cloneElsewhere("seed-config");
+    mkdirSync(join(seed, ".2brain"));
+    writeFileSync(join(seed, ".2brain", "config.yaml"), "other: 1\n");
+    git(seed, ["add", ".2brain/config.yaml"]);
+    git(seed, ["commit", "-m", "bad config"]);
+    git(seed, ["push", "origin", "main"]);
+
+    const port = await freePort();
+    const child = spawn(process.execPath, [ENTRY], {
+      cwd: ROOT,
+      env: childEnv({
+        VAULT_DIR: fixture.vaultDir,
+        VAULT_REMOTE: fixture.remote,
+        PORT: String(port),
+        INGEST_TOKEN: TOKEN,
+      }),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      output += chunk;
+    });
+    try {
+      const url = `http://127.0.0.1:${port}`;
+      await waitForHealth(url, child);
+      expect(child.exitCode).toBeNull();
+
+      const response = await fetch(`${url}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ path: "Inbox/blocked.md", frontmatter: {}, body: "hi\n" }),
+        headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "config_invalid",
+        file: ".2brain/config.yaml",
+        keyPath: "other",
+      });
+      expect(output).toContain("config_invalid: .2brain/config.yaml at other");
+      expect(output).not.toContain(TOKEN);
+    } finally {
+      child.kill();
+      await new Promise<void>((resolveClose) => {
+        if (child.exitCode !== null) resolveClose();
+        else child.once("close", () => resolveClose());
+      });
+      fixture.cleanup();
+    }
+  });
+
   it("serves /health, rejects POST /notes without the token and writes with it", async () => {
     const fixture = createGitFixture();
     const port = await freePort();
@@ -204,7 +321,11 @@ describe("built entry point", () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ ok: true });
 
-      const body = JSON.stringify({ path: "Inbox/spawn.md", frontmatter: {}, body: "hi\n" });
+      const body = JSON.stringify({
+        path: "inbox/spawn.md",
+        frontmatter: { type: "idea", area: "personal", date: "2026-10-31", source: "manual" },
+        body: "hi\n",
+      });
       const headers = { "content-type": "application/json" };
       const denied = await fetch(`${url}/notes`, { method: "POST", body, headers });
       expect(denied.status).toBe(401);
@@ -215,7 +336,20 @@ describe("built entry point", () => {
         headers: { ...headers, authorization: `Bearer ${TOKEN}` },
       });
       expect(created.status).toBe(201);
-      expect(git(fixture.remote, ["show", "main:Inbox/spawn.md"])).toContain("hi");
+      expect(git(fixture.remote, ["show", "main:inbox/spawn.md"])).toContain("hi");
+
+      const rejected = await fetch(`${url}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ path: "inbox/bad.md", frontmatter: {}, body: "hi\n" }),
+        headers: { ...headers, authorization: `Bearer ${TOKEN}` },
+      });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({
+        ok: false,
+        error: "invalid_frontmatter",
+        missing: ["type", "area", "date", "source"],
+        invalid: [],
+      });
       expect(output).not.toContain(TOKEN);
     } finally {
       child.kill();
@@ -225,5 +359,192 @@ describe("built entry point", () => {
       });
       fixture.cleanup();
     }
+  });
+
+  /** Spawn the entry point and collect its output. */
+  function spawnService(env: Record<string, string>): { child: ChildProcess; read: () => string } {
+    const child = spawn(process.execPath, [ENTRY], {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      output += chunk;
+    });
+    return { child, read: () => output };
+  }
+
+  const NOT_FOUND_PATHS: Array<[string, string]> = [
+    ["POST", "/notes"],
+    ["PATCH", "/notes"],
+    ["POST", "/notes/archive"],
+    ["GET", "/health"],
+    ["GET", "/no-such-path"],
+  ];
+
+  it("R1.1, D1: the public port answers 404 for ingest paths, with or without the token, serves AS metadata, and never prints the token or the hash", async () => {
+    const fixture = createGitFixture();
+    const [port, mcpPort] = await twoFreePorts();
+    const hash = goodHash();
+    const { child, read } = spawnService(
+      childEnv({
+        VAULT_DIR: fixture.vaultDir,
+        VAULT_REMOTE: fixture.remote,
+        PORT: String(port),
+        INGEST_TOKEN: TOKEN,
+        PUBLIC_BASE_URL: "https://brain.example.com",
+        OWNER_PASSPHRASE_HASH: hash,
+        MCP_PORT: String(mcpPort),
+        AUTH_STORE_DIR: join(fixture.root, "auth"),
+      }),
+    );
+    try {
+      const publicUrl = `http://127.0.0.1:${mcpPort}`;
+      await waitForAnyResponse(`${publicUrl}/health`, child);
+      await waitForOutput(read, "mcp listening", child);
+      for (const [method, path] of NOT_FOUND_PATHS) {
+        const bare = await fetch(`${publicUrl}${path}`, { method });
+        expect(bare.status, `${method} ${path}`).toBe(404);
+        const withToken = await fetch(`${publicUrl}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(withToken.status, `${method} ${path} with token`).toBe(404);
+      }
+
+      const ingest = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(ingest.status).toBe(200);
+
+      const metadata = await fetch(`${publicUrl}/.well-known/oauth-authorization-server`);
+      expect(metadata.status).toBe(200);
+      expect(((await metadata.json()) as { issuer: string }).issuer).toBe(
+        "https://brain.example.com",
+      );
+
+      // Read the output only after the child is gone, so every line it printed is collected.
+      await stop(child);
+      const output = read();
+      expect(output).toContain("mcp listening");
+      expect(countLines(output, "mcp disabled")).toBe(0);
+      expect(output).not.toContain(TOKEN);
+      expect(output).not.toContain(hash);
+    } finally {
+      await stop(child);
+      fixture.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "R1.1: the public listener binds to HOST, not to every address",
+    async () => {
+      const fixture = createGitFixture();
+      const [port, mcpPort] = await twoFreePorts();
+      const { child } = spawnService(
+        childEnv({
+          HOST: "127.0.0.2",
+          VAULT_DIR: fixture.vaultDir,
+          VAULT_REMOTE: fixture.remote,
+          PORT: String(port),
+          INGEST_TOKEN: TOKEN,
+          PUBLIC_BASE_URL: "https://brain.example.com",
+          OWNER_PASSPHRASE_HASH: goodHash(),
+          MCP_PORT: String(mcpPort),
+          AUTH_STORE_DIR: join(fixture.root, "auth"),
+        }),
+      );
+      try {
+        await waitForAnyResponse(`http://127.0.0.2:${mcpPort}/health`, child);
+        expect((await fetch(`http://127.0.0.2:${mcpPort}/health`)).status).toBe(404);
+        await expect(fetch(`http://127.0.0.1:${mcpPort}/health`)).rejects.toThrow();
+      } finally {
+        await stop(child);
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it("R1.2: without PUBLIC_BASE_URL no listener opens on the reserved port and one mcp disabled line is printed", async () => {
+    const fixture = createGitFixture();
+    const [port, mcpPort] = await twoFreePorts();
+    const { child, read } = spawnService(
+      childEnv({
+        VAULT_DIR: fixture.vaultDir,
+        VAULT_REMOTE: fixture.remote,
+        PORT: String(port),
+        INGEST_TOKEN: TOKEN,
+        MCP_PORT: String(mcpPort),
+      }),
+    );
+    try {
+      await waitForHealth(`http://127.0.0.1:${port}`, child);
+      await waitForOutput(read, "mcp disabled", child);
+      expect(countLines(read(), "mcp disabled")).toBe(1);
+      expect(read()).not.toContain("mcp listening");
+      await expect(fetch(`http://127.0.0.1:${mcpPort}/health`)).rejects.toThrow();
+    } finally {
+      await stop(child);
+      fixture.cleanup();
+    }
+  });
+
+  describe("R1.3: a bad public configuration exits 1 naming the variable, not its value", () => {
+    async function runWith(
+      extra: Record<string, string>,
+    ): Promise<{ run: Run; cleanup: () => void }> {
+      const fixture = createGitFixture();
+      const run = await runToExit(
+        childEnv({
+          VAULT_DIR: fixture.vaultDir,
+          VAULT_REMOTE: fixture.remote,
+          PORT: "0",
+          INGEST_TOKEN: TOKEN,
+          AUTH_STORE_DIR: join(fixture.root, "auth"),
+          ...extra,
+        }),
+      );
+      return { run, cleanup: () => fixture.cleanup() };
+    }
+
+    it("rejects an http PUBLIC_BASE_URL that is not loopback", async () => {
+      const { run, cleanup } = await runWith({
+        PUBLIC_BASE_URL: "http://example.com",
+        OWNER_PASSPHRASE_HASH: goodHash(),
+      });
+      try {
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain("PUBLIC_BASE_URL");
+        expect(run.stdout + run.stderr).not.toContain("example.com");
+      } finally {
+        cleanup();
+      }
+    });
+
+    it("rejects a missing OWNER_PASSPHRASE_HASH", async () => {
+      const { run, cleanup } = await runWith({ PUBLIC_BASE_URL: "https://brain.example.com" });
+      try {
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain("OWNER_PASSPHRASE_HASH");
+      } finally {
+        cleanup();
+      }
+    });
+
+    it("rejects a malformed OWNER_PASSPHRASE_HASH without echoing it", async () => {
+      const { run, cleanup } = await runWith({
+        PUBLIC_BASE_URL: "https://brain.example.com",
+        OWNER_PASSPHRASE_HASH: "HASHMARKER-not-a-hash",
+      });
+      try {
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain("OWNER_PASSPHRASE_HASH");
+        expect(run.stdout + run.stderr).not.toContain("HASHMARKER");
+      } finally {
+        cleanup();
+      }
+    });
   });
 });

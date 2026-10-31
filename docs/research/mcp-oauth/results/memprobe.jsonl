@@ -1,0 +1,4 @@
+{"candidate":"a-sdk","rssMb":{"100":108,"1000":138,"5000":180,"start":97},"failures":0}
+{"candidate":"b-hono-mcp","rssMb":{"100":89,"1000":124,"5000":156,"start":83},"failures":0}
+{"candidate":"c-handrolled","rssMb":{"100":94,"1000":131,"5000":167,"start":86},"failures":0}
+{"candidate":"c2-handrolled-v2","rssMb":{"100":91,"1000":124,"5000":167,"start":82},"failures":0}

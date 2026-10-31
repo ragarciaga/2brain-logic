@@ -18,12 +18,14 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.5",
+    "@modelcontextprotocol/server": "2.4.0",
     "gray-matter": "4.0.3",
     "hono": "4.13.14",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vitest": "5.0.5"

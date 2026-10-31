@@ -3,6 +3,7 @@
 Status: accepted
 Date: 2026-10-31
 Related: docs/brief.md
+Amended by: docs/adr/0013-mcp-sdk-v2.md (MCP SDK v2 packages replace @modelcontextprotocol/sdk 1.32.2)
 Approved by: kickoff synthesis (2026-10-31)
 
 ## Context

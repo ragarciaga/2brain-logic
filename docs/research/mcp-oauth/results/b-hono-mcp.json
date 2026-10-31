@@ -1,0 +1,200 @@
+{
+  "candidate": "b-hono-mcp",
+  "node": "v22.22.0",
+  "coldStartMs": {
+    "median": 295,
+    "runs": [
+      316,
+      321,
+      292,
+      289,
+      295
+    ]
+  },
+  "rssIdleKb": 85208,
+  "passed": 31,
+  "total": 37,
+  "results": [
+    {
+      "id": "S1 401 + WWW-Authenticate resource_metadata",
+      "ok": true,
+      "detail": "status=401 header=Bearer error=\"Unauthorized\", error_description=\"Unauthorized\", resource_metadata=\"http://127.0.0.1:48120/.well-known/oauth-protected-resource\""
+    },
+    {
+      "id": "S2a RFC 9728 metadata at the advertised URL",
+      "ok": false,
+      "detail": "GET http://127.0.0.1:48120/.well-known/oauth-protected-resource -> 404 resource=undefined"
+    },
+    {
+      "id": "S2b RFC 8414 metadata",
+      "ok": true,
+      "detail": "auth_methods=[\"client_secret_post\"] revocation=true"
+    },
+    {
+      "id": "S3 SDK client discovery + DCR",
+      "ok": true,
+      "detail": "connect -> UnauthorizedError; authorize has resource=null"
+    },
+    {
+      "id": "S4a wrong owner passphrase refused",
+      "ok": true,
+      "detail": "status=400"
+    },
+    {
+      "id": "S4b owner login returns code to redirect_uri",
+      "ok": true,
+      "detail": "status=302"
+    },
+    {
+      "id": "S5a code exchange",
+      "ok": true,
+      "detail": "expires_in=3600"
+    },
+    {
+      "id": "S5b code reuse rejected",
+      "ok": true,
+      "detail": "status=400 invalid_grant"
+    },
+    {
+      "id": "S6 tools/call ping over Streamable HTTP",
+      "ok": true,
+      "detail": "[{\"type\":\"text\",\"text\":\"pong\"}]"
+    },
+    {
+      "id": "S7 100 tool calls",
+      "ok": true,
+      "detail": "100/100 in 284 ms; server RSS 85208 KB idle -> 112440 KB"
+    },
+    {
+      "id": "S8a refresh",
+      "ok": true,
+      "detail": "status=200 "
+    },
+    {
+      "id": "S8b refreshed token works",
+      "ok": true
+    },
+    {
+      "id": "S8c old refresh token rejected (rotation)",
+      "ok": true,
+      "detail": "status=400 invalid_grant"
+    },
+    {
+      "id": "S8d reuse revokes the family",
+      "ok": true
+    },
+    {
+      "id": "W1-post DCR confidential client (client_secret_post)",
+      "ok": true,
+      "detail": "status=201  "
+    },
+    {
+      "id": "W2-post H1 authorize without resource",
+      "ok": true,
+      "detail": "status=302 location=https://claude.ai/api/mcp/auth_callback?code=REDACTED&state=st-1"
+    },
+    {
+      "id": "W3-post H1 token without resource",
+      "ok": true,
+      "detail": "status=200  "
+    },
+    {
+      "id": "W4-post H1 token audience defaults to the MCP URL",
+      "ok": true
+    },
+    {
+      "id": "S9a RFC 7009 revoke (form-encoded)",
+      "ok": false,
+      "detail": "status=500 {\"error\":\"server_error\",\"error_description\":\"Internal Server Error\"}"
+    },
+    {
+      "id": "S9b revoked token rejected",
+      "ok": false,
+      "detail": "status=200"
+    },
+    {
+      "id": "S9c refresh after revoke rejected",
+      "ok": false,
+      "detail": "status=200"
+    },
+    {
+      "id": "W1-basic DCR confidential client (client_secret_basic)",
+      "ok": true,
+      "detail": "status=201  "
+    },
+    {
+      "id": "W2-basic H1 authorize without resource",
+      "ok": true,
+      "detail": "status=302 location=https://claude.ai/api/mcp/auth_callback?code=REDACTED&state=st-1"
+    },
+    {
+      "id": "W3-basic H1 token without resource",
+      "ok": false,
+      "detail": "status=400 invalid_request [\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"client_id\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+    },
+    {
+      "id": "S10a expired token rejected",
+      "ok": true,
+      "detail": "status=401 Bearer error=\"invalid_token\""
+    },
+    {
+      "id": "S10b wrong-audience token rejected",
+      "ok": true,
+      "detail": "status=401 Bearer error=\"invalid_token\""
+    },
+    {
+      "id": "S10c control: valid minted token accepted",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "id": "S10d garbage token rejected",
+      "ok": true
+    },
+    {
+      "id": "H2a DCR with redirect on a non-allowed host refused",
+      "ok": true,
+      "detail": "status=400 invalid_client_metadata"
+    },
+    {
+      "id": "H2b authorize with redirect_uri on another host refused (no redirect)",
+      "ok": true,
+      "detail": "status=400 location=null"
+    },
+    {
+      "id": "H2c loopback redirect on another port allowed (RFC 8252)",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "id": "H3a PKCE plain refused",
+      "ok": true,
+      "detail": "status=302 location=http://127.0.0.1:40000/callback?error=invalid_request&error_description=%5B%0A++%7B%0A++++%22code%22"
+    },
+    {
+      "id": "H3b missing code_challenge refused",
+      "ok": true,
+      "detail": "status=302"
+    },
+    {
+      "id": "H3c wrong code_verifier refused",
+      "ok": true,
+      "detail": "status=400 invalid_grant"
+    },
+    {
+      "id": "H1b authorize for another resource refused",
+      "ok": true,
+      "detail": "status=302 location=http://127.0.0.1:40000/callback?error=invalid_target&error_description=Unknown+resource&state=st-1"
+    },
+    {
+      "id": "H4 authorize with a scope the client did not register (informational)",
+      "ok": false,
+      "detail": "status=302 location=http://127.0.0.1:40000/callback?error=invalid_scope&error_description=Client+was+not+registered+with+scope+mcp&state=st-"
+    },
+    {
+      "id": "H5 sign-in locked after 5 wrong passphrases",
+      "ok": true,
+      "detail": "6th attempt with the right passphrase -> 400"
+    }
+  ]
+}
