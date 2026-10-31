@@ -111,7 +111,7 @@ type ToolResult = { ok: true; [field: string]: unknown } | { ok: false; error: s
 ## Security considerations
 - Only one person can authorize: the owner passphrase, scrypt (N=2^15, r=8, p=1, random 16-byte salt), compared with `timingSafeEqual`; 5 wrong attempts per IP in 15 minutes locks that IP (R4.4, R4.5).
 - Open registration cannot become a phishing path: redirect hosts are allowlisted at registration and matched exactly at authorize; the sign-in page shows the redirect host (R3.2, R4.1, R4.2).
-- Clients never expire, so a few addresses could fill all 50 slots for good. At the cap, registration removes the oldest client that has no grant (live or revoked) and is more than 24 hours old, in the same write that stores the new one; if none qualifies it answers 400 (R3.4). An evicted client never had a grant, so no session is lost.
+- Clients never expire, so a few addresses could fill all 50 slots for good. At the cap, registration removes the oldest client that has no grant (live or revoked) and is more than 24 hours old, in the same write that stores the new one; if none qualifies it answers 400 (R3.4). An evicted client has no grant left (live or revoked); its grants, if any, had already expired, so no session is lost.
 - Tokens are opaque random 32-byte values; only SHA-256 hashes are stored; access tokens are bound to the resource URL (RFC 8707) and expire in 1 hour; refresh tokens rotate and reuse revokes the grant (R5).
 - Issuer and resource come from `PUBLIC_BASE_URL` only, so a forged `Host` cannot change advertised URLs (R1.4).
 - Client IP for rate limits never trusts the leftmost `X-Forwarded-For` (research: library B was spoofable) (R7.2).

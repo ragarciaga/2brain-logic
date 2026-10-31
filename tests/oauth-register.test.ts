@@ -9,6 +9,7 @@ import {
   type AuthStore,
   newId,
   openAuthStore,
+  type StoreIo,
   sha256Hex,
 } from "../src/auth/oauth/store.js";
 import { createPublicApp, PUBLIC_PATHS } from "../src/mcp/app.js";
@@ -51,7 +52,10 @@ interface PostOptions {
   contentType?: string | null;
 }
 
-async function harness(hosts: readonly string[] = DEFAULT_HOSTS): Promise<Harness> {
+async function harness(
+  hosts: readonly string[] = DEFAULT_HOSTS,
+  io?: Partial<StoreIo>,
+): Promise<Harness> {
   clockMs = Date.parse("2026-10-31T12:00:00.000Z");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "2brain-register-")));
   roots.push(root);
@@ -60,6 +64,7 @@ async function harness(hosts: readonly string[] = DEFAULT_HOSTS): Promise<Harnes
     dir: join(root, "auth"),
     vaultDir: join(root, "vault"),
     now,
+    io,
     log: () => undefined,
   });
   stores.push(store);
@@ -169,14 +174,29 @@ describe("POST /register: success (R3.1)", () => {
     expect(h.store.getClient(body.client_id)?.authMethod).toBe("client_secret_basic");
   });
 
-  it("echoes accepted grant and response types", async () => {
+  it("answers the fixed grant and response types whatever subset was asked", async () => {
     const h = await harness();
     const res = await h.json({
       ...GOOD,
       grant_types: ["authorization_code"],
       response_types: ["code"],
     });
-    expect((await read(res)).grant_types).toEqual(["authorization_code"]);
+    const body = await read(res);
+    expect(body.grant_types).toEqual(["authorization_code", "refresh_token"]);
+    expect(body.response_types).toEqual(["code"]);
+  });
+
+  it("answers 500 server_error with no-store when the write fails, and stores nothing", async () => {
+    const h = await harness(DEFAULT_HOSTS, {
+      writeTemp: () => Promise.reject(new Error("disk full")),
+    });
+    const res = await h.json(GOOD);
+    expect(res.status).toBe(500);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "server_error" });
+    expect(h.store.clientCount()).toBe(0);
+    // The route answers it itself: the generic error handler (which logs) never ran.
+    expect(h.logs).toEqual([]);
   });
 });
 
@@ -307,7 +327,16 @@ describe("invalid metadata (D2)", () => {
     h.json({ redirect_uris: ["https://claude.ai/a\uDC00b"] }),
   );
   add("a name that is not a string", (h) => h.json({ ...GOOD, client_name: 5 }));
-  add("a body over 64 KiB", (h) => h.json({ ...GOOD, client_name: "x".repeat(70 * 1024) }));
+  add("a body over 64 KiB", (h) => h.json({ ...GOOD, logo_uri: "x".repeat(70 * 1024) }));
+  for (const [label, ch] of [
+    ["U+2066", "\u2066"],
+    ["U+2069", "\u2069"],
+    ["U+2029", "\u2029"],
+    ["U+200F", "\u200F"],
+    ["U+202A", "\u202A"],
+  ] as const) {
+    add(`${label} in the name`, (h) => h.json({ ...GOOD, client_name: `a${ch}b` }));
+  }
 
   it.each(cases)("%s", async (_name, run) => {
     const { h, res } = await run();
