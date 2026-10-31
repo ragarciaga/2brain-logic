@@ -14,22 +14,54 @@ const EnvSchema = z.object({
 /**
  * Shape of `OWNER_PASSPHRASE_HASH`: `scrypt$<N>$<r>$<p>$<salt>$<key>` with a 16 byte salt (22
  * base64url characters) and a 32 byte key (43 base64url characters). The regex fixes the shape;
- * `isPassphraseHashFormat` also bounds N, r and p.
+ * `isPassphraseHashFormat` also bounds N, r and p and the memory one call may use.
  */
 export const PASSPHRASE_HASH_PATTERN =
   /^scrypt\$([1-9][0-9]*)\$([1-9][0-9]*)\$([1-9][0-9]*)\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/;
 
-/** True when the value has the exact hash shape and N, r, p are inside the accepted bounds. */
-export function isPassphraseHashFormat(value: string): boolean {
+/** Most memory one scrypt call may use; `src/auth/owner.ts` passes it to Node as `maxmem`. */
+export const MAX_SCRYPT_MEMORY = 64 * 1024 * 1024;
+
+/** Bytes OpenSSL's scrypt allocates: `128 * r * (N + 2)` for V plus `128 * r * p` for B. */
+export function scryptMemoryBytes(n: number, r: number, p: number): number {
+  return 128 * r * (n + 2 + p);
+}
+
+/** True when scrypt with these parameters fits in `MAX_SCRYPT_MEMORY` (strict `>` like OpenSSL). */
+export function fitsScryptMemory(n: number, r: number, p: number): boolean {
+  return !(scryptMemoryBytes(n, r, p) > MAX_SCRYPT_MEMORY);
+}
+
+/**
+ * N, r and p of a well-formed hash: the exact shape, N a power of two from 2^14 to 2^20 and below
+ * 2^(16r) (RFC 7914, which OpenSSL enforces), r from 1 to 32 and p from 1 to 16. `undefined` when
+ * the value is anything else. The memory budget is a separate check, `fitsScryptMemory`.
+ */
+export function parsePassphraseHashParams(
+  value: string,
+): { n: number; r: number; p: number } | undefined {
   const match = PASSPHRASE_HASH_PATTERN.exec(value);
   if (match === null) {
-    return false;
+    return undefined;
   }
   const n = Number(match[1]);
   const r = Number(match[2]);
   const p = Number(match[3]);
   const nInRange = n >= 2 ** 14 && n <= 2 ** 20 && Number.isInteger(Math.log2(n));
-  return nInRange && r >= 1 && r <= 32 && p >= 1 && p <= 16;
+  if (!nInRange || n >= 2 ** (16 * r) || r < 1 || r > 32 || p < 1 || p > 16) {
+    return undefined;
+  }
+  return { n, r, p };
+}
+
+/**
+ * True when the value has the exact hash shape, N, r and p are inside the accepted bounds and one
+ * scrypt call fits in `MAX_SCRYPT_MEMORY`. Startup uses it, so a hash `verifyPassphrase` would
+ * refuse fails there, naming `OWNER_PASSPHRASE_HASH`.
+ */
+export function isPassphraseHashFormat(value: string): boolean {
+  const params = parsePassphraseHashParams(value);
+  return params !== undefined && fitsScryptMemory(params.n, params.r, params.p);
 }
 
 /**
