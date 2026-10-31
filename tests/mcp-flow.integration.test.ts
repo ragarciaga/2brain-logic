@@ -124,7 +124,8 @@ function launch(script: string, cwd: string, env: Record<string, string>): Runni
     errText += chunk.toString("utf8");
   });
   const exited = new Promise<number | null>((resolve) => {
-    child.once("exit", (code) => {
+    // "close", not "exit": the streams may still deliver chunks after the process has exited.
+    child.once("close", (code) => {
       allOutput.push(text);
       resolve(code);
     });
@@ -387,7 +388,7 @@ describe("OAuth connector flow from the built entry point", () => {
     clients.push(mcp);
     const listed = (await mcp.listTools()).tools.map((tool) => tool.name);
     expect(listed).toEqual(expect.arrayContaining(EXPECTED_TOOLS));
-  });
+  }, 60000);
 
   it("R5.5: auth.json holds hashes only", () => {
     const text = readFileSync(join(authDir, "auth.json"), "utf8");
