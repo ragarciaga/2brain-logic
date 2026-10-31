@@ -33,6 +33,7 @@ const deps: McpServerDeps = {
   writer: {
     write: async () => ({ path: "x.md", commit: "abc" }),
     patch: async () => ({ path: "x.md", commit: "abc" }),
+    withPulled: (fn) => fn({ stale: false }),
   },
   config: { vaultDir: "/nonexistent-vault" },
 };

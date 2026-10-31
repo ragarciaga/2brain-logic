@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -31,15 +32,22 @@ function committerEnv(author: GitAuthor): Record<string, string> {
   return { GIT_COMMITTER_NAME: author.name, GIT_COMMITTER_EMAIL: author.email };
 }
 
+export interface RunOptions {
+  /** Aborting it stops the child; the call then fails with `GitError(sub, null)`. */
+  signal?: AbortSignal;
+}
+
 /** Run git with an argument array (never a shell string) and return trimmed stdout. */
 export async function runGit(
   cwd: string,
   args: string[],
   env: Record<string, string> = {},
+  options: RunOptions = {},
 ): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
+      ...(options.signal ? { signal: options.signal } : {}),
       // Last, so no caller can override it: a path is a file name, never a glob or pathspec magic.
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
@@ -59,10 +67,12 @@ export async function runGitBuffer(
   cwd: string,
   args: string[],
   env: Record<string, string> = {},
+  options: RunOptions = {},
 ): Promise<Buffer> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
+      ...(options.signal ? { signal: options.signal } : {}),
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
       encoding: "buffer",
@@ -144,6 +154,91 @@ export async function headSha(dir: string): Promise<string> {
  */
 export async function unstageFile(dir: string, relPath: string): Promise<void> {
   await runGit(dir, ["reset", "-q", "--", relPath]);
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * Paths changed by commits made since `since` on HEAD, each with the committer date (ISO 8601) of
+ * the newest commit that touched it, newest first. Renames are reported as a delete and an add; a
+ * path whose name is not valid UTF-8 is skipped. A deleted path is still listed (the caller checks
+ * the file).
+ */
+export async function logChangedPaths(
+  dir: string,
+  since: Date,
+  signal?: AbortSignal,
+): Promise<Array<{ path: string; date: string }>> {
+  const stamp = since.toISOString().replace(/\.\d{3}Z$/, "Z");
+  // A random marker per call: a committed file name cannot forge a record header it cannot know.
+  const marker = randomBytes(12).toString("hex");
+  const out = await runGitBuffer(
+    dir,
+    [
+      "log",
+      "-z",
+      "--name-only",
+      "--no-renames",
+      `--format=%x1e${marker}%cI`,
+      `--since=${stamp}`,
+      "HEAD",
+    ],
+    {},
+    signal ? { signal } : {},
+  );
+  return parseLogRecords(out, marker, since);
+}
+
+/**
+ * Parse `git log -z --name-only --format=%x1e<marker>%cI` output. Tolerates the layout variants of
+ * different git versions (date then NUL then optional newline, or newline then NUL). With `since`,
+ * records older than it are dropped here too, so a `--since` that git misparsed cannot widen the
+ * result.
+ */
+export function parseLogRecords(
+  out: Buffer,
+  marker: string,
+  since?: Date,
+): Array<{ path: string; date: string }> {
+  const floor = since === undefined ? undefined : Math.floor(since.getTime() / 1000) * 1000;
+  const seen = new Map<string, string>();
+  for (const record of out.toString("latin1").split(`\x1e${marker}`).slice(1)) {
+    // The date ends at the first NUL or newline; the names follow, NUL-separated.
+    const end = record.search(/[\0\n]/);
+    if (end < 0) continue;
+    const date = record.slice(0, end);
+    // Defense in depth next to the marker: a header must be a strict ISO 8601 committer date.
+    if (!ISO_DATE.test(date)) continue;
+    if (floor !== undefined && Date.parse(date) < floor) continue;
+    // latin1 maps bytes 1:1, so names can be re-sliced into the original bytes and decoded strictly.
+    const names = Buffer.from(record.slice(end).replace(/^[\0\n]+/, ""), "latin1");
+    for (const raw of splitNul(names)) {
+      let path: string;
+      try {
+        path = STRICT_UTF8.decode(raw);
+      } catch {
+        continue;
+      }
+      const known = seen.get(path);
+      if (known === undefined || Date.parse(date) > Date.parse(known)) seen.set(path, date);
+    }
+  }
+  return [...seen]
+    .map(([path, date]) => ({ path, date }))
+    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+}
+
+function splitNul(buffer: Buffer): Buffer[] {
+  const parts: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i <= buffer.length; i += 1) {
+    if (i === buffer.length || buffer[i] === 0) {
+      if (i > start) parts.push(buffer.subarray(start, i));
+      start = i + 1;
+    }
+  }
+  return parts;
 }
 
 export interface GitApi {

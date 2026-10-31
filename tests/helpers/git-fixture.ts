@@ -44,7 +44,7 @@ export interface GitFixture {
  * A bare remote with one seed commit on `main`. Git config is isolated from the machine
  * (empty global file, no system file) for the whole process until `cleanup`.
  */
-export function createGitFixture(): GitFixture {
+export function createGitFixture(seedDate?: string): GitFixture {
   const root = mkdtempSync(join(tmpdir(), "2brain-fixture-"));
   const emptyConfig = join(root, "empty-gitconfig");
   writeFileSync(emptyConfig, "");
@@ -62,7 +62,11 @@ export function createGitFixture(): GitFixture {
   git(seed, ["symbolic-ref", "HEAD", "refs/heads/main"]);
   writeFileSync(join(seed, "README.md"), "seed\n");
   git(seed, ["add", "README.md"]);
-  git(seed, ["commit", "-m", "seed"]);
+  git(
+    seed,
+    ["commit", "-m", "seed"],
+    seedDate ? { GIT_AUTHOR_DATE: seedDate, GIT_COMMITTER_DATE: seedDate } : {},
+  );
   git(seed, ["push", "origin", "main"]);
 
   return {

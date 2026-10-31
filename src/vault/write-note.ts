@@ -138,6 +138,20 @@ export interface NoteWriter {
   patch(input: NotePatch): Promise<WriteResult>;
 }
 
+/** What a read learned from its pull: `stale` is true when the pull failed and the clone is as it was. */
+export interface PulledState {
+  stale: boolean;
+}
+
+export interface VaultWriter extends NoteWriter {
+  /**
+   * Run `fn` on the write queue after a pull (the same sync a write does). A failed pull does not
+   * fail the call: `fn` runs on the local clone with `stale: true`. A rejection of `fn` rejects
+   * the call and does not block the queue.
+   */
+  withPulled<T>(fn: (state: PulledState) => Promise<T>): Promise<T>;
+}
+
 export interface NoteWriterOptions {
   vaultDir: string;
   author: GitAuthor;
@@ -216,12 +230,12 @@ function assertValid(
   throw new InvalidFrontmatterError(verdict.missing, verdict.invalid);
 }
 
-function isInside(root: string, candidate: string): boolean {
+export function isInside(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(root + sep);
 }
 
 /** Real path of the deepest ancestor of `target` that exists. */
-async function realpathOfDeepestAncestor(target: string): Promise<string> {
+export async function realpathOfDeepestAncestor(target: string): Promise<string> {
   let current = target;
   for (;;) {
     try {
@@ -271,6 +285,11 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
  * A `source_id` set to the value of another note is `DuplicateSourceError`. A change rewrites the
  * frontmatter block (comments and quoting are lost), commits `2brain: update <path>` and pushes. If
  * the commit fails and HEAD did not move, the file is unstaged and the original bytes are restored.
+ *
+ * `withPulled` gives the read tools the same queue: it pulls (the same sync, with the same logs),
+ * then runs the caller's function inside the queue slot, so a read waits for an earlier write and
+ * a later write waits for the read. A failed pull logs `read_pull_failed` and runs the function
+ * with `stale: true`; nothing is written by this call.
  */
 export function createNoteWriter({
   vaultDir,
@@ -281,7 +300,7 @@ export function createNoteWriter({
   now = () => new Date(),
   log = console.error,
   sleep = (ms) => new Promise<void>((done) => setTimeout(done, ms)),
-}: NoteWriterOptions): NoteWriter {
+}: NoteWriterOptions): VaultWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -312,11 +331,16 @@ export function createNoteWriter({
     if (pathHasSecret) throw new UnsafePathError();
   }
 
-  /** Pull, log what the sync did, and read the vault config as it is after the pull. */
-  async function syncAndLoadConfig(): Promise<VaultConfig> {
+  /** Pull and log what the sync did. */
+  async function syncAndLog(): Promise<void> {
     const { conflicts, recovered } = await syncBeforeWrite(root, { git, author, now, prepareCopy });
     if (recovered) log("rebuild_recovered");
     if (conflicts > 0) log(`conflicts_kept: ${conflicts}`);
+  }
+
+  /** Pull, log what the sync did, and read the vault config as it is after the pull. */
+  async function syncAndLoadConfig(): Promise<VaultConfig> {
+    await syncAndLog();
     return loadVaultConfig(root);
   }
 
@@ -523,5 +547,16 @@ export function createNoteWriter({
   return {
     write: (note) => enqueue(() => writeOne(note)),
     patch: (input) => enqueue(() => patchOne(input)),
+    withPulled: (fn) =>
+      enqueue(async () => {
+        let stale = false;
+        try {
+          await syncAndLog();
+        } catch {
+          stale = true;
+          log("read_pull_failed");
+        }
+        return fn({ stale });
+      }),
   };
 }
