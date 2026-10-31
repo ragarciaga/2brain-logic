@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   fitsScryptMemory,
+  isInside,
   isPassphraseHashFormat,
   loadEnv,
   MAX_SCRYPT_MEMORY,
@@ -375,7 +376,16 @@ describe("loadEnv with PUBLIC_BASE_URL", () => {
   });
 
   it("throws on an AUTH_STORE_DIR inside VAULT_DIR, naming both variables only", () => {
-    for (const dir of ["/data/vault/auth", "/data/vault", "/data/vault/../vault/x"]) {
+    // `..auth` and `...` are folder names, not a step up: they are inside.
+    const inside = [
+      "/data/vault/auth",
+      "/data/vault",
+      "/data/vault/../vault/x",
+      "/data/vault/..auth",
+      "/data/vault/...",
+      "/data/vault/..auth/x",
+    ];
+    for (const dir of inside) {
       expectNamedWithout(
         { ...valid, ...pub, AUTH_STORE_DIR: dir },
         "AUTH_STORE_DIR",
@@ -386,8 +396,19 @@ describe("loadEnv with PUBLIC_BASE_URL", () => {
     }
   });
 
+  it("isInside treats only a leading '..' segment as leaving the parent", () => {
+    expect(isInside("/data/vault", "/data/vault")).toBe(true);
+    expect(isInside("/data/vault/..auth", "/data/vault")).toBe(true);
+    expect(isInside("/data/vault/...", "/data/vault")).toBe(true);
+    expect(isInside("/data/vault/a/b", "/data/vault")).toBe(true);
+    expect(isInside("/data/vault/../x", "/data/vault")).toBe(false);
+    expect(isInside("/data", "/data/vault")).toBe(false);
+    expect(isInside("/data/vault-auth", "/data/vault")).toBe(false);
+    expect(isInside("/other/vault", "/data/vault")).toBe(false);
+  });
+
   it("accepts an AUTH_STORE_DIR beside VAULT_DIR, including a shared name prefix", () => {
-    for (const dir of ["/data/auth", "/data/vault-auth", "/data"]) {
+    for (const dir of ["/data/auth", "/data/vault-auth", "/data", "/data/..vault"]) {
       expect(loadEnv({ ...valid, ...pub, AUTH_STORE_DIR: dir }).publicApp?.AUTH_STORE_DIR).toBe(
         dir,
       );

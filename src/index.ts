@@ -1,3 +1,4 @@
+import { openAuthStore } from "./auth/oauth/store.js";
 import { loadEnv } from "./config/env.js";
 import { ConfigInvalidError, loadVaultConfig } from "./config/vault-config.js";
 import { defaultGit, ensureClone } from "./git/index.js";
@@ -17,6 +18,13 @@ async function main(): Promise<void> {
     if (!(error instanceof ConfigInvalidError)) throw error;
     console.error(configInvalidLogLine(error));
   }
+  // The one auth store of this process, opened before any port binds so a bad `auth.json` or a
+  // bad AUTH_STORE_DIR exits 1 with nothing listening. The public app takes this handle (T6);
+  // nothing else opens the store.
+  const authStore =
+    env.publicApp === undefined
+      ? undefined
+      : await openAuthStore({ dir: env.publicApp.AUTH_STORE_DIR, vaultDir: env.VAULT_DIR });
   const writer = createNoteWriter({
     vaultDir: env.VAULT_DIR,
     author: { name: env.GIT_AUTHOR_NAME, email: env.GIT_AUTHOR_EMAIL },
@@ -31,6 +39,7 @@ async function main(): Promise<void> {
   }
   // Log the port only: `env.publicApp` carries OWNER_PASSPHRASE_HASH.
   const { PUBLIC_BASE_URL, MCP_PORT } = env.publicApp;
+  console.log(`auth store open: ${authStore?.clientCount() ?? 0} clients`);
   const { app: publicApp } = createPublicApp({ baseUrl: PUBLIC_BASE_URL });
   await startServer(publicApp, { host: env.HOST, port: MCP_PORT });
   console.log(`2brain mcp listening on ${env.HOST}:${MCP_PORT}`);
