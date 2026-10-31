@@ -174,7 +174,7 @@ function countLines(output: string, text: string): number {
 async function stop(child: ChildProcess): Promise<void> {
   child.kill();
   await new Promise<void>((resolveClose) => {
-    if (child.exitCode !== null) resolveClose();
+    if (child.exitCode !== null || child.signalCode !== null) resolveClose();
     else child.once("close", () => resolveClose());
   });
 }
@@ -386,7 +386,7 @@ describe("built entry point", () => {
     ["GET", "/no-such-path"],
   ];
 
-  it("R1.1, D1: the public port answers 404 for ingest paths, with or without the token, and never prints the hash", async () => {
+  it("R1.1, D1: the public port answers 404 for ingest paths, with or without the token, serves AS metadata, and never prints the token or the hash", async () => {
     const fixture = createGitFixture();
     const [port, mcpPort] = await twoFreePorts();
     const hash = goodHash();
@@ -419,11 +419,19 @@ describe("built entry point", () => {
       const ingest = await fetch(`http://127.0.0.1:${port}/health`);
       expect(ingest.status).toBe(200);
 
+      const metadata = await fetch(`${publicUrl}/.well-known/oauth-authorization-server`);
+      expect(metadata.status).toBe(200);
+      expect(((await metadata.json()) as { issuer: string }).issuer).toBe(
+        "https://brain.example.com",
+      );
+
+      // Read the output only after the child is gone, so every line it printed is collected.
+      await stop(child);
       const output = read();
       expect(output).toContain("mcp listening");
       expect(countLines(output, "mcp disabled")).toBe(0);
+      expect(output).not.toContain(TOKEN);
       expect(output).not.toContain(hash);
-      expect(output).not.toContain("TOKEN");
     } finally {
       await stop(child);
       fixture.cleanup();
