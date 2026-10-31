@@ -65,8 +65,10 @@ leave out. The file is strict: an unknown key, a wrong type or an unsafe folder 
 `..` segment, an absolute path, a backslash) is an error that names the file and the key.
 
 `vault-template/` is the default vault: a ready `.2brain/config.yaml` with the default values, and
-a `README.md` in every folder the config names (git does not track empty folders). Copy it to
-start a vault.
+a `README.md` in every folder the config names (git does not track empty folders). Seed a vault
+with `node dist/cli.js init-vault <dir>` (run `npm run build` first). It copies each template file
+the directory does not have yet, never overwrites a file, and lists the copied and the skipped
+files. It does not run git: commit and push the result yourself.
 
 ## Docker
 
