@@ -48,7 +48,7 @@ function inside(root, target) {
 }
 
 /**
- * Opens without blocking and and refuses a redirected last path part, then checks the open file again.
+ * Opens without blocking, refuses a redirected last path part, then checks the open file again.
  * @param {string} path
  * @param {string} root
  * @returns {string}

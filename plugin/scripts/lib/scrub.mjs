@@ -64,6 +64,7 @@ const DENIED_KEY = /(?:primary|foreign|sort|hot|partition|cache|public|shard|ord
  */
 function secretName(name) {
   const up = name.toUpperCase();
+  if (up === "PWD" || up === "OLDPWD") return false;
   if (!SECRET_WORDS.some((w) => up.includes(w))) return false;
   const words = name
     .replace(/([a-z])([A-Z])/g, "$1 $2")
@@ -109,8 +110,10 @@ function keepAndRedact(match, ...args) {
 }
 
 /**
- * Fixed, ordered list. Every left boundary is a one-character lookbehind and every quantifier
- * before a required token is bounded, so a hostile input stays linear.
+ * Fixed, ordered list. Every quantifier before a required token is bounded, or runs over a class
+ * that excludes what follows it. Most rules start with a one-character left lookbehind;
+ * private_key and url_userinfo have none (their fixed opening text is the boundary). A hostile
+ * input therefore stays linear.
  * @type {readonly Readonly<Rule>[]}
  */
 export const RULES = Object.freeze([
@@ -131,7 +134,7 @@ export const RULES = Object.freeze([
   ),
   Object.freeze({
     id: "url_userinfo",
-    pattern: /([A-Za-z][A-Za-z0-9+.-]{0,30}:\/\/[^\s/:@"'<>]{1,100}:)([^\s/@"'<>]{1,200})(?=@)/g,
+    pattern: /([A-Za-z][A-Za-z0-9+.-]{0,30}:\/\/[^\s/:@"'<>]{0,100}:)([^\s/@"'<>]{1,200})(?=@)/g,
     replace: keepAndRedact,
   }),
   Object.freeze({
@@ -157,12 +160,17 @@ export const RULES = Object.freeze([
       `${LEFT}((?:-u|--user)[ \\t=]{1,20}["']?[^\\s:"']{1,100}:)([^\\s"']{1,200})`,
       "g",
     ),
-    replace: keepAndRedact,
+    /** @param {string} match @param {string} keep @param {string} secret */
+    replace: (match, keep, secret) =>
+      // A numeric uid:gid pair (chown, docker -u) is not a credential.
+      /[ \t="']\d+:$/.test(keep) && /^\d+$/.test(secret)
+        ? match
+        : keepAndRedact(match, keep, secret, 0),
   }),
   Object.freeze({
     id: "cookie",
     pattern: new RegExp(
-      `${LEFT}((?:set-)?cookie[ \\t]{0,20}:[ \\t]{0,20})([^\\r\\n"'\\\\]+)`,
+      `${LEFT}((?:set-)?cookie(?:\\\\?["'])?[ \\t]{0,20}:[ \\t]{0,20}(?:\\\\?["'])?)([^\\r\\n"'\\\\]+)`,
       "gi",
     ),
     replace: keepAndRedact,

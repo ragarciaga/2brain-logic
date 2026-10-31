@@ -47,6 +47,15 @@ const positive: [string, string, string, number][] = [
     1,
   ],
   [
+    "url userinfo without a user",
+    `redis://:${PW}@cache.example.com:6379`,
+    `redis://:${R}@cache.example.com:6379`,
+    1,
+  ],
+  ["quoted json cookie", `{"cookie": "sid=${PW}"}`, `{"cookie": "${R}"}`, 1],
+  ["quoted json Cookie key", `{"Cookie": "session=${PW}"}`, `{"Cookie": "${R}"}`, 1],
+  ["single-quoted cookie", `Cookie: 'sid=${PW}'`, `Cookie: '${R}'`, 1],
+  [
     "url userinfo",
     `psql postgres://app:${PW}@db.example.com/main`,
     `psql postgres://app:${R}@db.example.com/main`,
@@ -108,6 +117,10 @@ const negative: [string, string][] = [
   ["url no userinfo", "see https://example.com/a:b@c"],
   ["curl -u no colon", "git push -u origin main"],
   ["already redacted url", "postgres://app:[redacted]@db.example.com/x"],
+  ["PWD", "PWD=/home/user/work"],
+  ["OLDPWD", "OLDPWD: /home/user"],
+  ["uid:gid with -u", "docker run -u 1000:1000 image"],
+  ["uid:gid with --user", "docker run --user 1000:100 image"],
   ["bearer in prose", "the Bearer scheme is documented"],
 ];
 
@@ -198,6 +211,11 @@ describe("preScrub", () => {
       'KEY=\\"'.repeat(40000),
       `KEY=\\"${"a ".repeat(90000)}`,
       "PASS.".repeat(40000),
+      "redis://:".repeat(25000),
+      `redis://${":".repeat(150000)}`,
+      'cookie"'.repeat(30000),
+      `cookie: '${"'".repeat(150000)}`,
+      "-u 1:".repeat(40000),
     ];
     for (const input of inputs) {
       const t0 = performance.now();

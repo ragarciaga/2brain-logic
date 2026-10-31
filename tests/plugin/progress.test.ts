@@ -12,12 +12,26 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const reads = vi.hoisted(() => ({ requested: 0, readFileSyncCalls: 0 }));
+const reads = vi.hoisted(() => ({
+  requested: 0,
+  readFileSyncCalls: 0,
+  openFlags: [] as unknown[],
+  /** Paths whose realpath is reported as the path itself (a lying answer). */
+  lie: new Set<string>(),
+}));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
+    openSync: ((...args: unknown[]) => {
+      reads.openFlags.push(args[1]);
+      return (actual.openSync as (...a: unknown[]) => number)(...args);
+    }) as typeof actual.openSync,
+    realpathSync: ((...args: unknown[]) => {
+      if (typeof args[0] === "string" && reads.lie.has(args[0])) return args[0];
+      return (actual.realpathSync as (...a: unknown[]) => string)(...args);
+    }) as typeof actual.realpathSync,
     readSync: ((...args: unknown[]) => {
       // (fd, buffer, offset, length, position)
       reads.requested += Number(args[3]);
@@ -30,6 +44,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+import { constants } from "node:fs";
 import { PROGRESS_HEADER, readProgress } from "../../plugin/scripts/lib/progress.mjs";
 
 const HEADER = "--- progress.md (first 20,000 characters) ---";
@@ -63,6 +78,8 @@ beforeEach(() => {
   mkdirSync(cwd);
   reads.requested = 0;
   reads.readFileSyncCalls = 0;
+  reads.openFlags = [];
+  reads.lie.clear();
 });
 
 afterEach(() => {
@@ -134,6 +151,38 @@ describe("readProgress", () => {
     writeProgress("x");
     expect(readProgress(relative(process.cwd(), cwd))).toBeNull();
     expect(readProgress(undefined as unknown as string)).toBeNull();
+  });
+
+  it("opens read-only, non-blocking and without following a last link", () => {
+    writeProgress("flags");
+    expect(readProgress(cwd)).not.toBeNull();
+    expect(reads.openFlags).toHaveLength(1);
+    const flags = reads.openFlags[0] as number;
+    expect(flags & 3).toBe(constants.O_RDONLY);
+    if (constants.O_NONBLOCK !== undefined) expect(flags & constants.O_NONBLOCK).not.toBe(0);
+    if (constants.O_NOFOLLOW !== undefined) expect(flags & constants.O_NOFOLLOW).not.toBe(0);
+  });
+
+  describe.skipIf(onWindows)("symlink races (a lying realpath)", () => {
+    it.skipIf(process.platform !== "linux")(
+      "rechecks containment on the open file when the path was swapped",
+      () => {
+        const other = join(root, "other");
+        mkdirSync(other);
+        writeFileSync(join(other, "progress.md"), "outside");
+        symlinkSync(other, join(cwd, "docs"));
+        reads.lie.add(join(cwd, "docs", "progress.md"));
+        expect(readProgress(cwd)).toBeNull();
+      },
+    );
+
+    it.skipIf(constants.O_NOFOLLOW === undefined)("refuses a last path part that is a link", () => {
+      mkdirSync(join(cwd, "docs"));
+      writeFileSync(join(cwd, "real.md"), "inside");
+      symlinkSync(join(cwd, "real.md"), join(cwd, "docs", "progress.md"));
+      reads.lie.add(join(cwd, "docs", "progress.md"));
+      expect(readProgress(cwd)).toBeNull();
+    });
   });
 
   describe.skipIf(onWindows)("symlinks", () => {
