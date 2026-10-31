@@ -48,8 +48,8 @@ configured areas, `date` a real calendar date as `YYYY-MM-DD`, and `source` a no
 rejected value in `invalid`: `{"ok":false,"error":"invalid_frontmatter","missing":[...],"invalid":[...]}`.
 When the type has a folder in the config (`{area}` is replaced by the note's area), the path must be
 inside it, or the answer is 400 `wrong_folder` with `{"ok":false,"error":"wrong_folder","expected":"<folder>"}`.
-A type without a folder accepts any safe path. Neither answer, nor the log line, repeats a value
-from the request, and nothing is written. The default type folders are listed in
+A type without a folder accepts any safe path. The answers carry only property names and the
+configured folder, the log line only the code, and nothing is written. The default type folders are listed in
 `vault-template/.2brain/config.yaml`.
 Each write reads the vault config right after the pull, so a config change pushed from another
 clone applies to the next write without a restart.

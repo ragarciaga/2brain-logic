@@ -545,9 +545,11 @@ describe("POST /notes against a real remote", () => {
 
     it("R3.4: a type without a folder accepts any safe path", async () => {
       pushFromElsewhere("folderless", {
-        ".2brain/config.yaml": "types:\n  scrap:\n    value: scrap\n",
+        ".2brain/config.yaml": "types:\n  scrap:\n    value: scrap-note\n",
       });
-      const sent = note("anywhere/x.md", { type: "scrap" });
+      // The type key (scrap) differs from its value (scrap-note): validation must store the
+      // value the request sent, never rewrite it to the config key.
+      const sent = note("anywhere/x.md", { type: "scrap-note" });
       const response = await post(makeApp(), sent);
       expect(response.status).toBe(201);
       const stored = parseNote(remoteFile("anywhere/x.md"));
