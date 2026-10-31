@@ -1,0 +1,528 @@
+{
+  "text": [
+    {
+      "rule": "private_key",
+      "parts": [
+        "Deploy notes\n",
+        "-----BEG",
+        "IN RSA PRIV",
+        "ATE KEY-----\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a\n",
+        "b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1\n",
+        "-----E",
+        "ND RSA PRIV",
+        "ATE KEY-----",
+        "\nThen restart.\n"
+      ],
+      "expected": "Deploy notes\n[REDACTED:private_key]\nThen restart.\n"
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "note\n",
+        "-----BEG",
+        "IN PRIV",
+        "ATE KEY-----\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a\n",
+        "tail without end"
+      ],
+      "expected": "note\n[REDACTED:private_key]"
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "key follows: ",
+        "-----BEG",
+        "IN PGP PRIV",
+        "ATE KEY BLOCK-----\n\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a\n",
+        "-----E",
+        "ND PGP PRIV",
+        "ATE KEY BLOCK-----",
+        "\nok\n"
+      ],
+      "expected": "key follows: [REDACTED:private_key]\nok\n"
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "-----BEG",
+        "IN OPENSSH PRIV",
+        "ATE KEY-----\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a\n",
+        "-----E",
+        "ND OPENSSH PRIV",
+        "ATE KEY-----",
+        "\n"
+      ],
+      "expected": "[REDACTED:private_key]\n"
+    },
+    {
+      "rule": "aws_access_key_id",
+      "parts": ["access id ", "AK", "IA", "A1B2C3D4E5F6G7H8", " for the bucket"],
+      "expected": "access id [REDACTED:aws_access_key_id] for the bucket"
+    },
+    {
+      "rule": "aws_access_key_id",
+      "parts": ["temp ", "AS", "IA", "Z9Y8X7W6V5U4T3S2", "."],
+      "expected": "temp [REDACTED:aws_access_key_id]."
+    },
+    {
+      "rule": "github_token",
+      "parts": ["clone with ", "gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6", " now"],
+      "expected": "clone with [REDACTED:github_token] now"
+    },
+    {
+      "rule": "github_token",
+      "parts": ["bot ", "gh", "s_", "z9y8x7w6v5u4z9y8x7w6v5u4z9y8x7w6v5u4", "\n"],
+      "expected": "bot [REDACTED:github_token]\n"
+    },
+    {
+      "rule": "github_token",
+      "parts": [
+        "github_",
+        "pat_",
+        "A1B2C3D4A1B2C3D4A1B2C3",
+        "_",
+        "e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f"
+      ],
+      "expected": "[REDACTED:github_token]"
+    },
+    {
+      "rule": "slack_token",
+      "parts": [
+        "hook ",
+        "xo",
+        "xb-",
+        "1234567890123",
+        "-",
+        "1234567890123",
+        "-",
+        "a1b2c3d4a1b2c3d4a1b2c3d4",
+        " end"
+      ],
+      "expected": "hook [REDACTED:slack_token] end"
+    },
+    {
+      "rule": "slack_token",
+      "parts": [
+        "user ",
+        "xo",
+        "xp-",
+        "123456789012",
+        "-123456789012-",
+        "123456789012-",
+        "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+        "\n"
+      ],
+      "expected": "user [REDACTED:slack_token]\n"
+    },
+    {
+      "rule": "anthropic_key",
+      "parts": [
+        "ANTHROPIC ",
+        "sk-an",
+        "t-api03-",
+        "Ab1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4Ab-Cd2Ef3G_4A-1Cd2Ef3Gh_-b1Cd2Ef3Gh-_b1Cd2Ef3G-4A_1Cd2Ef3-h",
+        " set"
+      ],
+      "expected": "ANTHROPIC [REDACTED:anthropic_key] set"
+    },
+    {
+      "rule": "anthropic_key",
+      "parts": ["sk-an", "t-", "a1b2c3d4a1b2c3d4a1b2c3d4"],
+      "expected": "[REDACTED:anthropic_key]"
+    },
+    {
+      "rule": "openai_key",
+      "parts": [
+        "use ",
+        "sk-pr",
+        "oj-",
+        "Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4Ab-Cd2Ef3G_4A-1Cd2Ef3Gh_-b1Cd2Ef3Gh-_b1Cd2Ef3G-4A_1Cd2Ef3-h4Ab_Cd2Ef-Gh4Ab1_d2E-3Gh4Ab1C_2-f3Gh4Ab1Cd-Ef3Gh4Ab1C-2_",
+        " here"
+      ],
+      "expected": "use [REDACTED:openai_key] here"
+    },
+    {
+      "rule": "openai_key",
+      "parts": ["old ", "sk", "-", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6", "\n"],
+      "expected": "old [REDACTED:openai_key]\n"
+    },
+    {
+      "rule": "openai_key",
+      "parts": ["svc ", "sk-sv", "cacct-", "Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4Ab-Cd2Ef3G_4A"],
+      "expected": "svc [REDACTED:openai_key]"
+    },
+    {
+      "rule": "google_api_key",
+      "parts": ["maps ", "AI", "za", "1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4A", " ok"],
+      "expected": "maps [REDACTED:google_api_key] ok"
+    },
+    {
+      "rule": "stripe_secret_key",
+      "parts": ["pay ", "sk_", "live_", "a1b2c3d4e5f6a1b2c3d4e5f6", " ok"],
+      "expected": "pay [REDACTED:stripe_secret_key] ok"
+    },
+    {
+      "rule": "stripe_secret_key",
+      "parts": ["restricted ", "rk_", "test_", "z9y8x7w6z9y8x7w6z9y8x7w6"],
+      "expected": "restricted [REDACTED:stripe_secret_key]"
+    },
+    {
+      "rule": "jwt",
+      "parts": [
+        "session ",
+        "ey",
+        "J",
+        "hbGciOiJIUzI1NiJ9",
+        ".",
+        "ey",
+        "J",
+        "zdWIiOiJ1c2VyIn0",
+        ".",
+        "c2lnbmF0dXJl",
+        " ok"
+      ],
+      "expected": "session [REDACTED:jwt] ok"
+    },
+    {
+      "rule": "jwt",
+      "parts": [
+        "dash ",
+        "ey",
+        "J",
+        "Ab1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2",
+        ".",
+        "ey",
+        "J",
+        "d-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4Ab-Cd2Ef3G_4A-1Cd2Ef3Gh_-b1C",
+        ".",
+        "3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4Ab-Cd2Ef3G_4A-1",
+        "\n"
+      ],
+      "expected": "dash [REDACTED:jwt]\n"
+    },
+    {
+      "rule": "jwt",
+      "parts": [
+        "unsigned ",
+        "ey",
+        "J",
+        "hbGciOiJIUzI1NiJ9",
+        ".",
+        "ey",
+        "J",
+        "zdWIiOiJ1c2VyIn0",
+        ".",
+        " done"
+      ],
+      "expected": "unsigned [REDACTED:jwt] done"
+    },
+    {
+      "rule": "bearer",
+      "parts": [
+        "Authorization: Bearer ",
+        "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+        ".~+/",
+        "e5f6e5f6",
+        "=="
+      ],
+      "expected": "Authorization: Bearer [REDACTED:bearer]"
+    },
+    {
+      "rule": "bearer",
+      "parts": ["authorization: bearer ", "z9y8x7w6z9y8x7w6z9y8x7w6z9y8x7w6z9y8x7w6"],
+      "expected": "authorization: bearer [REDACTED:bearer]"
+    },
+    {
+      "rule": "jwt",
+      "parts": [
+        "Authorization: Bearer ",
+        "ey",
+        "J",
+        "hbGciOiJIUzI1NiJ9",
+        ".",
+        "ey",
+        "J",
+        "zdWIiOiJ1c2VyIn0",
+        ".",
+        "c2lnbmF0dXJl"
+      ],
+      "expected": "Authorization: Bearer [REDACTED:jwt]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: ", "hunter", "2xyz"],
+      "expected": "password: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["SECRET", "_KEY=", "abcd1234", "efgh"],
+      "expected": "SECRET_KEY=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["aws_sec", "ret_access_key = ", "a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5"],
+      "expected": "aws_secret_access_key = [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\"private", "_key\": \"", "abcd1234", "efgh", "\"}"],
+      "expected": "{\"private_key\": \"[REDACTED:labeled_secret]\"}"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["client", "Secret: ", "abcdef", "1234"],
+      "expected": "clientSecret: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["access", "Token: ", "abcdef", "1234"],
+      "expected": "accessToken: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word=", "$up", "erSecret9"],
+      "expected": "password=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word = ", "ab;cdef", "gh"],
+      "expected": "password = [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "phrase: '", "correct horse", " battery", "'"],
+      "expected": "passphrase: '[REDACTED:labeled_secret]'"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["api", "_key: ", "abcd1234", "efgh", "\nnext: line\n"],
+      "expected": "api_key: [REDACTED:labeled_secret]\nnext: line\n"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["auth", "Token: ", "abcdef", "12345"],
+      "expected": "authToken: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["refresh", "Token=\"", "abcdef", "12345", "\""],
+      "expected": "refreshToken=\"[REDACTED:labeled_secret]\""
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["the ", "pass", "word: ", "hunter", "2xyz", " is the old one"],
+      "expected": "the password: [REDACTED:labeled_secret] is the old one"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": [
+        "pass",
+        "word=\"",
+        "a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5",
+        "\nnext line\n"
+      ],
+      "expected": "password=\"[REDACTED:labeled_secret]\nnext line\n"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": [
+        "to",
+        "ken=",
+        "a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5"
+      ],
+      "expected": "token=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "github_token",
+      "parts": ["to", "ken: ", "gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"],
+      "expected": "token: [REDACTED:github_token]"
+    },
+    {
+      "rule": "iban",
+      "parts": ["IBAN: ", "DE89", " 3704 0044 ", "0532 0130 00", "."],
+      "expected": "IBAN: [REDACTED:iban]."
+    },
+    {
+      "rule": "iban",
+      "parts": ["acct ", "DE89", "370400440532", "013000"],
+      "expected": "acct [REDACTED:iban]"
+    },
+    {
+      "rule": "iban",
+      "parts": ["pay ", "GB29", " NWBK 6016 1331 ", "9268 19", " IS closed"],
+      "expected": "pay [REDACTED:iban] IS closed"
+    },
+    {
+      "rule": "iban",
+      "parts": ["pay ", "de89", " 3704 0044 ", "0532 0130 00"],
+      "expected": "pay [REDACTED:iban]"
+    },
+    {
+      "rule": "iban",
+      "parts": ["fr ", "FR14", " 2004 1010 0505 0001 ", "3M02 606", " 2024 invoice"],
+      "expected": "fr [REDACTED:iban] 2024 invoice"
+    },
+    {
+      "rule": "iban",
+      "parts": [
+        "move EUR 500 from ",
+        "DE89",
+        " 3704 0044 0532 ",
+        "0130 00",
+        " to ",
+        "FR76",
+        " 3000 6000 0112 ",
+        "3456 7890 189"
+      ],
+      "expected": "move EUR 500 from [REDACTED:iban] to [REDACTED:iban]",
+      "count": 2
+    },
+    {
+      "rule": "iban",
+      "parts": ["ref AB12 ", "DE89", " 3704 0044 0532 ", "0130 00"],
+      "expected": "ref AB12 [REDACTED:iban]"
+    },
+    {
+      "rule": "iban",
+      "parts": ["glued ", "DE89", "370400440532", "013000", "X1"],
+      "expected": "glued [REDACTED:iban]X1"
+    },
+    {
+      "rule": "iban",
+      "parts": ["es ", "ES91", " 2100 0418 4502 ", "0005 1332"],
+      "expected": "es [REDACTED:iban]"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["Card ", "4111", " 1111", " 1111", " 1111", " expires soon"],
+      "expected": "Card [REDACTED:card_number] expires soon"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["dash ", "4111-", "1111-", "1111-", "1111"],
+      "expected": "dash [REDACTED:card_number]"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["plain ", "55555555", "55554444", " ok"],
+      "expected": "plain [REDACTED:card_number] ok"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["amex ", "3782", " 8224", " 6310", " 005", "."],
+      "expected": "amex [REDACTED:card_number]."
+    },
+    {
+      "rule": "card_number",
+      "parts": ["short ", "4222", "2222", "22222", "."],
+      "expected": "short [REDACTED:card_number]."
+    },
+    {
+      "rule": "card_number",
+      "parts": ["long ", "6304", " 0000", " 0000", " 0000", " 0006"],
+      "expected": "long [REDACTED:card_number]"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["exp ", "4111", " 1111", " 1111", " 1111", " 12/27"],
+      "expected": "exp [REDACTED:card_number]/27"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["cvv ", "4111", " 1111", " 1111", " 1111", " 123"],
+      "expected": "cvv [REDACTED:card_number]3"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["cvv ", "4111", " 1111", " 1111", " 1111", " 456"],
+      "expected": "cvv [REDACTED:card_number] 456"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["two ", "4111", " 1111", " 1111", " 1111", " 5555", " 5555", " 5555", " 4444"],
+      "expected": "two [REDACTED:card_number]"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["pair ", "4111", "1111", "1111", "1111", " and ", "5555", "5555", "5555", "4444"],
+      "expected": "pair [REDACTED:card_number] and [REDACTED:card_number]",
+      "count": 2
+    }
+  ],
+  "frontmatter": [
+    {
+      "rule": "labeled_secret",
+      "field": "password",
+      "kind": "string",
+      "parts": ["hunter", "2xyz"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "clientSecret",
+      "kind": "string",
+      "parts": ["abcdef", "1234"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "aws_secret_access_key",
+      "kind": "string",
+      "parts": ["a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5a1b2c3d4e5"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password",
+      "kind": "number",
+      "parts": ["1234", "5678"]
+    },
+    {
+      "rule": "github_token",
+      "field": "token",
+      "kind": "string",
+      "parts": ["gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"]
+    },
+    {
+      "rule": "card_number",
+      "field": "payment",
+      "kind": "number",
+      "parts": ["4111", "1111", "1111", "1111"]
+    },
+    {
+      "rule": "card_number",
+      "field": "payment",
+      "kind": "bigint",
+      "parts": ["5555", "5555", "5555", "4444"]
+    },
+    {
+      "rule": "card_number",
+      "field": "note",
+      "kind": "string",
+      "parts": ["pay with ", "4111 ", "1111 ", "1111 ", "1111"],
+      "expected": "pay with [REDACTED:card_number]"
+    },
+    {
+      "rule": "aws_access_key_id",
+      "field": "info",
+      "kind": "string",
+      "parts": ["AK", "IA", "A1B2C3D4E5F6G7H8"]
+    },
+    {
+      "rule": "iban",
+      "field": "bank",
+      "kind": "string",
+      "parts": ["DE89", " 3704 0044 ", "0532 0130 00"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "passphrase",
+      "kind": "string",
+      "parts": ["correct horse", " battery"]
+    }
+  ]
+}
