@@ -1,0 +1,174 @@
+# Rockbuilt CI (harness-owned; updated by `rb vendor`). The job name `rockbuilt-ci` is required by
+# `rb merge-gate`: without a green run of it on the PR head, nothing merges automatically.
+# Commands come from AGENTS.md (## Setup, ## Verification, ## E2E) through the rb CLI.
+# If the default branch is not main or master, add it under push.branches.
+name: rockbuilt-ci
+
+on:
+  pull_request:
+    # No labeled/unlabeled: label changes would re-run (and cancel) CI on every rb:* label the harness sets.
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    # rb/queue-* : the merge queue (rb queue build) tests several PRs merged together once.
+    branches: [main, master, 'rb/queue-*']
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: rockbuilt-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Runs each non-empty, non-comment line from stdin as a command; stops at the first failure.
+  RB_RUN: |
+    const { execSync } = require('node:child_process');
+    const lines = require('node:fs').readFileSync(0, 'utf8').split(/\r?\n/)
+      .map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
+    for (const cmd of lines) {
+      console.log('::group::' + cmd);
+      try { execSync(cmd, { stdio: 'inherit', shell: true }); }
+      catch { console.log('::endgroup::'); console.log('::error::command failed: ' + cmd); process.exit(1); }
+      console.log('::endgroup::');
+    }
+  # Flags harness files changed by an rb/* branch (stdin: changed paths). A warning, not a failure:
+  # rb merge-gate already classifies these PRs as tier C, so only the human merges them.
+  # .claude/LESSONS.md is bookkeeping (append-only, checked by the gate) and is not flagged.
+  RB_HARNESS: |
+    const files = require('node:fs').readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean);
+    const re = /^(AGENTS\.md|CLAUDE\.md|\.mcp\.json|\.claude\/|\.cursor\/|\.codex\/|\.agents\/|\.github\/|tools\/rockbuilt\/|docs\/rockbuilt\/)/i;
+    const hit = files.filter((f) => re.test(f) && f !== '.claude/LESSONS.md');
+    for (const f of hit) console.log('::warning file=' + f + '::harness file changed by an rb/* branch: tier C, the human reviews and merges');
+    console.log(hit.length ? hit.length + ' harness file(s) changed; this PR is tier C.' : 'No harness files changed.');
+
+jobs:
+  rockbuilt-ci:
+    name: rockbuilt-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # setup-node's npm cache needs a lockfile; projects without one (pnpm, Python, new repos) skip it.
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Harness files
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'rb/')
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git diff --name-only "origin/${BASE_REF}...HEAD" | node -e "$RB_HARNESS"
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Free for personal accounts; repositories owned by an organization need a free key.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: false
+
+      - name: Setup
+        run: node tools/rockbuilt/rb.mjs verify-cmds Setup | node -e "$RB_RUN"
+
+      - name: Verification
+        shell: bash
+        run: |
+          if [ -s docs/rockbuilt/known-failures.json ]; then
+            node tools/rockbuilt/rb.mjs baseline --check
+          else
+            node tools/rockbuilt/rb.mjs verify-cmds Verification | node -e "$RB_RUN"
+          fi
+
+  # E2E in shards (AGENTS.md header `E2E shards: <1-8>`, default 1). The plan job reads AGENTS.md,
+  # each shard runs `--shard=i/n` of the Playwright suite on its own runner with its own timeout, and
+  # the `rockbuilt-e2e` job keeps the single check name projects and branch protection expect: it is
+  # green only when every shard is green (or when there is no ## E2E section).
+  rockbuilt-e2e-plan:
+    name: rockbuilt-e2e-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has: ${{ steps.plan.outputs.has }}
+      total: ${{ steps.plan.outputs.total }}
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Plan
+        id: plan
+        run: |
+          node tools/rockbuilt/rb.mjs e2e-plan | tee -a "$GITHUB_OUTPUT"
+
+  rockbuilt-e2e-shard:
+    name: rockbuilt-e2e (${{ matrix.shard }}/${{ needs.rockbuilt-e2e-plan.outputs.total }})
+    needs: rockbuilt-e2e-plan
+    if: needs.rockbuilt-e2e-plan.outputs.has == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.rockbuilt-e2e-plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # setup-node's npm cache needs a lockfile; projects without one (pnpm, Python, new repos) skip it.
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Setup
+        run: node tools/rockbuilt/rb.mjs verify-cmds Setup | node -e "$RB_RUN"
+
+      # The browser download is the step that most often breaks for runner reasons (a TLS error,
+      # minutes lost before any test): cache it, and retry the install once.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json', 'pnpm-lock.yaml', 'yarn.lock') }}
+
+      - name: Install Playwright Chromium
+        shell: bash
+        run: npx playwright install --with-deps chromium || (sleep 20 && npx playwright install --with-deps chromium)
+
+      # Warns before the 30 min limit cuts a shard (3d_brain: shard 3 cancelled at 28.5 min with
+      # every test green): past 70 % of the limit, raise `E2E shards` in AGENTS.md.
+      - name: E2E
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}/${{ needs.rockbuilt-e2e-plan.outputs.total }}
+        run: |
+          node tools/rockbuilt/rb.mjs verify-cmds E2E --shard "$SHARD" | node -e "$RB_RUN"
+          MIN=$((SECONDS / 60))
+          echo "E2E shard $SHARD took $MIN min of the 30 min job limit"
+          if [ "$MIN" -ge 21 ]; then echo "::warning::E2E shard $SHARD took $MIN of 30 min: raise 'E2E shards' in AGENTS.md before a shard gets cut off"; fi
+
+  rockbuilt-e2e:
+    name: rockbuilt-e2e
+    needs: [rockbuilt-e2e-plan, rockbuilt-e2e-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All shards green
+        env:
+          PLAN: ${{ needs.rockbuilt-e2e-plan.result }}
+          HAS: ${{ needs.rockbuilt-e2e-plan.outputs.has }}
+          SHARDS: ${{ needs.rockbuilt-e2e-shard.result }}
+        run: |
+          if [ "$PLAN" != "success" ]; then echo "::error::E2E plan job: $PLAN"; exit 1; fi
+          if [ "$HAS" != "true" ]; then echo "No E2E section in AGENTS.md; nothing to run"; exit 0; fi
+          if [ "$SHARDS" = "cancelled" ]; then echo "::error::E2E shards: a shard was cancelled, usually by the 30 min job limit with tests still running, not by a failing test. Raise 'E2E shards' in AGENTS.md (rb ci logs <sha> --job rockbuilt-e2e shows which shard and how long)"; exit 1; fi
+          if [ "$SHARDS" != "success" ]; then echo "::error::E2E shards: $SHARDS (a failing test, or a runner problem such as the browser download; rb ci logs <sha> shows which)"; exit 1; fi
+          echo "All E2E shards passed"
