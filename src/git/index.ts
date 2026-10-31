@@ -40,7 +40,8 @@ export async function runGit(
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+      // Last, so no caller can override it: a path is a file name, never a glob or pathspec magic.
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
     });
     return stdout.trim();

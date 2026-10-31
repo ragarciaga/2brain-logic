@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
 import type { NoteInput } from "../src/vault/note-schema.js";
@@ -64,6 +65,11 @@ describe("POST /notes", () => {
     ["an empty segment", JSON.stringify({ ...valid, path: "a//b.md" })],
     ["a NUL in the path", JSON.stringify({ ...valid, path: "a\u0000b.md" })],
     ["a control character in the path", JSON.stringify({ ...valid, path: "a\nb.md" })],
+    ["a leading colon", JSON.stringify({ ...valid, path: ":(top)x.md" })],
+    ["a Windows-unsafe character", JSON.stringify({ ...valid, path: "a/b?c.md" })],
+    ["a directory ending in a dot", JSON.stringify({ ...valid, path: "notes./x.md" })],
+    ["a directory ending in a space", JSON.stringify({ ...valid, path: "notes /x.md" })],
+    ["a reserved device name", JSON.stringify({ ...valid, path: "Notes/NUL.md" })],
     ["a NUL in the body", JSON.stringify({ ...valid, body: "a\u0000b" })],
   ];
 
@@ -205,6 +211,43 @@ describe("POST /notes", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ ok: false, error: "write_failed" });
     expect(logs).toEqual(["write_failed: git push exit 128"]);
+  });
+
+  describe("config_invalid", () => {
+    it("R2.3: returns 503 with only the file and the key path, and logs the same two facts", async () => {
+      const { app, logs } = setup(async () => {
+        throw new ConfigInvalidError(CONFIG_FILE, "vault.colour", "SNIPPETMARKER colour: blue");
+      });
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({
+        ok: false,
+        error: "config_invalid",
+        file: ".2brain/config.yaml",
+        keyPath: "vault.colour",
+      });
+      expect(text).not.toContain("SNIPPETMARKER");
+      expect(logs).toEqual(["config_invalid: .2brain/config.yaml at vault.colour"]);
+    });
+
+    it("R2.3: an empty key path stays an empty string and the log line has no 'at'", async () => {
+      const { app, logs } = setup(async () => {
+        throw new ConfigInvalidError(CONFIG_FILE, "", "SNIPPETMARKER: [unclosed");
+      });
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({
+        ok: false,
+        error: "config_invalid",
+        file: ".2brain/config.yaml",
+        keyPath: "",
+      });
+      expect(text).not.toContain("SNIPPETMARKER");
+      expect(logs).toEqual(["config_invalid: .2brain/config.yaml"]);
+      expect(logs.join("\n")).not.toContain("SNIPPETMARKER");
+    });
   });
 
   it("returns 500 without detail for an unexpected error", async () => {

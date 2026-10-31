@@ -35,7 +35,11 @@ curl -X POST http://127.0.0.1:3000/notes \
 and pushes. Every route except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the
 answer is 401 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for
 a missing or wrong token, 409 when the path already exists (it never overwrites), 413 for a body
-over 1 MB, 415 unless the content type is `application/json`, and 500 when git fails.
+over 1 MB, 415 unless the content type is `application/json`, 500 when git fails, and 503
+`config_invalid` when the vault's `.2brain/config.yaml` is invalid (the body names only the file
+and the key: `{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
+Each write reads the vault config right after the pull, so a config change pushed from another
+clone applies to the next write without a restart.
 
 > **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
 > ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) but still has no secret scrubbing (it arrives
@@ -67,6 +71,11 @@ allow-list of sources (`sources`) and the note types with their stored value, fo
 `areas` or `types` replaces the default one, while `vault` and `properties` fill the keys you
 leave out. The file is strict: an unknown key, a wrong type or an unsafe folder or area name (a
 `..` segment, an absolute path, a backslash) is an error that names the file and the key.
+
+The service reads the file again after every pull, inside the write queue, so you edit the config
+from any clone and push it; there is no restart and no cache. An invalid file does not stop the
+service: it logs `config_invalid` with the file and the key, `GET /health` keeps answering, and
+every write answers 503 until a fixing commit reaches the remote.
 
 `vault-template/` is the default vault: a ready `.2brain/config.yaml` with the default values, and
 a `README.md` in every folder the config names (git does not track empty folders). Seed a vault

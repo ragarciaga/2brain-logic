@@ -1,6 +1,14 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { inspect } from "node:util";
 import matter from "gray-matter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -307,6 +315,102 @@ describe("POST /notes against a real remote", () => {
       const response = await post(makeApp(), { path: "ln.md", frontmatter: {}, body: "x\n" });
       expect(response.status).toBe(409);
       expect(readdirSync(outside)).toEqual(["victim.md"]);
+    });
+  });
+
+  describe("the vault config is read again after every pull", () => {
+    let cloneCounter = 0;
+
+    /** Commit `files` (path to content) from a second clone and push; returns the new sha. */
+    function pushFromElsewhere(name: string, files: Record<string, string>): string {
+      cloneCounter += 1;
+      const dir = fixture.cloneElsewhere(`${name}-${cloneCounter}`);
+      for (const [path, content] of Object.entries(files)) {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), content);
+        git(dir, ["add", path]);
+      }
+      git(dir, ["commit", "-m", `${name} config`]);
+      git(dir, ["push", "origin", "main"]);
+      return git(dir, ["rev-parse", "HEAD"]);
+    }
+
+    const invalidConfigs: Array<[string, string, string]> = [
+      ["an unknown key", "vault:\n  colour: blue\n", "vault.colour"],
+      ["a wrong type", "vault:\n  archive_folder: 42\n", "vault.archive_folder"],
+    ];
+
+    it.each(invalidConfigs)(
+      "R2.3: %s gives 503 and changes nothing",
+      async (_name, yaml, keyPath) => {
+        const configSha = pushFromElsewhere("bad", { ".2brain/config.yaml": yaml });
+        const response = await post(makeApp(), {
+          path: "inbox/blocked.md",
+          frontmatter: {},
+          body: "x\n",
+        });
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({
+          ok: false,
+          error: "config_invalid",
+          file: ".2brain/config.yaml",
+          keyPath,
+        });
+        expect(gitCalls).toEqual(["pullRebase"]);
+        expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(configSha);
+        expect(remoteSha()).toBe(configSha);
+        expect(existsSync(join(fixture.vaultDir, "inbox"))).toBe(false);
+        expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+        expect(logs).toEqual([`config_invalid: .2brain/config.yaml at ${keyPath}`]);
+      },
+    );
+
+    it("D1: after a 503, a fixing commit from another clone makes the next POST 201 without a restart", async () => {
+      pushFromElsewhere("bad", { ".2brain/config.yaml": "vault:\n  colour: blue\n" });
+      const app = makeApp();
+      const note = { path: "inbox/later.md", frontmatter: {}, body: "x\n" };
+      expect((await post(app, note)).status).toBe(503);
+
+      pushFromElsewhere("fix", { ".2brain/config.yaml": "version: 1\n" });
+      const response = await post(app, note);
+      expect(response.status).toBe(201);
+      const { commit } = (await response.json()) as { commit: string };
+      expect(remoteSha()).toBe(commit);
+      expect(parseNote(remoteFile("inbox/later.md")).content).toBe("x\n");
+    });
+
+    it("R2.4: a change to the areas pushed from another clone applies to the next create", async () => {
+      const seenAreas: string[][] = [];
+      const writer = createNoteWriter({
+        vaultDir: fixture.vaultDir,
+        author: TEST_AUTHOR,
+        git: spyGit(),
+        checkNote: (note, config) => {
+          seenAreas.push([...config.areas]);
+          const area = note.frontmatter.area;
+          if (typeof area !== "string" || !config.areas.includes(area)) {
+            throw new Error("area not in config");
+          }
+        },
+      });
+      const note = {
+        path: "travel/trip.md",
+        frontmatter: { area: "travel" },
+        body: "x\n",
+      };
+
+      const shaBefore = remoteSha();
+      await expect(writer.write(note)).rejects.toThrow("area not in config");
+      expect(existsSync(join(fixture.vaultDir, "travel"))).toBe(false);
+      expect(remoteSha()).toBe(shaBefore);
+      expect(gitCalls).toEqual(["pullRebase"]);
+      expect(seenAreas).toEqual([["personal", "work"]]);
+
+      pushFromElsewhere("areas", { ".2brain/config.yaml": "areas:\n  - personal\n  - travel\n" });
+      const result = await writer.write(note);
+      expect(result.commit).toBe(remoteSha());
+      expect(seenAreas[1]).toContain("travel");
+      expect(parseNote(remoteFile("travel/trip.md")).data).toEqual({ area: "travel" });
     });
   });
 

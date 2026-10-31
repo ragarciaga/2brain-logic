@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { ingestTokenAuth } from "../auth/ingest-token.js";
+import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
 import { NoteInput } from "../vault/note-schema.js";
 import { NoteExistsError, type NoteWriter, UnsafePathError } from "../vault/write-note.js";
@@ -14,6 +15,16 @@ export interface AppOptions {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Log line for an invalid vault config: the file and the key path only. The error message may
+ * quote the YAML, so it never reaches a log or a response.
+ */
+export function configInvalidLogLine(error: ConfigInvalidError): string {
+  return error.keyPath === ""
+    ? `config_invalid: ${error.file}`
+    : `config_invalid: ${error.file} at ${error.keyPath}`;
+}
 
 export function createApp({ writer, ingestToken, log = console.error }: AppOptions): Hono {
   const app = new Hono();
@@ -55,6 +66,13 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
         const result = await writer.write(parsed.data);
         return c.json({ ok: true, path: result.path, commit: result.commit }, 201);
       } catch (error) {
+        if (error instanceof ConfigInvalidError) {
+          log(configInvalidLogLine(error));
+          return c.json(
+            { ok: false, error: "config_invalid", file: error.file, keyPath: error.keyPath },
+            503,
+          );
+        }
         if (error instanceof NoteExistsError) {
           return c.json({ ok: false, error: "note_exists" }, 409);
         }
