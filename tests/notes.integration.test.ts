@@ -672,6 +672,17 @@ describe("POST /notes against a real remote", () => {
         ["pullRebase"],
       ],
       [
+        "an Error thrown from scrub of the body only",
+        {
+          scrub: (text) => {
+            if (text !== "inbox/sub/x.md") throw new RangeError(`MARK${GHP}`);
+            return scrub(text);
+          },
+          scrubFrontmatter: (data) => scrubFrontmatter(data),
+        },
+        ["pullRebase"],
+      ],
+      [
         "a string thrown from scrub",
         {
           scrub: () => {
