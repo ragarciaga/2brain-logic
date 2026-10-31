@@ -224,25 +224,38 @@ describe("session-end.mjs as a child process", () => {
     expect(readdirSync(dir)).toStrictEqual([]);
   });
 
+  it.skipIf(!posix)("leaves the mode of an existing data dir alone", () => {
+    chmodSync(dir, 0o755);
+    const { spawn } = fakeSpawn();
+    runHook(JSON.stringify(EVENT), { CLAUDE_PLUGIN_DATA: dir }, { spawn: spawn as never });
+    expect(statSync(dir).mode & 0o777).toBe(0o755);
+  });
+
   const hasSetpriv = posix && spawnSync("setpriv", ["--version"]).status === 0;
   const root = posix && process.getuid?.() === 0;
+
+  /** Runs the hook under umask 777, as uid 65534 when the tests run as root. */
+  function runUnderUmask(event: Record<string, unknown>, parent: string) {
+    chmodSync(parent, 0o777);
+    const data = join(parent, "data");
+    const run = ["sh", "-c", 'umask 777; exec "$@"', "sh", process.execPath, HOOK];
+    const cmd = root
+      ? ["setpriv", "--reuid=65534", "--regid=65534", "--clear-groups", ...run]
+      : run;
+    const r = spawnSync(cmd[0] as string, cmd.slice(1), {
+      input: JSON.stringify(event),
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: data },
+      encoding: "utf8",
+    });
+    return { r, data };
+  }
+
   it.skipIf(!posix || (root && !hasSetpriv))(
     "creates a missing data dir as 0700 under umask 777",
     () => {
-      // Under root the copy is made world readable so the unprivileged user can run it.
       const parent = mkdtempSync(join(tmpdir(), "hook-umask-"));
       try {
-        chmodSync(parent, 0o777);
-        const data = join(parent, "data");
-        const run = ["sh", "-c", 'umask 777; exec "$@"', "sh", process.execPath, HOOK];
-        const cmd = root
-          ? ["setpriv", "--reuid=65534", "--regid=65534", "--clear-groups", ...run]
-          : run;
-        const r = spawnSync(cmd[0] as string, cmd.slice(1), {
-          input: JSON.stringify({ ...EVENT, cwd: undefined }),
-          env: { ...process.env, CLAUDE_PLUGIN_DATA: data },
-          encoding: "utf8",
-        });
+        const { r, data } = runUnderUmask({ ...EVENT, cwd: undefined }, parent);
         expectSilent(r);
         expect(statSync(data).mode & 0o777).toBe(0o700);
         expect(logText(data)).toContain("invalid_input");
@@ -251,4 +264,19 @@ describe("session-end.mjs as a child process", () => {
       }
     },
   );
+
+  it.skipIf(!posix || (root && !hasSetpriv))("stores the job privately under umask 777", () => {
+    const parent = mkdtempSync(join(tmpdir(), "hook-umask-"));
+    try {
+      const { r, data } = runUnderUmask(EVENT, parent);
+      expectSilent(r);
+      expect(statSync(data).mode & 0o777).toBe(0o700);
+      expect(statSync(join(data, "queue")).mode & 0o777).toBe(0o700);
+      const jobs = readdirSync(join(data, "queue")).filter((n) => n.endsWith(".json"));
+      expect(jobs).toHaveLength(1);
+      expect(statSync(join(data, "queue", jobs[0] as string)).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
 });
