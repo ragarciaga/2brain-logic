@@ -87,6 +87,45 @@ function lastStageCopies(): CopyStep[] {
   return copies;
 }
 
+/** Instruction lines per Dockerfile stage, continuation lines joined, in order. */
+function dockerStages(): string[][] {
+  const joined = read("Dockerfile").replace(/\\\r?\n/g, " ");
+  const stages: string[][] = [];
+  for (const raw of joined.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^FROM\s/i.test(line)) stages.push([]);
+    if (line !== "") stages.at(-1)?.push(line);
+  }
+  return stages;
+}
+
+function lastStageInstructions(): string[] {
+  const last = dockerStages().at(-1);
+  if (!last) throw new Error("Dockerfile has no FROM");
+  return last;
+}
+
+function brainService(): Record<string, unknown> {
+  const compose = parseYamlConfig(read("compose.yaml"));
+  const services = isRecord(compose) ? compose.services : undefined;
+  const brain = isRecord(services) ? services.brain : undefined;
+  if (!isRecord(brain)) throw new Error("compose.yaml: services.brain missing");
+  return brain;
+}
+
+function brainMounts(): { source: string; target: string }[] {
+  const volumes = brainService().volumes;
+  if (!Array.isArray(volumes)) throw new Error("brain.volumes is not a list");
+  return volumes.map((entry) => {
+    const [source = "", target = ""] = String(entry).split(":");
+    return { source, target };
+  });
+}
+
+function lineIndex(lines: string[], pattern: RegExp): number {
+  return lines.findIndex((line) => pattern.test(line));
+}
+
 async function runHealthcheck(
   port: number,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -186,6 +225,105 @@ describe("healthcheck script behavior", () => {
   it("exits exactly 1 when nothing listens", async () => {
     const result = await runHealthcheck(await freePort());
     expect(result.code).toBe(1);
+  });
+});
+
+describe("image heap cap", () => {
+  it("sets NODE_OPTIONS to exactly --max-old-space-size=192 in the last stage", () => {
+    const values = lastStageInstructions()
+      .map((line) => /^ENV\s+NODE_OPTIONS(?:=|\s+)(.*)$/i.exec(line)?.[1])
+      .filter((value) => value !== undefined);
+    expect(values).toEqual(["--max-old-space-size=192"]);
+  });
+
+  it("leaves the build stage without NODE_OPTIONS", () => {
+    const first = dockerStages()[0] ?? [];
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.join("\n")).not.toContain("NODE_OPTIONS");
+  });
+});
+
+describe("image auth directory", () => {
+  const runs = (): string[] => lastStageInstructions().filter((line) => /^RUN\s/i.test(line));
+  const userIndex = (): number => lineIndex(lastStageInstructions(), /^USER\s+node\s*$/i);
+
+  it("switches to the node user", () => {
+    expect(userIndex()).toBeGreaterThan(-1);
+  });
+
+  it("creates /data/auth with mkdir before USER node", () => {
+    const index = lineIndex(lastStageInstructions(), /^RUN\s.*mkdir\s.*\/data\/auth/i);
+    expect(index).toBeGreaterThan(-1);
+    expect(index).toBeLessThan(userIndex());
+  });
+
+  it("chowns /data/auth to node:node before USER node", () => {
+    const index = lineIndex(
+      lastStageInstructions(),
+      /^RUN\s.*chown\s+node:node\s[^&]*\/data\/auth/i,
+    );
+    expect(index).toBeGreaterThan(-1);
+    expect(index).toBeLessThan(userIndex());
+  });
+
+  it("sets /data/auth to mode 700 before USER node", () => {
+    const index = lineIndex(lastStageInstructions(), /^RUN\s.*chmod\s+0?700\s+\/data\/auth/i);
+    expect(index).toBeGreaterThan(-1);
+    expect(index).toBeLessThan(userIndex());
+  });
+
+  it("never makes /data/auth group or others writable", () => {
+    for (const run of runs()) {
+      for (const part of run.split("&&")) {
+        if (!part.includes("/data/auth") || !/chmod/.test(part)) continue;
+        expect(part).not.toMatch(
+          /chmod\s+(-\S+\s+)*(\d*[2367][0-7]|\d*[0-7][2367]|[a-z]*[go]\+\w*w)\b/i,
+        );
+      }
+    }
+  });
+});
+
+describe("compose auth store volume", () => {
+  it("mounts the named volume auth at /data/auth", () => {
+    expect(brainService().volumes).toContain("auth:/data/auth");
+  });
+
+  it("declares auth as a top-level volume", () => {
+    const compose = parseYamlConfig(read("compose.yaml"));
+    const volumes = isRecord(compose) ? compose.volumes : undefined;
+    expect(isRecord(volumes) && Object.hasOwn(volumes, "auth")).toBe(true);
+  });
+
+  it("sets AUTH_STORE_DIR to the auth mount target", () => {
+    const environment = brainService().environment;
+    expect(isRecord(environment) ? environment.AUTH_STORE_DIR : undefined).toBe("/data/auth");
+    const mount = brainMounts().find((entry) => entry.source === "auth");
+    expect(mount?.target).toBe("/data/auth");
+  });
+
+  it("keeps the auth volume apart from the vault volume and path", () => {
+    const mounts = brainMounts();
+    const auth = mounts.find((entry) => entry.target === "/data/auth");
+    const vault = mounts.find((entry) => entry.target === "/data/vault");
+    expect(auth).toBeDefined();
+    expect(vault).toBeDefined();
+    expect(auth?.source).not.toBe(vault?.source);
+    expect(posix.relative("/data/vault", "/data/auth").startsWith("..")).toBe(true);
+  });
+});
+
+describe("compose isolation and memory", () => {
+  it("limits memory to 512m", () => {
+    expect(brainService().mem_limit).toBe("512m");
+  });
+
+  it("publishes no ports", () => {
+    expect(Object.hasOwn(brainService(), "ports")).toBe(false);
+  });
+
+  it("joins only the n8n network", () => {
+    expect(brainService().networks).toEqual(["n8n"]);
   });
 });
 
