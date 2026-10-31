@@ -20,7 +20,7 @@ The owner passphrase hash format is `scrypt$<N>$<r>$<p>$<salt base64url>$<key ba
 - Files: package.json, package-lock.json, src/config/env.ts, .env.example, README.md, tests/env.test.ts
 - Verify: `npm test -- tests/env.test.ts`; `@modelcontextprotocol/server` 2.4.0 (dependencies) and `@modelcontextprotocol/client` 2.4.0 (devDependencies) are exact versions, and `@modelcontextprotocol/sdk` is absent from package.json and package-lock.json; the existing `loadEnv` assertions still pass (the public settings are a separate optional part of the result, absent when `PUBLIC_BASE_URL` is unset, and then a missing or malformed `OWNER_PASSPHRASE_HASH` is not an error); with `PUBLIC_BASE_URL` set, an `http://example.com` URL, a missing `OWNER_PASSPHRASE_HASH`, a hash not matching `scrypt$<N>$<r>$<p>$<salt base64url>$<key base64url>` with positive integers, a non-numeric `MCP_PORT` and a non-integer or negative `TRUST_PROXY_HOPS` each throw an error naming the variable and not containing its value (marker-value test); `http://127.0.0.1:3001`, `http://localhost:3001` and `https://brain.example.com` pass with a well-formed hash; defaults `MCP_PORT` 3001, `AUTH_STORE_DIR` `/data/auth`, `TRUST_PROXY_HOPS` 0, `ALLOWED_REDIRECT_HOSTS` claude.ai, claude.com, chatgpt.com (a custom comma-separated value is split and trimmed); a test reads `.env.example` and finds all six names
 - Issue: #44
-- Status: todo
+- Status: done
 
 ## T2: Public app router and startup wiring
 - Purpose: a second app serves only the public routes, starts only when configured, and never exposes ingest
@@ -30,7 +30,7 @@ The owner passphrase hash format is `scrypt$<N>$<r>$<p>$<salt base64url>$<key ba
 - Files: src/mcp/app.ts, src/index.ts, tests/mcp-app.test.ts, tests/start.test.ts
 - Verify: `npm test -- tests/mcp-app.test.ts tests/start.test.ts`; the built entry with `PUBLIC_BASE_URL` set listens on `MCP_PORT`, bound to `HOST`, and answers 404 (no token needed, never 401) for `POST /notes`, `PATCH /notes`, `POST /notes/archive`, `GET /health` and an unknown path, while the ingest port still serves `/health` with 200; without `PUBLIC_BASE_URL` no second port opens and the log has exactly one `mcp disabled` line; with `PUBLIC_BASE_URL` `http://example.com` or with `OWNER_PASSPHRASE_HASH` missing the process exits 1, the message names the variable and does not contain its value; unit: `createPublicApp` exposes one URL builder (issuer, resource `<PUBLIC_BASE_URL>/mcp`, protected-resource metadata URL) whose only input is the configured base URL, and its output is unchanged for requests with a forged `Host` and `X-Forwarded-Host`; the existing start.test.ts helpers are reused
 - Issue: #45
-- Status: todo
+- Status: done
 
 ## T3: Discovery metadata
 - Purpose: clients find the resource and authorization server from the published documents
