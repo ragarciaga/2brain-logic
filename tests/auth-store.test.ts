@@ -516,7 +516,7 @@ describe("auth store: atomic writes (D2, D3)", () => {
       log: (line) => lines.push(line),
       io: {
         writeTemp: async (file, data) => {
-          await writeFile(file, data.slice(0, 10), { flag: "wx", mode: 0o600 });
+          await writeFile(file, fail ? data.slice(0, 10) : data, { flag: "wx", mode: 0o600 });
           if (fail) throw new Error(`disk full ${file} STOREMARKER`);
         },
       },
@@ -534,6 +534,15 @@ describe("auth store: atomic writes (D2, D3)", () => {
     expect(store.clientCount()).toBe(1);
     expect(tempFiles(sb.auth)).toEqual([]);
     expect(lines).toEqual(["auth_store_write_failed: unknown"]);
+
+    fail = false;
+    const b = issue();
+    expect((await store.update((tx) => addAll(tx, b))).ok).toBe(true);
+    expect(tempFiles(sb.auth)).toEqual([]);
+    store.close();
+    const again = await open(sb);
+    expect(again.getClient(a.clientId)).toBeDefined();
+    expect(again.getClient(b.clientId)).toBeDefined();
   });
 
   it("does not delete a temp file it did not create when the name is taken", async () => {
@@ -815,6 +824,52 @@ describe("auth store: validation of what is written (S3)", () => {
     expect(again.clientCount()).toBe(AUTH_STORE_LIMITS.maxClients);
     expect(again.grantCount()).toBe(AUTH_STORE_LIMITS.maxGrants);
   }, 60000);
+
+  it("refuses a draft over 8 MiB of UTF-8 bytes even when every bound holds, and keeps working", async () => {
+    const sb = sandbox();
+    const lines: string[] = [];
+    const store = await open(sb, { log: (line) => lines.push(line) });
+    const first = issue();
+    await store.update((tx) => addAll(tx, first));
+    const bytes = readFileSync(sb.file);
+
+    // Control characters count as one UTF-16 unit each but JSON writes them as 6 bytes (\u0001).
+    const escapes = "\u0001";
+    const heavy = await store.update((tx) => {
+      for (let i = 0; i < AUTH_STORE_LIMITS.maxClients - 1; i++) {
+        tx.putClient(newId(), {
+          authMethod: "none",
+          redirectUris: Array.from({ length: AUTH_STORE_LIMITS.maxRedirectUris }, () =>
+            escapes.repeat(AUTH_STORE_LIMITS.maxRedirectUriLength),
+          ),
+          name: escapes.repeat(AUTH_STORE_LIMITS.maxNameLength),
+        });
+      }
+      for (let i = 0; i < AUTH_STORE_LIMITS.maxGrants - 1; i++) {
+        tx.putGrant(newId(), {
+          clientId: first.clientId,
+          resource: escapes.repeat(AUTH_STORE_LIMITS.maxResourceLength),
+          accessToken: newId(),
+          accessExpiresAt: new Date(clockMs + HOUR),
+          refreshToken: newId(),
+          refreshExpiresAt: new Date(clockMs + 30 * DAY),
+        });
+      }
+    });
+    expect(heavy).toEqual({ ok: false, error: "invalid_data" });
+    expect(readFileSync(sb.file).equals(bytes)).toBe(true);
+    expect(store.clientCount()).toBe(1);
+    expect(store.grantCount()).toBe(1);
+    expect(tempFiles(sb.auth)).toEqual([]);
+    expect(lines).toEqual(["auth_store_invalid_data"]);
+
+    const next = issue();
+    expect((await store.update((tx) => addAll(tx, next))).ok).toBe(true);
+    store.close();
+    const again = await open(sb);
+    expect(again.getClient(first.clientId)).toBeDefined();
+    expect(again.getClient(next.clientId)).toBeDefined();
+  }, 60000);
 });
 
 describe("auth store: expiry on write (D4)", () => {
@@ -1092,6 +1147,16 @@ describe("auth store: opening (D5, D6, D7)", () => {
       writeFileSync(sb.file, text);
       await expectOpenError(sb, /does not match the store format$/);
     }
+  });
+
+  it("a huge array in auth.json is the fixed format error naming auth.json, not a stack overflow", async () => {
+    const sb = sandbox();
+    mkdirSync(sb.auth, { mode: 0o700 });
+    const numbers = Array.from({ length: 500_000 }, (_, i) => i % 10).join(",");
+    writeFileSync(sb.file, `{"version":1,"clients":{},"grants":{},"junk":[${numbers}]}\n`);
+    expect(statSync(sb.file).size).toBeLessThan(AUTH_STORE_LIMITS.maxFileBytes);
+    const error = await expectOpenError(sb, /does not match the store format$/);
+    expect(error).not.toBeInstanceOf(RangeError);
   });
 
   it("refuses a file above 8 MiB without parsing it", async () => {

@@ -21,7 +21,8 @@ import { isInside } from "../../config/env.js";
  *
  * - Callers hand over raw tokens and client secrets; only SHA-256 hashes are kept or written, so
  *   no caller can persist a raw value.
- * - One store instance per process. `src/index.ts` opens it once and passes the handle on.
+ * - One open store per real directory in a process (a second open of the same directory fails until
+ *   `close`). `src/index.ts` opens it once and passes the handle on.
  * - Every change goes through `update`: calls run one at a time on a clone of the data, the clone
  *   is validated, written to a temp file, renamed over `auth.json`, and only then becomes the
  *   data readers see. A failed write keeps the old file and the old data.
@@ -491,7 +492,8 @@ function hasProtoKey(root: unknown): boolean {
     const value = pending.pop();
     if (typeof value !== "object" || value === null) continue;
     if (!Array.isArray(value) && Object.hasOwn(value, "__proto__")) return true;
-    pending.push(...Object.values(value));
+    // A loop, not a spread: a huge array would overflow the call stack as arguments.
+    for (const child of Object.values(value)) pending.push(child);
   }
   return false;
 }
@@ -556,10 +558,16 @@ async function readStoreFile(
   if (!Object.hasOwn(parsed, "version") || (parsed as { version: unknown }).version !== 1) {
     throw new AuthStoreInvalidError(MESSAGES.version);
   }
-  if (hasProtoKey(parsed)) throw new AuthStoreInvalidError(MESSAGES.format);
-  const checked = authStoreSchema.safeParse(parsed);
-  if (!checked.success) throw new AuthStoreInvalidError(MESSAGES.format);
-  return { tables: toTables(checked.data), signature };
+  try {
+    if (hasProtoKey(parsed)) throw new AuthStoreInvalidError(MESSAGES.format);
+    const checked = authStoreSchema.safeParse(parsed);
+    if (!checked.success) throw new AuthStoreInvalidError(MESSAGES.format);
+    return { tables: toTables(checked.data), signature };
+  } catch (error) {
+    // Anything unexpected while checking the content is the same fixed error, with no cause.
+    if (error instanceof AuthStoreInvalidError) throw error;
+    throw new AuthStoreInvalidError(MESSAGES.format);
+  }
 }
 
 /** Directories (real paths) this process has open. One store per directory. */
@@ -737,9 +745,13 @@ export async function openAuthStore(options: OpenAuthStoreOptions): Promise<Auth
     }
     if (!dirty) return { ok: true, value };
     const plain = toPlain(draft);
-    // The bounds keep the file far below `maxFileBytes`, so no separate size check is needed here.
     const content = `${JSON.stringify(plain, null, 2)}\n`;
-    if (!authStoreSchema.safeParse(plain).success) {
+    // The schema counts UTF-16 units; the cap is on UTF-8 bytes, and JSON escapes (`\u0001` is 6
+    // bytes) and multi-byte characters can push a draft past it. Refuse what open would refuse.
+    if (
+      !authStoreSchema.safeParse(plain).success ||
+      Buffer.byteLength(content, "utf8") > AUTH_STORE_LIMITS.maxFileBytes
+    ) {
       log("auth_store_invalid_data");
       return { ok: false, error: "invalid_data" };
     }
