@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { registerAuthorizeRoute } from "../auth/oauth/authorize.js";
 import { registerDiscoveryRoutes } from "../auth/oauth/metadata.js";
 import { registerClientRoute } from "../auth/oauth/register.js";
 import type { AuthStore } from "../auth/oauth/store.js";
@@ -45,7 +46,7 @@ export interface PublicAppOptions {
   log?: (line: string) => void;
   /**
    * What the OAuth routes need. Without it only the discovery documents are served and
-   * `POST /register` answers 404.
+   * `POST /register` and `GET /authorize` answer 404.
    */
   auth?: {
     store: AuthStore;
@@ -77,7 +78,8 @@ export function buildPublicUrls(baseUrl: string): PublicUrls {
 
 /**
  * The public Hono app, served on `MCP_PORT`. It serves the discovery documents (RFC 9728 and
- * RFC 8414) and, when `auth` is given, `POST /register` (RFC 7591); every other path answers 404
+ * RFC 8414) and, when `auth` is given, `POST /register` (RFC 7591) and `GET /authorize` (the
+ * sign-in page); every other path answers 404
  * (Hono's default), including the ingest routes: the ingest API never answers here, with or
  * without the ingest token. Later tasks mount their routes on this app from `PUBLIC_PATHS`.
  *
@@ -118,7 +120,13 @@ export function createPublicApp({ baseUrl, log = console.error, auth }: PublicAp
   });
 
   registerDiscoveryRoutes(app);
-  if (auth !== undefined) registerClientRoute(app, { ...auth, log });
+  if (auth !== undefined) {
+    registerClientRoute(app, { ...auth, log });
+    registerAuthorizeRoute(app, {
+      store: auth.store,
+      allowedRedirectHosts: auth.allowedRedirectHosts,
+    });
+  }
 
   return { app, urls };
 }
