@@ -1,6 +1,7 @@
 import { loadEnv } from "./config/env.js";
 import { ConfigInvalidError, loadVaultConfig } from "./config/vault-config.js";
 import { defaultGit, ensureClone } from "./git/index.js";
+import { createPublicApp } from "./mcp/app.js";
 import { configInvalidLogLine, createApp } from "./server/app.js";
 import { startServer } from "./server/start.js";
 import { createNoteWriter } from "./vault/write-note.js";
@@ -24,6 +25,15 @@ async function main(): Promise<void> {
   const app = createApp({ writer, ingestToken: env.INGEST_TOKEN });
   await startServer(app, { host: env.HOST, port: env.PORT });
   console.log(`2brain listening on ${env.HOST}:${env.PORT}`);
+  if (env.publicApp === undefined) {
+    console.log("mcp disabled: PUBLIC_BASE_URL is not set");
+    return;
+  }
+  // Log the port only: `env.publicApp` carries OWNER_PASSPHRASE_HASH.
+  const { PUBLIC_BASE_URL, MCP_PORT } = env.publicApp;
+  const { app: publicApp } = createPublicApp({ baseUrl: PUBLIC_BASE_URL });
+  await startServer(publicApp, { host: env.HOST, port: MCP_PORT });
+  console.log(`2brain mcp listening on ${env.HOST}:${MCP_PORT}`);
 }
 
 main().catch((error: unknown) => {
