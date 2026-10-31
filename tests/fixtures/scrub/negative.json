@@ -1,0 +1,406 @@
+{
+  "text": [
+    {
+      "rule": "private_key",
+      "parts": [
+        "-----BEG",
+        "IN PUB",
+        "LIC KEY-----\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a\n",
+        "-----E",
+        "ND PUB",
+        "LIC KEY-----\n"
+      ]
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "-----BEG",
+        "IN CERTI",
+        "FICATE-----\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a\n",
+        "-----E",
+        "ND CERTI",
+        "FICATE-----\n"
+      ]
+    },
+    {
+      "rule": "aws_access_key_id",
+      "parts": ["id ", "AK", "IA", "A1B2C3D4"]
+    },
+    {
+      "rule": "aws_access_key_id",
+      "parts": ["id ", "AK", "IA", "A1B2C3D4E5F6G7H8J", " too long"]
+    },
+    {
+      "rule": "github_token",
+      "parts": ["gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f"]
+    },
+    {
+      "rule": "github_token",
+      "parts": ["gh", "x_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"]
+    },
+    {
+      "rule": "github_token",
+      "parts": ["github_", "pat_", "a1b2c3d4e5"]
+    },
+    {
+      "rule": "slack_token",
+      "parts": ["xo", "xz-", "1234567890123", "-abcdef"]
+    },
+    {
+      "rule": "slack_token",
+      "parts": ["xo", "xb-", "12345"]
+    },
+    {
+      "rule": "anthropic_key",
+      "parts": ["sk-an", "t-", "short"]
+    },
+    {
+      "rule": "openai_key",
+      "parts": ["the task-list is a risk-free plan"]
+    },
+    {
+      "rule": "openai_key",
+      "parts": ["sk", "-", "short"]
+    },
+    {
+      "rule": "google_api_key",
+      "parts": ["AI", "za", "1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4"]
+    },
+    {
+      "rule": "stripe_secret_key",
+      "parts": ["pk_", "live_", "a1b2c3d4e5f6a1b2c3d4e5f6"]
+    },
+    {
+      "rule": "stripe_secret_key",
+      "parts": ["sk_", "prod_", "a1b2c3d4e5f6a1b2c3d4e5f6"]
+    },
+    {
+      "rule": "jwt",
+      "parts": ["ey", "J", "hbGciOiJIUzI1NiJ9", ".", "ey", "J", "zdWIiOiJ1c2VyIn0"]
+    },
+    {
+      "rule": "bearer",
+      "parts": ["the bearer of the news arrived"]
+    },
+    {
+      "rule": "bearer",
+      "parts": ["Bearer token authentication is used here"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["secre", "tary: ", "abcdefghij"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["to", "ken_count: ", "1234567"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: ${DB_", "PASSWORD}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: $DB_", "PASSWORD"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["api", "_key: <your-api-", "key>"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["api", "_token: {{ api_", "token }}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["to", "ken: ${{ secrets.", "NAME }}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["Secre", "t: none"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["the pass", "word is stored elsewhere"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word=\"abc\" and other things here"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: short"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["to", "ken: ", "[REDACTED:", "github_token]"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: \"[REDACTED:", "labeled_secret]\""]
+    },
+    {
+      "rule": "iban",
+      "parts": ["NL92", " ABNA 0417 1643 ", "00"]
+    },
+    {
+      "rule": "iban",
+      "parts": ["ZZ91", " ABNA 0417 1643 ", "00"]
+    },
+    {
+      "rule": "iban",
+      "parts": ["NL91", " ABNA 0417 1643 ", "0"]
+    },
+    {
+      "rule": "iban",
+      "parts": ["NL ", "91 ABNA 0417 1643 00"]
+    },
+    {
+      "rule": "iban",
+      "parts": ["AB12 ", "NL ", "91 ABNA 0417 1643 00"]
+    },
+    {
+      "rule": "iban",
+      "parts": ["GB29", " NWBK 6016 1331 ", "9268 1"]
+    },
+    {
+      "rule": "aws_access_key_id",
+      "parts": ["id", "x", "AK", "IA", "A1B2C3D4E5F6G7H8"]
+    },
+    {
+      "rule": "github_token",
+      "parts": ["my", "gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"]
+    },
+    {
+      "rule": "github_token",
+      "parts": [
+        "my-",
+        "github_",
+        "pat_",
+        "A1B2C3D4A1B2C3D4A1B2C3",
+        "_",
+        "e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f"
+      ]
+    },
+    {
+      "rule": "slack_token",
+      "parts": [
+        "a",
+        "xo",
+        "xb-",
+        "a1b2c3d4e5f6g",
+        "-",
+        "a1b2c3d4e5f6g",
+        "-",
+        "a1b2c3d4a1b2c3d4a1b2c3d4"
+      ]
+    },
+    {
+      "rule": "anthropic_key",
+      "parts": [
+        "x",
+        "sk-an",
+        "t-api03-",
+        "Ab1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4Ab-Cd2Ef3G_4A-1Cd2Ef3Gh_-b1Cd2Ef3Gh-_b1Cd2Ef3G-4A_1Cd2Ef3-h"
+      ]
+    },
+    {
+      "rule": "openai_key",
+      "parts": ["ask-", "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3"]
+    },
+    {
+      "rule": "google_api_key",
+      "parts": ["x", "AI", "za", "1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1-d2Ef3_h4A"]
+    },
+    {
+      "rule": "stripe_secret_key",
+      "parts": ["x", "sk_", "live_", "a1b2c3d4e5f6a1b2c3d4e5f6"]
+    },
+    {
+      "rule": "jwt",
+      "parts": [
+        "x",
+        "ey",
+        "J",
+        "hbGciOiJIUzI1NiJ9",
+        ".",
+        "ey",
+        "J",
+        "zdWIiOiJ1c2VyIn0",
+        ".",
+        "c2lnbmF0dXJl"
+      ]
+    },
+    {
+      "rule": "bearer",
+      "parts": ["xbear", "er ", "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["4111", " 1111", " 1111", " 1113"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["4111", " 1111", " 1111", " 1114"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["+34 ", "612 ", "345 ", "678"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["2024-", "10-31 ", "12:30:45"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["Order ", "number 12345678"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word_policy: ", "strongest"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["api", "_key_name: ", "billing-prod"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["to", "ken_limit: ", "40960000"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["sec", "ret_key_ids: ", "abcdefgh"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["ref ", "5466", " 4807", " 8460", " 3931", " ok"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["Ref ", "958-3025666-", "4696152"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["call 795 428 ", "4486 660 533 ", "9668 ok"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["ref 274 015 ", "244 446 0462 ok"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["ref 62 8991 ", "5739 5534 25 ok"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["max_to", "kens: ", "1234567"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["DB_PASS", "WORD_URL: ", "https://x.example.com/a"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["secre", "tary: ", "Johnson-Smith"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\"pass", "word\":\"abc\"}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\\\"pass", "word\\\":\\\"abc\\\"}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: 'abcde' and more"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["sort_", "key: ", "alphabetical"]
+    }
+  ],
+  "frontmatter": [
+    {
+      "rule": "labeled_secret",
+      "field": "secretary",
+      "kind": "string",
+      "parts": ["abcdefghij"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "token_count",
+      "kind": "number",
+      "parts": ["1234567"]
+    },
+    {
+      "rule": "card_number",
+      "field": "payment",
+      "kind": "number",
+      "parts": ["4111", "1111", "1111", "1113"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password",
+      "kind": "string",
+      "parts": ["${DB_", "PASSWORD}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password",
+      "kind": "string",
+      "parts": ["[REDACTED:", "labeled_secret]"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password",
+      "kind": "string",
+      "parts": ["none"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "title",
+      "kind": "string",
+      "parts": ["A plain title with several words"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password_policy",
+      "kind": "string",
+      "parts": ["strong", "est"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "api_key_name",
+      "kind": "string",
+      "parts": ["billing", "-prod"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "token_limit",
+      "kind": "number",
+      "parts": ["40960", "000"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "max_tokens",
+      "kind": "number",
+      "parts": ["1234567"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "DB_PASSWORD_URL",
+      "kind": "string",
+      "parts": ["https://x.example.com/a"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "token_count_2",
+      "kind": "string",
+      "parts": ["abcdefghij"]
+    }
+  ]
+}
