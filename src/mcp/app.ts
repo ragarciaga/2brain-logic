@@ -1,3 +1,4 @@
+import type { AuthInfo } from "@modelcontextprotocol/server";
 import { Hono } from "hono";
 import { registerAuthorizeRoute } from "../auth/oauth/authorize.js";
 import { type CodeStore, createCodeStore } from "../auth/oauth/codes.js";
@@ -5,6 +6,7 @@ import { registerDiscoveryRoutes } from "../auth/oauth/metadata.js";
 import { registerClientRoute } from "../auth/oauth/register.js";
 import type { AuthStore } from "../auth/oauth/store.js";
 import { registerTokenRoutes } from "../auth/oauth/token.js";
+import { type McpServerDeps, type McpToolDefinition, registerMcpRoute } from "./server.js";
 
 /**
  * Every path the public app serves or advertises. Routes are mounted from these constants and
@@ -39,17 +41,25 @@ export interface PublicUrls {
   readonly revocationEndpoint: string;
 }
 
-export type PublicAppEnv = { Variables: { urls: PublicUrls } };
+/** `mcpAuth` is set by the Bearer check of `/mcp` for the handler behind it. */
+export type PublicAppEnv = { Variables: { urls: PublicUrls; mcpAuth: AuthInfo } };
 
 export interface PublicAppOptions {
+  /**
+   * What the MCP tools need. `/mcp` is served only when both this and `auth` are given;
+   * otherwise it answers 404.
+   */
+  mcp?: McpServerDeps;
+  /** Test seam: the tool registry and the per-request deadline. Production never sets it. */
+  mcpSeams?: { tools?: readonly McpToolDefinition[]; deadlineMs?: number };
   /** `PUBLIC_BASE_URL` as read by `loadEnv`: an origin. Never the whole public environment. */
   baseUrl: string;
   /** Where the one-line internal error record goes. Defaults to `console.error`. */
   log?: (line: string) => void;
   /**
    * What the OAuth routes need. Without it only the discovery documents are served and
-   * `POST /register`, `GET /authorize`, `POST /authorize`, `POST /token` and `POST /revoke`
-   * answer 404.
+   * `POST /register`, `GET /authorize`, `POST /authorize`, `POST /token`, `POST /revoke` and
+   * `/mcp` answer 404.
    */
   auth?: {
     store: AuthStore;
@@ -96,9 +106,10 @@ export function buildPublicUrls(baseUrl: string): PublicUrls {
  * The public Hono app, served on `MCP_PORT`. It serves the discovery documents (RFC 9728 and
  * RFC 8414) and, when `auth` is given, `POST /register` (RFC 7591), `GET /authorize` (the
  * sign-in page), `POST /authorize` (the owner sign-in), `POST /token` and `POST /revoke`
- * (RFC 7009); every other path answers 404 (Hono's default), including the ingest routes: the
- * ingest API never answers here, with or without the ingest token. Later tasks mount their
- * routes on this app from `PUBLIC_PATHS`.
+ * (RFC 7009) and, when `auth` and `mcp` are given, `/mcp` behind the Origin and Bearer checks;
+ * every other path answers 404 (Hono's default), including the ingest routes: the ingest API
+ * never answers here, with or without the ingest token. Later tasks mount their routes on this
+ * app from `PUBLIC_PATHS`.
  *
  * Handlers read the advertised URLs from `c.var.urls`. They never derive a URL from the request.
  *
@@ -106,7 +117,13 @@ export function buildPublicUrls(baseUrl: string): PublicUrls {
  * `Cache-Control: no-store` and logs the single line `mcp: internal_error`. The error and the
  * headers set before it was thrown are dropped: the handler never looks at them.
  */
-export function createPublicApp({ baseUrl, log = console.error, auth }: PublicAppOptions): {
+export function createPublicApp({
+  baseUrl,
+  log = console.error,
+  auth,
+  mcp,
+  mcpSeams,
+}: PublicAppOptions): {
   app: Hono<PublicAppEnv>;
   urls: PublicUrls;
 } {
@@ -160,6 +177,17 @@ export function createPublicApp({ baseUrl, log = console.error, auth }: PublicAp
       tokenNow: auth.tokenNow,
       log,
     });
+    if (mcp !== undefined) {
+      registerMcpRoute(app, {
+        store: auth.store,
+        urls,
+        allowedRedirectHosts: auth.allowedRedirectHosts,
+        deps: mcp,
+        tools: mcpSeams?.tools,
+        deadlineMs: mcpSeams?.deadlineMs,
+        log,
+      });
+    }
   }
 
   return { app, urls };

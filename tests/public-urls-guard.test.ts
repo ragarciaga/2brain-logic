@@ -69,8 +69,10 @@ function listFiles(): string[] {
 }
 
 describe("D2: the public app builds no URL from the request", () => {
-  it("scans the public app files, including app.ts, metadata.ts and ingest-token.ts", () => {
+  it("scans the public app files, including app.ts, server.ts, bearer.ts, metadata.ts and ingest-token.ts", () => {
     const files = listFiles();
+    expect(files).toContain("src/mcp/server.ts");
+    expect(files).toContain("src/auth/oauth/bearer.ts");
     expect(files).toContain("src/mcp/app.ts");
     expect(files).toContain("src/auth/oauth/metadata.ts");
     expect(files).toContain("src/auth/ingest-token.ts");
@@ -142,6 +144,12 @@ describe("D2: the guard patterns", () => {
     expect(findForbidden("src/auth/rate-limit.ts", "const a = c.req.url;").length).toBeGreaterThan(
       0,
     );
+  });
+
+  it("has no exemption for the raw request: it is flagged in the MCP route files", () => {
+    for (const file of ["src/mcp/server.ts", "src/mcp/app.ts", "src/auth/oauth/bearer.ts"]) {
+      expect(findForbidden(file, "const r = c.req.raw;").length, file).toBeGreaterThan(0);
+    }
   });
 
   it("reports the file and the line of a finding", () => {
