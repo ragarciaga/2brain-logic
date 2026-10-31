@@ -4,7 +4,13 @@ import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
 import { NoteInput } from "../vault/note-schema.js";
-import { NoteExistsError, type NoteWriter, UnsafePathError } from "../vault/write-note.js";
+import {
+  InvalidFrontmatterError,
+  NoteExistsError,
+  type NoteWriter,
+  UnsafePathError,
+  WrongFolderError,
+} from "../vault/write-note.js";
 
 export interface AppOptions {
   writer: NoteWriter;
@@ -79,6 +85,22 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
         if (error instanceof UnsafePathError) {
           log("unsafe_path rejected");
           return c.json({ ok: false, error: "unsafe_path" }, 400);
+        }
+        if (error instanceof InvalidFrontmatterError) {
+          log("invalid_frontmatter rejected");
+          return c.json(
+            {
+              ok: false,
+              error: "invalid_frontmatter",
+              missing: error.missing,
+              invalid: error.invalid,
+            },
+            400,
+          );
+        }
+        if (error instanceof WrongFolderError) {
+          log("wrong_folder rejected");
+          return c.json({ ok: false, error: "wrong_folder", expected: error.expected }, 400);
         }
         if (error instanceof GitError) {
           log(`write_failed: git ${error.subcommand} exit ${error.exitCode ?? "unknown"}`);

@@ -27,17 +27,30 @@ curl http://127.0.0.1:3000/health
 curl -X POST http://127.0.0.1:3000/notes \
   -H "authorization: Bearer $INGEST_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"path":"Inbox/hello.md","frontmatter":{"title":"Hello"},"body":"First note.\n"}'
-# {"ok":true,"path":"Inbox/hello.md","commit":"<sha>"}
+  -d '{"path":"inbox/hello.md","frontmatter":{"type":"idea","area":"personal","date":"2026-10-31","source":"manual","title":"Hello"},"body":"First note.\n"}'
+# {"ok":true,"path":"inbox/hello.md","commit":"<sha>"}
 ```
 
-`POST /notes` pulls with rebase, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>`
-and pushes. Every route except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the
-answer is 401 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for
-a missing or wrong token, 409 when the path already exists (it never overwrites), 413 for a body
-over 1 MB, 415 unless the content type is `application/json`, 500 when git fails, and 503
-`config_invalid` when the vault's `.2brain/config.yaml` is invalid (the body names only the file
-and the key: `{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
+`POST /notes` pulls with rebase, reads the vault config, validates the frontmatter and the path
+against it, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>` and pushes. Every route
+except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the answer is 401
+`unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for a missing or
+wrong token, 409 when the path already exists (it never overwrites), 413 for a body over 1 MB, 415
+unless the content type is `application/json`, 500 when git fails, and 503 `config_invalid` when
+the vault's `.2brain/config.yaml` is invalid (the body names only the file and the key:
+`{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
+
+A note needs the four canonical properties (`type`, `area`, `date`, `source` by default; the vault
+config can rename them). `type` must be one of the configured type values, `area` one of the
+configured areas, `date` a real calendar date as `YYYY-MM-DD`, and `source` a non-empty string
+(one of the configured sources when the config lists any). A note that fails answers 400
+`invalid_frontmatter` with the property names that are absent in `missing` and the ones with a
+rejected value in `invalid`: `{"ok":false,"error":"invalid_frontmatter","missing":[...],"invalid":[...]}`.
+When the type has a folder in the config (`{area}` is replaced by the note's area), the path must be
+inside it, or the answer is 400 `wrong_folder` with `{"ok":false,"error":"wrong_folder","expected":"<folder>"}`.
+A type without a folder accepts any safe path. Neither answer, nor the log line, repeats a value
+from the request, and nothing is written. The default type folders are listed in
+`vault-template/.2brain/config.yaml`.
 Each write reads the vault config right after the pull, so a config change pushed from another
 clone applies to the next write without a restart.
 

@@ -260,7 +260,11 @@ describe("built entry point", () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ ok: true });
 
-      const body = JSON.stringify({ path: "Inbox/spawn.md", frontmatter: {}, body: "hi\n" });
+      const body = JSON.stringify({
+        path: "inbox/spawn.md",
+        frontmatter: { type: "idea", area: "personal", date: "2026-10-31", source: "manual" },
+        body: "hi\n",
+      });
       const headers = { "content-type": "application/json" };
       const denied = await fetch(`${url}/notes`, { method: "POST", body, headers });
       expect(denied.status).toBe(401);
@@ -271,7 +275,20 @@ describe("built entry point", () => {
         headers: { ...headers, authorization: `Bearer ${TOKEN}` },
       });
       expect(created.status).toBe(201);
-      expect(git(fixture.remote, ["show", "main:Inbox/spawn.md"])).toContain("hi");
+      expect(git(fixture.remote, ["show", "main:inbox/spawn.md"])).toContain("hi");
+
+      const rejected = await fetch(`${url}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ path: "inbox/bad.md", frontmatter: {}, body: "hi\n" }),
+        headers: { ...headers, authorization: `Bearer ${TOKEN}` },
+      });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({
+        ok: false,
+        error: "invalid_frontmatter",
+        missing: ["type", "area", "date", "source"],
+        invalid: [],
+      });
       expect(output).not.toContain(TOKEN);
     } finally {
       child.kill();

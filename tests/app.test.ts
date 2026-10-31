@@ -3,7 +3,13 @@ import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
 import type { NoteInput } from "../src/vault/note-schema.js";
-import { NoteExistsError, type NoteWriter, UnsafePathError } from "../src/vault/write-note.js";
+import {
+  InvalidFrontmatterError,
+  NoteExistsError,
+  type NoteWriter,
+  UnsafePathError,
+  WrongFolderError,
+} from "../src/vault/write-note.js";
 
 const TOKEN = "fictional-app-token-0123456789-abcdefghijk";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
@@ -200,6 +206,55 @@ describe("POST /notes", () => {
     for (const output of [text, ...logs]) {
       expect(output).not.toContain("Inbox");
       expect(output).not.toContain("/");
+    }
+  });
+
+  it("R3.1: returns 400 invalid_frontmatter with the owner names and logs only the code", async () => {
+    const { app, logs } = setup(async () => {
+      throw new InvalidFrontmatterError(["kind", "origin"], ["day"]);
+    });
+    const response = await post(app, JSON.stringify(valid));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: "invalid_frontmatter",
+      missing: ["kind", "origin"],
+      invalid: ["day"],
+    });
+    expect(logs).toEqual(["invalid_frontmatter rejected"]);
+  });
+
+  it("R3.4: returns 400 wrong_folder with the expected folder and logs only the code", async () => {
+    const { app, logs } = setup(async () => {
+      throw new WrongFolderError("work/meetings");
+    });
+    const response = await post(app, JSON.stringify(valid));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: "wrong_folder",
+      expected: "work/meetings",
+    });
+    expect(logs).toEqual(["wrong_folder rejected"]);
+  });
+
+  it("D1: a request value never reaches a validation response or log", async () => {
+    const request = JSON.stringify({
+      ...valid,
+      frontmatter: { type: "VALUEMARKER", title: "VALUEMARKER" },
+    });
+    for (const error of [
+      new InvalidFrontmatterError(["type"], []),
+      new WrongFolderError("inbox"),
+    ]) {
+      const { app, logs } = setup(async () => {
+        throw error;
+      });
+      const response = await post(app, request);
+      expect(response.status).toBe(400);
+      for (const output of [await response.text(), ...logs]) {
+        expect(output).not.toContain("VALUEMARKER");
+      }
     }
   });
 
