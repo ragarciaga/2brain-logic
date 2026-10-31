@@ -142,9 +142,15 @@ export type PublicEnv = z.output<typeof PublicEnvSchema>;
 
 export type Env = z.infer<typeof EnvSchema> & { publicApp?: PublicEnv };
 
-function isInside(child: string, parent: string): boolean {
+/**
+ * True when `child` is `parent` or below it, comparing resolved paths. Only a first segment of
+ * exactly `..` leaves the parent: a child named `..auth` is inside. No filesystem access, so a
+ * symlink is the caller's business (`openAuthStore` compares real paths).
+ */
+export function isInside(child: string, parent: string): boolean {
   const relative = path.relative(path.resolve(parent), path.resolve(child));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  if (relative === "") return true;
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 /**
@@ -155,7 +161,8 @@ function isInside(child: string, parent: string): boolean {
  * The public MCP part (`publicApp`) is read only when PUBLIC_BASE_URL is set (non-empty). Without
  * it the result has no `publicApp` key and the other public variables are not looked at. With it,
  * OWNER_PASSPHRASE_HASH is required and well formed, and AUTH_STORE_DIR must not be inside
- * VAULT_DIR. Problems from both parts come back in one error.
+ * VAULT_DIR (compared by path here; `openAuthStore` compares real paths when it opens the store).
+ * Problems from both parts come back in one error.
  */
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
   // An empty value in .env (`VAULT_REMOTE=`) means "not set".
