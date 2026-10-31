@@ -8,6 +8,7 @@ import {
   InvalidFrontmatterError,
   NoteExistsError,
   type NoteWriter,
+  ScrubFailedError,
   UnsafePathError,
   WrongFolderError,
 } from "../vault/write-note.js";
@@ -70,8 +71,17 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
 
       try {
         const result = await writer.write(parsed.data);
+        const redactions = result.redactions;
+        if (redactions !== undefined && redactions.length > 0) {
+          log(`redacted: ${redactions.map((r) => `${r.rule}=${r.count}`).join(", ")}`);
+          return c.json({ ok: true, path: result.path, commit: result.commit, redactions }, 201);
+        }
         return c.json({ ok: true, path: result.path, commit: result.commit }, 201);
       } catch (error) {
+        if (error instanceof ScrubFailedError) {
+          log("scrub_failed");
+          return c.json({ ok: false, error: "scrub_failed" }, 500);
+        }
         if (error instanceof ConfigInvalidError) {
           log(configInvalidLogLine(error));
           return c.json(

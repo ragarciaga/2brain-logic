@@ -7,6 +7,7 @@ import {
   InvalidFrontmatterError,
   NoteExistsError,
   type NoteWriter,
+  ScrubFailedError,
   UnsafePathError,
   WrongFolderError,
 } from "../src/vault/write-note.js";
@@ -266,6 +267,69 @@ describe("POST /notes", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ ok: false, error: "write_failed" });
     expect(logs).toEqual(["write_failed: git push exit 128"]);
+  });
+
+  describe("secret scrub", () => {
+    it("R4.3: a result with redactions adds them to the 201 body and logs rule=count pairs", async () => {
+      const redactions = [
+        { rule: "anthropic_key", count: 1 },
+        { rule: "github_token", count: 2 },
+      ];
+      const { app, logs } = setup(async (note) => ({
+        path: note.path,
+        commit: "abc123",
+        redactions,
+      }));
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(201);
+      expect(await response.json()).toEqual({
+        ok: true,
+        path: "Inbox/idea.md",
+        commit: "abc123",
+        redactions,
+      });
+      expect(logs).toEqual(["redacted: anthropic_key=1, github_token=2"]);
+    });
+
+    it("R4.3: a single redaction logs one pair", async () => {
+      const { app, logs } = setup(async (note) => ({
+        path: note.path,
+        commit: "abc123",
+        redactions: [{ rule: "github_token", count: 2 }],
+      }));
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(201);
+      expect(logs).toEqual(["redacted: github_token=2"]);
+    });
+
+    it("R4.3: an empty redactions list leaves no key and no log line", async () => {
+      const { app, logs } = setup(async (note) => ({
+        path: note.path,
+        commit: "abc123",
+        redactions: [],
+      }));
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(201);
+      expect(await response.json()).toEqual({ ok: true, path: "Inbox/idea.md", commit: "abc123" });
+      expect(logs).toEqual([]);
+    });
+
+    it("R4.3: a result without redactions leaves no key and no log line", async () => {
+      const { app, logs } = setup();
+      const response = await post(app, JSON.stringify(valid));
+      expect(await response.json()).toEqual({ ok: true, path: "Inbox/idea.md", commit: "abc123" });
+      expect(logs).toEqual([]);
+    });
+
+    it("R4.4: ScrubFailedError gives 500 scrub_failed and logs only that code", async () => {
+      const { app, logs } = setup(async () => {
+        throw new ScrubFailedError();
+      });
+      const response = await post(app, JSON.stringify(valid));
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "scrub_failed" });
+      expect(logs).toEqual(["scrub_failed"]);
+    });
   });
 
   describe("config_invalid", () => {
