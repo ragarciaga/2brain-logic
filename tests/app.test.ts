@@ -80,16 +80,23 @@ describe("POST /notes", () => {
     expect(body.issues[0]).toHaveProperty("path", "body");
   });
 
-  it.each([
-    ["text/plain", { "content-type": "text/plain" }],
-    ["no content-type", {}],
-  ])("returns 415 and never calls the writer for %s", async (_name, headers) => {
+  it("returns 415 and never calls the writer for text/plain", async () => {
     const { app, writer } = setup();
-    const response = await app.request("/notes", {
+    const response = await post(app, JSON.stringify(valid), { "content-type": "text/plain" });
+    expect(response.status).toBe(415);
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it("returns 415 and never calls the writer when the request has no content-type header", async () => {
+    const { app, writer } = setup();
+    // A string body would get an automatic text/plain type; a byte body gets none.
+    const request = new Request("http://localhost/notes", {
       method: "POST",
-      body: JSON.stringify(valid),
-      headers,
+      body: new TextEncoder().encode(JSON.stringify(valid)),
     });
+    request.headers.delete("content-type");
+    expect(request.headers.get("content-type")).toBeNull();
+    const response = await app.request(request);
     expect(response.status).toBe(415);
     expect(writer.write).not.toHaveBeenCalled();
   });

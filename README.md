@@ -16,7 +16,8 @@ cp .env.example .env   # then set VAULT_REMOTE, GIT_AUTHOR_NAME and GIT_AUTHOR_E
 npm start
 ```
 
-`npm start` builds, clones `VAULT_REMOTE` into `VAULT_DIR` when it is empty, and listens on
+`npm start` builds, clones `VAULT_REMOTE` into `VAULT_DIR` when `VAULT_DIR` is not a git repository yet (the
+directory must be missing or empty, or the clone fails), and listens on
 `127.0.0.1:3000` (loopback only; set `HOST` to change it).
 
 ```bash
