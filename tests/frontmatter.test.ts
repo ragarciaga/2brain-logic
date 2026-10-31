@@ -68,6 +68,25 @@ describe("stringifyNote", () => {
 });
 
 describe("parseNote", () => {
+  it("keeps unquoted YAML timestamps as the strings they were written as", () => {
+    const parsed = parseNote(
+      "---\ndate: 2026-10-31\nat: 2026-10-31T10:00:00Z\nquoted: '2026-10-31'\n---\nx\n",
+    );
+    expect(parsed.data).toEqual({
+      date: "2026-10-31",
+      at: "2026-10-31T10:00:00Z",
+      quoted: "2026-10-31",
+    });
+  });
+
+  it("still resolves the other safe types and merge keys, and refuses custom tags", () => {
+    const parsed = parseNote(
+      "---\nn: 3\nb: true\nz: null\nbase: &b {x: 1}\nuse:\n  <<: *b\n  y: 2\n---\n",
+    );
+    expect(parsed.data).toEqual({ n: 3, b: true, z: null, base: { x: 1 }, use: { x: 1, y: 2 } });
+    expect(() => parseNote("---\nf: !!js/function 'function(){}'\n---\n")).toThrow();
+  });
+
   it("rejects an opening fence that names a language", () => {
     expect(() => parseNote("---js\nglobalThis.__pwned = true\n---\nx\n")).toThrow();
     expect(globalThis.__pwned).toBeUndefined();

@@ -1,9 +1,11 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import type { z } from "zod";
 import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
-import { NoteInput } from "../vault/note-schema.js";
+import { NoteInput, NotePatch } from "../vault/note-schema.js";
+import { NoteNotFoundError } from "../vault/operations.js";
 import { SourceIndexLimitError } from "../vault/source-index.js";
 import {
   DuplicateSourceError,
@@ -13,6 +15,7 @@ import {
   PushPendingError,
   ScrubFailedError,
   UnsafePathError,
+  type WriteResult,
   WrongFolderError,
 } from "../vault/write-note.js";
 
@@ -36,124 +39,160 @@ export function configInvalidLogLine(error: ConfigInvalidError): string {
     : `config_invalid: ${error.file} at ${error.keyPath}`;
 }
 
+/** Body of a `invalid_body` response: where and why, never the rejected value. */
+function issuesOf(error: z.ZodError): { path: string; message: string }[] {
+  return error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }));
+}
+
+type JsonBody = { ok: true; value: unknown } | { ok: false; response: Response };
+
+/** Content type check and JSON parse shared by POST and PATCH. */
+async function readJsonBody(c: Context): Promise<JsonBody> {
+  const mediaType = (c.req.header("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") {
+    return {
+      ok: false,
+      response: c.json({ ok: false, error: "unsupported_media_type" }, 415),
+    };
+  }
+  try {
+    return { ok: true, value: await c.req.json() };
+  } catch {
+    return { ok: false, response: c.json({ ok: false, error: "invalid_json" }, 400) };
+  }
+}
+
 export function createApp({ writer, ingestToken, log = console.error }: AppOptions): Hono {
   const app = new Hono();
+
+  const limit = bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (c) => c.json({ ok: false, error: "payload_too_large" }, 413),
+  });
+
+  function okResponse(c: Context, result: WriteResult, changedStatus: 200 | 201): Response {
+    const redactions = result.redactions;
+    const hasRedactions = redactions !== undefined && redactions.length > 0;
+    if (hasRedactions) {
+      log(`redacted: ${redactions.map((r) => `${r.rule}=${r.count}`).join(", ")}`);
+    }
+    if (result.unchanged) {
+      return c.json(
+        {
+          ok: true,
+          path: result.path,
+          commit: null,
+          unchanged: true,
+          ...(hasRedactions ? { redactions } : {}),
+        },
+        200,
+      );
+    }
+    return c.json(
+      {
+        ok: true,
+        path: result.path,
+        commit: result.commit,
+        ...(hasRedactions ? { redactions } : {}),
+      },
+      changedStatus,
+    );
+  }
+
+  function errorResponse(c: Context, error: unknown): Response {
+    if (error instanceof DuplicateSourceError) {
+      log("duplicate_source rejected");
+      return c.json({ ok: false, error: "duplicate_source", path: error.existingPath }, 409);
+    }
+    if (error instanceof SourceIndexLimitError) {
+      log("write_failed: source index limit");
+      return c.json({ ok: false, error: "write_failed" }, 500);
+    }
+    if (error instanceof ScrubFailedError) {
+      log("scrub_failed");
+      return c.json({ ok: false, error: "scrub_failed" }, 500);
+    }
+    if (error instanceof ConfigInvalidError) {
+      log(configInvalidLogLine(error));
+      return c.json(
+        { ok: false, error: "config_invalid", file: error.file, keyPath: error.keyPath },
+        503,
+      );
+    }
+    if (error instanceof NoteExistsError) {
+      return c.json({ ok: false, error: "note_exists" }, 409);
+    }
+    if (error instanceof NoteNotFoundError) {
+      log("note_not_found");
+      return c.json({ ok: false, error: "note_not_found" }, 404);
+    }
+    if (error instanceof UnsafePathError) {
+      log("unsafe_path rejected");
+      return c.json({ ok: false, error: "unsafe_path" }, 400);
+    }
+    if (error instanceof InvalidFrontmatterError) {
+      log("invalid_frontmatter rejected");
+      return c.json(
+        {
+          ok: false,
+          error: "invalid_frontmatter",
+          missing: error.missing,
+          invalid: error.invalid,
+        },
+        400,
+      );
+    }
+    if (error instanceof WrongFolderError) {
+      log("wrong_folder rejected");
+      return c.json({ ok: false, error: "wrong_folder", expected: error.expected }, 400);
+    }
+    if (error instanceof PushPendingError) {
+      log(`push_pending: git push exit ${error.exitCode ?? "unknown"}`);
+      return c.json(
+        { ok: false, error: "push_pending", path: error.path, commit: error.commit },
+        502,
+      );
+    }
+    if (error instanceof GitError) {
+      log(`write_failed: git ${error.subcommand} exit ${error.exitCode ?? "unknown"}`);
+      return c.json({ ok: false, error: "write_failed" }, 500);
+    }
+    log("write_failed: unexpected error");
+    return c.json({ ok: false, error: "write_failed" }, 500);
+  }
 
   // First registration: nothing below runs for a request that fails the token check.
   app.use("*", ingestTokenAuth(ingestToken));
 
   app.get("/health", (c) => c.json({ ok: true }));
 
-  app.post(
-    "/notes",
-    bodyLimit({
-      maxSize: MAX_BODY_BYTES,
-      onError: (c) => c.json({ ok: false, error: "payload_too_large" }, 413),
-    }),
-    async (c) => {
-      const mediaType = (c.req.header("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
-      if (mediaType !== "application/json") {
-        return c.json({ ok: false, error: "unsupported_media_type" }, 415);
-      }
+  app.post("/notes", limit, async (c) => {
+    const body = await readJsonBody(c);
+    if (!body.ok) return body.response;
+    const parsed = NoteInput.safeParse(body.value);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: "invalid_body", issues: issuesOf(parsed.error) }, 400);
+    }
+    try {
+      return okResponse(c, await writer.write(parsed.data), 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
 
-      let raw: unknown;
-      try {
-        raw = await c.req.json();
-      } catch {
-        return c.json({ ok: false, error: "invalid_json" }, 400);
-      }
-
-      const parsed = NoteInput.safeParse(raw);
-      if (!parsed.success) {
-        const issues = parsed.error.issues.map((issue) => ({
-          path: issue.path.join("."),
-          message: issue.message,
-        }));
-        return c.json({ ok: false, error: "invalid_body", issues }, 400);
-      }
-
-      try {
-        const result = await writer.write(parsed.data);
-        const redactions = result.redactions;
-        const hasRedactions = redactions !== undefined && redactions.length > 0;
-        if (hasRedactions) {
-          log(`redacted: ${redactions.map((r) => `${r.rule}=${r.count}`).join(", ")}`);
-        }
-        if (result.unchanged) {
-          return c.json(
-            {
-              ok: true,
-              path: result.path,
-              commit: null,
-              unchanged: true,
-              ...(hasRedactions ? { redactions } : {}),
-            },
-            200,
-          );
-        }
-        if (hasRedactions) {
-          return c.json({ ok: true, path: result.path, commit: result.commit, redactions }, 201);
-        }
-        return c.json({ ok: true, path: result.path, commit: result.commit }, 201);
-      } catch (error) {
-        if (error instanceof DuplicateSourceError) {
-          log("duplicate_source rejected");
-          return c.json({ ok: false, error: "duplicate_source", path: error.existingPath }, 409);
-        }
-        if (error instanceof SourceIndexLimitError) {
-          log("write_failed: source index limit");
-          return c.json({ ok: false, error: "write_failed" }, 500);
-        }
-        if (error instanceof ScrubFailedError) {
-          log("scrub_failed");
-          return c.json({ ok: false, error: "scrub_failed" }, 500);
-        }
-        if (error instanceof ConfigInvalidError) {
-          log(configInvalidLogLine(error));
-          return c.json(
-            { ok: false, error: "config_invalid", file: error.file, keyPath: error.keyPath },
-            503,
-          );
-        }
-        if (error instanceof NoteExistsError) {
-          return c.json({ ok: false, error: "note_exists" }, 409);
-        }
-        if (error instanceof UnsafePathError) {
-          log("unsafe_path rejected");
-          return c.json({ ok: false, error: "unsafe_path" }, 400);
-        }
-        if (error instanceof InvalidFrontmatterError) {
-          log("invalid_frontmatter rejected");
-          return c.json(
-            {
-              ok: false,
-              error: "invalid_frontmatter",
-              missing: error.missing,
-              invalid: error.invalid,
-            },
-            400,
-          );
-        }
-        if (error instanceof WrongFolderError) {
-          log("wrong_folder rejected");
-          return c.json({ ok: false, error: "wrong_folder", expected: error.expected }, 400);
-        }
-        if (error instanceof PushPendingError) {
-          log(`push_pending: git push exit ${error.exitCode ?? "unknown"}`);
-          return c.json(
-            { ok: false, error: "push_pending", path: error.path, commit: error.commit },
-            502,
-          );
-        }
-        if (error instanceof GitError) {
-          log(`write_failed: git ${error.subcommand} exit ${error.exitCode ?? "unknown"}`);
-          return c.json({ ok: false, error: "write_failed" }, 500);
-        }
-        log("write_failed: unexpected error");
-        return c.json({ ok: false, error: "write_failed" }, 500);
-      }
-    },
-  );
+  app.patch("/notes", limit, async (c) => {
+    const body = await readJsonBody(c);
+    if (!body.ok) return body.response;
+    const parsed = NotePatch.safeParse(body.value);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: "invalid_body", issues: issuesOf(parsed.error) }, 400);
+    }
+    try {
+      return okResponse(c, await writer.patch(parsed.data), 200);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
 
   return app;
 }

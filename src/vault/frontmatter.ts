@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import matter from "gray-matter";
 
 /**
@@ -20,9 +21,36 @@ function refuse(): never {
   throw new UnsafeFrontmatterError("Frontmatter code engines are disabled");
 }
 
+/**
+ * The YAML types of js-yaml's safe schema without `timestamp`: an unquoted `2026-10-31` (the way
+ * Obsidian writes a date) stays the string it was written as, so a note edited by hand can be
+ * patched and dumped back without its dates turning into `Date` objects. No custom tags exist in
+ * this schema, so it stays safe. js-yaml is gray-matter's own dependency; it is loaded from there.
+ */
+interface JsYaml {
+  Schema: new (definition: object) => object;
+  CORE_SCHEMA: object;
+  DEFAULT_SAFE_SCHEMA: { implicit: { tag: string }[]; explicit: { tag: string }[] };
+}
+
+const TIMESTAMP_TAG = "tag:yaml.org,2002:timestamp";
+
+function stringTimestampSchema(): object {
+  const require = createRequire(import.meta.url);
+  const fromMatter = createRequire(require.resolve("gray-matter"));
+  const yaml = fromMatter("js-yaml") as JsYaml;
+  return new yaml.Schema({
+    include: [yaml.CORE_SCHEMA],
+    implicit: yaml.DEFAULT_SAFE_SCHEMA.implicit.filter((type) => type.tag !== TIMESTAMP_TAG),
+    explicit: yaml.DEFAULT_SAFE_SCHEMA.explicit,
+  });
+}
+
 const SAFE_OPTS = {
   language: "yaml",
   engines: { js: refuse, javascript: refuse },
+  // Passed through gray-matter to js-yaml's safeLoad.
+  schema: stringTimestampSchema(),
 };
 
 interface YamlEngine {

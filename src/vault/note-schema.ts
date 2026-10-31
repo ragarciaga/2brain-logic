@@ -33,11 +33,13 @@ function isSafePath(path: string): boolean {
   return path.split("/").every(isSafePathSegment);
 }
 
+export const NotePath = z.string().min(1).max(255).endsWith(".md").refine(isSafePath, {
+  message:
+    'path must be relative, without dot segments, control characters, Windows-unsafe characters (<>:"|?*), segments ending in a dot or space, or reserved device names',
+});
+
 export const NoteInput = z.object({
-  path: z.string().min(1).max(255).endsWith(".md").refine(isSafePath, {
-    message:
-      'path must be relative, without dot segments, control characters, Windows-unsafe characters (<>:"|?*), segments ending in a dot or space, or reserved device names',
-  }),
+  path: NotePath,
   frontmatter: z.record(z.string(), z.unknown()),
   body: z
     .string()
@@ -45,3 +47,16 @@ export const NoteInput = z.object({
 });
 
 export type NoteInput = z.infer<typeof NoteInput>;
+
+/**
+ * Set properties of an existing note. Strict: any other key (`append` included) is refused. A
+ * `__proto__` key is dropped by the record, so a `set` made only of it is empty and refused.
+ */
+export const NotePatch = z.strictObject({
+  path: NotePath,
+  set: z
+    .record(z.string(), z.unknown())
+    .refine((set) => Object.keys(set).length > 0, { message: "set must not be empty" }),
+});
+
+export type NotePatch = z.infer<typeof NotePatch>;
