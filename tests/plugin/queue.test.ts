@@ -74,6 +74,25 @@ describe("enqueue", () => {
     expect(existsSync(join(dir, "failed"))).toBe(true);
   });
 
+  it("stores the area when given, including an empty one, and none otherwise", () => {
+    const withArea = q.enqueue({ session_id: "a1" }, { area: "work" });
+    expect(withArea.data.area).toBe("work");
+    expect(JSON.parse(readFileSync(join(dir, "queue", withArea.name), "utf8")).area).toBe("work");
+    clock += 1;
+    const empty = q.enqueue({ session_id: "a2" }, { area: "" });
+    expect(empty.data.area).toBe("");
+    clock += 1;
+    const none = q.enqueue({ session_id: "a3" });
+    expect("area" in none.data).toBe(false);
+  });
+
+  it("keeps the area when an attempt is recorded", () => {
+    const job = q.enqueue({ session_id: "a4" }, { area: "work" });
+    const again = q.recordAttempt(job);
+    expect(again.data.area).toBe("work");
+    expect(q.list()[0]?.data.area).toBe("work");
+  });
+
   it("drops non-string values of allowed fields", () => {
     const job = q.enqueue({ session_id: "a", cwd: 5, reason: null });
     expect(job.data.event).toStrictEqual({ session_id: "a" });
