@@ -426,18 +426,18 @@
     },
     {
       "rule": "card_number",
-      "parts": ["long ", "6304", " 0000", " 0000", " 0000", " 0006"],
+      "parts": ["long ", "6304", " 0000", " 0000", " 0000", " 000"],
       "expected": "long [REDACTED:card_number]"
     },
     {
       "rule": "card_number",
       "parts": ["exp ", "4111", " 1111", " 1111", " 1111", " 12/27"],
-      "expected": "exp [REDACTED:card_number]/27"
+      "expected": "exp [REDACTED:card_number] 12/27"
     },
     {
       "rule": "card_number",
       "parts": ["cvv ", "4111", " 1111", " 1111", " 1111", " 123"],
-      "expected": "cvv [REDACTED:card_number]3"
+      "expected": "cvv [REDACTED:card_number] 123"
     },
     {
       "rule": "card_number",
@@ -454,6 +454,76 @@
       "parts": ["pair ", "4111", "1111", "1111", "1111", " and ", "5555", "5555", "5555", "4444"],
       "expected": "pair [REDACTED:card_number] and [REDACTED:card_number]",
       "count": 2
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["AWS Sec", "ret Access Key: ", "a1b2c3d4e5a1b2c3d4e5", "a1b2c3d4e5a1b2c3d4e5"],
+      "expected": "AWS Secret Access Key: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["Sec", "ret Key: ", "abcd1234", "efgh"],
+      "expected": "Secret Key: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["API", " Key: ", "abcd1234", "efgh"],
+      "expected": "API Key: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["Priv", "ate Key: ", "abcd1234", "efgh"],
+      "expected": "Private Key: [REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["SECRET", "_KEY_BASE=", "abcd1234", "efgh"],
+      "expected": "SECRET_KEY_BASE=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["DB_PASS", "WORD_PROD=", "abcd1234", "efgh"],
+      "expected": "DB_PASSWORD_PROD=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["API", "_KEY_V2=", "abcd1234", "efgh"],
+      "expected": "API_KEY_V2=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["GITHUB_", "TOKEN_RO=", "abcd1234", "efgh"],
+      "expected": "GITHUB_TOKEN_RO=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["smtp_pass", "word_2=", "abcd1234", "efgh"],
+      "expected": "smtp_password_2=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word1=", "abcd1234", "efgh"],
+      "expected": "password1=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["{\"pass", "word\": \"", "ab\\\"cd", "efghijkl", "\"}"],
+      "expected": "{\"password\": \"[REDACTED:labeled_secret]\"}"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: \"", "abcdefg\\\"", "hijkl", "\" and more"],
+      "expected": "password: \"[REDACTED:labeled_secret]\" and more"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: '", "abcdefg\\\\", "hijkl", "'"],
+      "expected": "password: '[REDACTED:labeled_secret]'"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word=\"", "abcdefg\\\"", "\nnext line\n"],
+      "expected": "password=\"[REDACTED:labeled_secret]\nnext line\n"
     }
   ],
   "frontmatter": [
@@ -523,6 +593,30 @@
       "field": "passphrase",
       "kind": "string",
       "parts": ["correct horse", " battery"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "Secret Key",
+      "kind": "string",
+      "parts": ["hunter", "2xyz"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "SECRET_KEY_BASE",
+      "kind": "string",
+      "parts": ["hunter", "2xyz"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password",
+      "kind": "string",
+      "parts": ["red cat", " 42 ok"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "passphrase",
+      "kind": "string",
+      "parts": ["a b c d", " e f g"]
     }
   ]
 }

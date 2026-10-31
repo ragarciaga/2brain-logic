@@ -257,6 +257,26 @@
     {
       "rule": "card_number",
       "parts": ["Order ", "number 12345678"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word_policy: ", "strongest"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["api", "_key_name: ", "billing-prod"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["to", "ken_limit: ", "40960000"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["sec", "ret_key_ids: ", "abcdefgh"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["ref ", "5466", " 4807", " 8460", " 3931", " ok"]
     }
   ],
   "frontmatter": [
@@ -301,6 +321,24 @@
       "field": "title",
       "kind": "string",
       "parts": ["A plain title with several words"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "password_policy",
+      "kind": "string",
+      "parts": ["strong", "est"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "api_key_name",
+      "kind": "string",
+      "parts": ["billing", "-prod"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "token_limit",
+      "kind": "number",
+      "parts": ["40960", "000"]
     }
   ]
 }

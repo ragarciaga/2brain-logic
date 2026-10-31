@@ -125,11 +125,21 @@ function hasLongRun(text: string): boolean {
   return /\S{6}/.test(text.replace(PLACEHOLDER_ANYWHERE, " "));
 }
 
+/** True when the text already carries a placeholder (a result of an earlier scrub). */
+function hasPlaceholder(text: string): boolean {
+  return new RegExp(PLACEHOLDER_ANYWHERE.source).test(text);
+}
+
 function addHits(into: Map<string, number>, from: Map<string, number>): void {
   for (const [id, count] of from) into.set(id, (into.get(id) ?? 0) + count);
 }
 
-/** Scrubs one string; under a label key an unrecognized value is redacted as a whole. */
+/**
+ * Scrubs one string. Under a label key an unrecognized value is redacted as a whole: when no rule
+ * hit and the value has 6 or more characters after trimming (a passphrase with spaces counts), or
+ * when a rule hit and a run of 6 or more non-space characters is left. A value that already holds
+ * a placeholder only gets the run test, so scrubbing the output again changes nothing.
+ */
 function scrubString(
   value: string,
   labeled: boolean,
@@ -137,7 +147,12 @@ function scrubString(
   hits: Map<string, number>,
 ): string {
   const result = scrub(value, rules);
-  if (labeled && !isPlaceholder(value) && hasLongRun(result.text)) {
+  const whole = result.hits.size === 0 && !hasPlaceholder(value);
+  if (
+    labeled &&
+    !isPlaceholder(value) &&
+    (whole ? value.trim().length >= 6 : hasLongRun(result.text))
+  ) {
     hits.set(LABELED_ID, (hits.get(LABELED_ID) ?? 0) + 1);
     return placeholder(LABELED_ID);
   }

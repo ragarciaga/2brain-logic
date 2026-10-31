@@ -215,7 +215,11 @@ describe("overlap, order and boundaries (D2, D6)", () => {
   });
 });
 
-/** Independent brute force for the card rule: every Luhn-valid window of 13 to 19 digits. */
+/**
+ * Independent brute force for the card rule: every Luhn-valid window of 13 to 19 digits that
+ * starts at the start of a digit run or right after a separator and ends at the end of the run or
+ * right before a separator.
+ */
 function cardOracle(input: string): { text: string; count: number } {
   const luhn = (digits: number[]) => {
     let sum = 0;
@@ -244,11 +248,17 @@ function cardOracle(input: string): { text: string; count: number } {
       }
     }
     if (digits.length < 13) continue;
+    // Digit index k starts a group when a separator sits before it; index e ends one likewise.
+    const groupStart = (k: number) =>
+      k === 0 || (offsets[k] as number) - (offsets[k - 1] as number) > 1;
+    const groupEnd = (e: number) =>
+      e === digits.length || (offsets[e] as number) - (offsets[e - 1] as number) > 1;
     const merged: Array<[number, number]> = [];
     for (let start = 0; start < digits.length; start++) {
+      if (!groupStart(start)) continue;
       let end = -1;
       for (let len = 13; len <= 19 && start + len <= digits.length; len++) {
-        if (luhn(digits.slice(start, start + len))) end = start + len;
+        if (groupEnd(start + len) && luhn(digits.slice(start, start + len))) end = start + len;
       }
       if (end < 0) continue;
       const current = merged[merged.length - 1];
@@ -298,14 +308,74 @@ describe("card windows (D6)", () => {
     expect(redacted).toBeGreaterThan(50);
   });
 
-  it("starts the next span at a window that begins exactly where the previous one ends", () => {
-    // 27 contiguous digits: the first span is [0,14) and no Luhn-valid window starts inside it,
-    // so the second span starts at offset 14, exactly where the first one ends.
-    const input = join("4262", "2844", "4493", "4771", "3228", "6329", "523");
+  it("starts the next span at the group that follows the end of the previous one", () => {
+    // Two Luhn-valid 16-digit cards in 8 groups: no valid window crosses the middle, so the first
+    // span ends at the fourth group and the second one starts at the fifth.
+    const input = join("8628", " 8220", " 0420", " 2000", " 4036", " 4688", " 4628", " 2266");
     expect(cardOracle(input).count).toBe(2);
     const result = scrub(input, [cardRule]);
-    expect(result.text).toBe(`${MARK("card_number")}${MARK("card_number")}`);
+    expect(result.text).toBe(`${MARK("card_number")} ${MARK("card_number")}`);
     expect(result.hits.get("card_number")).toBe(2);
+  });
+
+  it("never cuts a digit group: an unseparated run is a candidate only as a whole", () => {
+    // 27 contiguous digits hold Luhn-valid windows of 13 to 19 digits inside, but the run as a
+    // whole is longer than 19 digits, so nothing is redacted.
+    const long = join("4262", "2844", "4493", "4771", "3228", "6329", "523");
+    const inner = [...long.slice(0, 14)].map((_, at) => long.slice(at, at + 13)).filter(luhnValid);
+    expect(inner.length).toBeGreaterThan(0);
+    const result = scrub(long, [cardRule]);
+    expect(result.text).toBe(long);
+    expect(result.hits.size).toBe(0);
+  });
+
+  it("leaves Luhn-failing runs alone, unseparated and grouped, on seeded random digits", () => {
+    let state = 31102026;
+    const next = (limit: number) => {
+      // mulberry32
+      state = (state + 0x6d2b79f5) | 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return (((t ^ (t >>> 14)) >>> 0) % limit) | 0;
+    };
+    const luhnOk = (digits: string) => {
+      let sum = 0;
+      for (let i = 0; i < digits.length; i++) {
+        let d = Number(digits.charAt(digits.length - 1 - i));
+        if (i % 2 === 1) {
+          d *= 2;
+          if (d > 9) d -= 9;
+        }
+        sum += d;
+      }
+      return sum % 10 === 0;
+    };
+    const randomDigits = (length: number) => {
+      let out = "";
+      for (let i = 0; i < length; i++) out += String(next(10));
+      return out;
+    };
+    const fours = (digits: string) => (digits.match(/\d{1,4}/g) ?? []).join(" ");
+    for (const length of [16, 19]) {
+      let plain = 0;
+      let grouped = 0;
+      for (let round = 0; round < 5000 && (plain < 200 || grouped < 200); round++) {
+        const digits = randomDigits(length);
+        if (luhnOk(digits)) continue;
+        if (plain < 200) {
+          plain++;
+          expect(scrub(`ref ${digits} ok`, [cardRule]).text).toBe(`ref ${digits} ok`);
+        }
+        const spaced = fours(digits);
+        // A 19-digit run in groups of four also holds shorter aligned windows (16 and 15 digits).
+        if (grouped < 200 && cardOracle(spaced).count === 0) {
+          grouped++;
+          expect(scrub(`ref ${spaced} ok`, [cardRule]).text).toBe(`ref ${spaced} ok`);
+        }
+      }
+      expect(plain).toBe(200);
+      expect(grouped).toBe(200);
+    }
   });
 });
 
@@ -356,6 +426,28 @@ describe("labeled values", () => {
       expect(kept.hits.size).toBe(0);
     },
   );
+
+  it.each(['"', "'", "`"])("redacts a %s quoted value longer than 4096 characters", (quote) => {
+    const value = "a1b2c3d4e5".repeat(500);
+    const result = scrub(`${join("to", "ken")}=${quote}${value}${quote} tail`);
+    expect(result.text).toBe(`${join("to", "ken")}=${quote}${MARK("labeled_secret")}${quote} tail`);
+    expect([...result.hits]).toEqual([["labeled_secret", 1]]);
+  });
+
+  it("honors a backslash escape of the quote and of the backslash in a quoted value", () => {
+    const key = join("pass", "word");
+    const escaped = scrub(`${key}="${join("abc", '\\"', "defghi")}" next`);
+    expect(escaped.text).toBe(`${key}="${MARK("labeled_secret")}" next`);
+    // An even number of backslashes before the quote means the quote closes the value.
+    const closed = scrub(`${key}="${join("abcdef", "\\\\")}" next`);
+    expect(closed.text).toBe(`${key}="${MARK("labeled_secret")}" next`);
+  });
+
+  it("redacts an unterminated value that ends in an escaped quote, quote included", () => {
+    const key = join("pass", "word");
+    const result = scrub(`${key}="${join("abcdef", '\\"')}\nnext`);
+    expect(result.text).toBe(`${key}="${MARK("labeled_secret")}\nnext`);
+  });
 
   it("keeps the quotes around a redacted quoted value", () => {
     const input = `${join("pass", "word")}: "${join("hunter", "2xyz")}" and more`;
@@ -484,11 +576,39 @@ describe("scrubFrontmatter (R4.1)", () => {
     const six = scrubFrontmatter({ [key]: join("abc", "def") });
     expect(six.data[key]).toBe(MARK("labeled_secret"));
     expect([...six.hits]).toEqual([["labeled_secret", 1]]);
-    for (const short of [join("abc", "de"), join("ab", " ", "cd", " e"), "a b c d e f g"]) {
+    for (const short of [join("abc", "de"), join("ab", " ", "cd"), "a b c", "  abcde  "]) {
       const kept = scrubFrontmatter({ [key]: short });
       expect(kept.data[key]).toBe(short);
       expect(kept.hits.size).toBe(0);
     }
+  });
+
+  it("redacts a whole labeled value of 6 or more characters in total even without a 6-run", () => {
+    const key = join("pass", "word");
+    for (const value of ["red cat 42 ok", "a b c d e f g", join("ab", " ", "cd", " e")]) {
+      const result = scrubFrontmatter({ [key]: value });
+      expect(result.data[key]).toBe(MARK("labeled_secret"));
+      expect([...result.hits]).toEqual([["labeled_secret", 1]]);
+    }
+  });
+
+  it("applies the 6-run test, not the total length, to a labeled value that already had a hit", () => {
+    const key = join("to", "ken");
+    const withHit = `a ${tokenOf("github_token")} b c d e`;
+    const result = scrubFrontmatter({ [key]: withHit });
+    expect(result.data[key]).toBe(`a ${MARK("github_token")} b c d e`);
+    expect([...result.hits]).toEqual([["github_token", 1]]);
+    const again = scrubFrontmatter(result.data);
+    expect(again.data).toEqual(result.data);
+    expect(again.hits.size).toBe(0);
+  });
+
+  it("is idempotent on a redacted labeled value", () => {
+    const key = join("pass", "word");
+    const once = scrubFrontmatter({ [key]: "red cat 42 ok" });
+    const twice = scrubFrontmatter(once.data);
+    expect(twice.data).toEqual(once.data);
+    expect(twice.hits.size).toBe(0);
   });
 
   it("keeps a labeled value that only carries a token the rules already redacted", () => {
@@ -520,6 +640,15 @@ describe("LABEL_KEY", () => {
     ["api", "-key"],
     ["private", "_key"],
     ["credentials", ""],
+    ["Sec", "ret Key"],
+    ["API", " Key"],
+    ["Secret", " Access Key"],
+    ["SECRET", "_KEY_BASE"],
+    ["DB_PASS", "WORD_PROD"],
+    ["API", "_KEY_V2"],
+    ["GITHUB_", "TOKEN_RO"],
+    ["smtp_pass", "word_2"],
+    ["pass", "word1"],
   ])("accepts %s%s", (a, b) => {
     expect(LABEL_KEY.test(join(a as string, b as string))).toBe(true);
   });
@@ -527,6 +656,12 @@ describe("LABEL_KEY", () => {
   it.each([
     ["secre", "tary"],
     ["to", "ken_count"],
+    ["pass", "word_policy"],
+    ["api", "_key_name"],
+    ["to", "ken_limit"],
+    ["secret", "_key_max_size"],
+    ["pass", "word_a_b_c"],
+    ["pass", "word1234"],
     ["ti", "tle"],
     ["my pass", "word"],
     ["", ""],
@@ -813,6 +948,14 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["mixed digits", repeat("1234567890")],
     ["1 runs", repeat("1 ")],
     ["label runs", repeat(label)],
+    ["label words joined by spaces", repeat("secret access key ")],
+    ["api key words", repeat("api key ")],
+    ["label tails", repeat(join("pass", "word_ab_cd_"))],
+    ["label tail digits", repeat(join("pass", "word123"))],
+    ["escaped quotes after an open quote", `${join("pass", 'word="')}${repeat('\\"a')}`],
+    ["closed quoted value", `${join("pass", 'word="')}${repeat("a1b2")}"`],
+    ["digits grouped by spaces", repeat("1234 ")],
+    ["digits grouped by hyphens", repeat("12-")],
     ["open quote then a", `${join("pass", 'word="')}${repeat("a")}`],
     ["open quote then lines", `${join("pass", 'word="')}${repeat("ab cd\n")}`],
     ["unquoted label then a", `${label}${repeat("a")}`],

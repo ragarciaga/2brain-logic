@@ -185,24 +185,38 @@ export function ibanValid(value: string): boolean {
 // ---------------------------------------------------------------------------------------------
 // Labeled assignments
 
+// Label words may be joined by one space, underscore, dot or hyphen ("Secret Access Key").
 const LABEL_CORE =
-  "password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?";
-const LABEL_SUFFIX = "(?:[_.-]?(?:access[_-]?)?key)?";
+  "password|passwd|pwd|passphrase|secret|token|api[ _-]?key|access[ _-]?key|private[ _-]?key|credentials?";
+const LABEL_SUFFIX = "(?:[ _.-]?(?:access[ _-]?)?key)?";
+// A tail segment that makes the name something else than a secret ("token_count", "api_key_name").
+const LABEL_TAIL_DENY =
+  "count|ids?|types?|length|len|limit|max|min|size|url|uri|names?|path|file|ttl|expiry|expires|header|endpoint|policy|hint|prompt";
+const LABEL_SEGMENT = `[_.-](?!(?:${LABEL_TAIL_DENY})(?![A-Za-z0-9]))[A-Za-z0-9]{1,12}`;
+// Up to two identifier segments ("SECRET_KEY_BASE", "DB_PASSWORD_PROD") or a short number.
+const LABEL_TAIL = `(?:(?:${LABEL_SEGMENT}){0,2}|\\d{1,3})`;
+const LABEL = `(?:${LABEL_CORE})${LABEL_SUFFIX}${LABEL_TAIL}`;
 
 /**
- * A frontmatter key that names a secret (`clientSecret`, `aws_secret_access_key`, `SECRET_KEY`).
- * Not global, so `test` has no state.
+ * A frontmatter key that names a secret (`clientSecret`, `aws_secret_access_key`, `SECRET_KEY`,
+ * `Secret Key`). Not global, so `test` has no state.
  */
-export const LABEL_KEY = new RegExp(`^[A-Za-z0-9_.-]{0,40}(?:${LABEL_CORE})${LABEL_SUFFIX}$`, "i");
+export const LABEL_KEY = new RegExp(`^[A-Za-z0-9_.-]{0,40}${LABEL}$`, "i");
+
+/**
+ * A quoted value takes backslash escapes and has no upper length: the group has two alternatives
+ * with different first characters, so every position has one way to match. An opening quote with
+ * no closing one on the line (escapes honored) redacts to the end of the line.
+ */
+function quotedValue(quote: string): string {
+  const body = String.raw`(?:[^${quote}\\\r\n]|\\.)`;
+  return [`${quote}${body}{6,}${quote}`, `${quote}(?!${body}*${quote})[^\\r\\n]{6,}`].join("|");
+}
 
 const LABELED_VALUE = [
-  String.raw`"[^"\r\n]{6,4096}"`,
-  String.raw`'[^'\r\n]{6,4096}'`,
-  String.raw`\x60[^\x60\r\n]{6,4096}\x60`,
-  // An opening quote with no closing one on the line redacts to the end of the line.
-  String.raw`"(?![^"\r\n]*")[^\r\n]{6,}`,
-  String.raw`'(?![^'\r\n]*')[^\r\n]{6,}`,
-  String.raw`\x60(?![^\x60\r\n]*\x60)[^\r\n]{6,}`,
+  quotedValue('"'),
+  quotedValue("'"),
+  quotedValue(String.raw`\x60`),
   String.raw`[^\s"'\x60]{6,}`,
 ].join("|");
 
@@ -213,7 +227,12 @@ function selectLabeled(found: string, from: number): ScrubSpan | null {
   const first = found.charAt(0);
   if (first === '"' || first === "'" || first === "`") {
     start = 1;
-    if (found.length >= 2 && found.endsWith(first)) end = found.length - 1;
+    if (found.length >= 2 && found.endsWith(first)) {
+      // The last quote closes the value only when an even number of backslashes precedes it.
+      let slashes = 0;
+      while (found.charCodeAt(found.length - 2 - slashes) === 92) slashes++;
+      if (slashes % 2 === 0) end = found.length - 1;
+    }
   }
   if (isPlaceholder(found.slice(start, end))) return null;
   return { start, end };
@@ -268,7 +287,11 @@ function digitAt(text: string, offset: number): number {
   return code >= 48 && code <= 57 ? code - 48 : -1;
 }
 
-/** Offset after the longest Luhn-valid run of 13 to 19 digits that starts at `start`, or -1. */
+/**
+ * Offset after the longest Luhn-valid window of 13 to 19 digits that starts at `start` (a group
+ * start) and ends at the end of a digit group, or -1. A group is a run of digits between
+ * separators (a space or a hyphen) or the ends of the text.
+ */
 function longestCardEnd(found: string, start: number): number {
   // Sums by index parity from the left; which parity doubles depends on the window length.
   const plain = [0, 0];
@@ -283,7 +306,7 @@ function longestCardEnd(found: string, start: number): number {
     if (count >= 13) {
       const last = (count - 1) & 1;
       const total = (plain[last] as number) + (doubled[last ^ 1] as number);
-      if (total % 10 === 0) best = offset + 1;
+      if (total % 10 === 0 && digitAt(found, offset + 1) < 0) best = offset + 1;
     }
     if (count === 19) break;
     let next = -1;
@@ -301,9 +324,11 @@ function longestCardEnd(found: string, start: number): number {
 }
 
 /**
- * One forward pass: the first digit that starts a Luhn-valid window opens a span, every valid
- * window that starts before the span's end can extend it, and a window that starts exactly at
- * the end begins the next span (the caller resumes from there).
+ * One forward pass over the group starts (the start of the text, or a digit right after a
+ * separator): the first one that starts a Luhn-valid window opens a span, every valid window that
+ * starts before the span's end can extend it, and a window that starts at or after the end begins
+ * the next span (the caller resumes from there). A window never cuts a digit group, so an
+ * unseparated run is a candidate only as a whole.
  */
 function selectCard(found: string, from: number): ScrubSpan | null {
   const n = found.length;
@@ -311,6 +336,7 @@ function selectCard(found: string, from: number): ScrubSpan | null {
   let spanEnd = -1;
   for (let i = from; i < n; i++) {
     if (digitAt(found, i) < 0) continue;
+    if (i > 0 && digitAt(found, i - 1) >= 0) continue; // inside a group
     if (spanStart >= 0 && i >= spanEnd) break;
     const end = longestCardEnd(found, i);
     if (spanStart < 0) {
@@ -383,7 +409,7 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
   {
     id: "labeled_secret",
     pattern: new RegExp(
-      `(?<keep>(?:${LABEL_CORE})${LABEL_SUFFIX}["'\\x60]?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?<secret>${LABELED_VALUE})`,
+      `(?<keep>${LABEL}["'\\x60]?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?<secret>${LABELED_VALUE})`,
       "gi",
     ),
     select: selectLabeled,
