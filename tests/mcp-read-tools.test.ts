@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadVaultConfig } from "../src/config/vault-config.js";
 import {
   defaultGit,
@@ -266,12 +267,38 @@ describe.skipIf(!rgAvailable)("search (R8.1)", () => {
 
   it("returns search_timeout when rg is killed by its deadline", async () => {
     push({ "inbox/a.md": note("needle\n") });
-    const { call } = await connect({ searchTimeoutMs: 1 });
+    const dir = mkdtempSync(join(tmpdir(), "2brain-fake-rg-"));
+    extraDirs.push(dir);
+    const { exe, pidFile } = fakeSlowExe(dir, "rg");
+    const { call } = await connect({ searchTimeoutMs: 500, rgPath: exe });
+    const started = performance.now();
     const r = await call("search", { query: "needle" });
+    // The fake rg sleeps far beyond the deadline: answering before it could
+    // have finished proves the deadline killed it, whatever the machine load.
+    expect(performance.now() - started).toBeLessThan(FAKE_SLEEP_MS / 2);
     expect(r.isError).toBe(true);
     expect(r.data).toEqual({ ok: false, error: "search_timeout" });
+    // Under heavy load the kill can land before the fake wrote its pid file.
+    if (pidFileReady(pidFile)) await expectGone(pidFile);
   });
 });
+
+/** How long the fake rg or git sleeps; far longer than any bound the tests wait for. */
+const FAKE_SLEEP_MS = 30_000;
+
+/** True once the fake child has written its pid (the file exists before it is filled). */
+function pidFileReady(pidFile: string): boolean {
+  return existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "";
+}
+
+/** Waits until the fake child has written its pid file, i.e. it is really running. */
+async function waitForStart(pidFile: string): Promise<void> {
+  for (let i = 0; i < 1500; i += 1) {
+    if (pidFileReady(pidFile)) return;
+    await new Promise((done) => setTimeout(done, 20));
+  }
+  throw new Error("the fake child never started");
+}
 
 /** A node script that records its pid and sleeps, standing in for rg or git. */
 function fakeSlowExe(dir: string, name: string): { exe: string; pidFile: string } {
@@ -280,7 +307,7 @@ function fakeSlowExe(dir: string, name: string): { exe: string; pidFile: string 
   const pidFile = join(dir, `${name}.pid`);
   writeFileSync(
     exe,
-    `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, 8000);\n`,
+    `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, ${FAKE_SLEEP_MS});\n`,
   );
   chmodSync(exe, 0o755);
   return { exe, pidFile };
@@ -288,6 +315,10 @@ function fakeSlowExe(dir: string, name: string): { exe: string; pidFile: string 
 
 async function expectGone(pidFile: string): Promise<void> {
   const pid = Number(readFileSync(pidFile, "utf8"));
+  // Never signal pid 0 or a negative pid: that reaches a whole process group.
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error(`refusing to signal an invalid pid read from the pid file: ${pid}`);
+  }
   for (let i = 0; i < 40; i += 1) {
     try {
       process.kill(pid, 0);
@@ -301,23 +332,45 @@ async function expectGone(pidFile: string): Promise<void> {
 }
 
 describe("abort signal reaches the child processes", () => {
+  it("expectGone refuses an empty or zero pid file without signalling", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "2brain-pidfile-"));
+    extraDirs.push(dir);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      for (const content of ["", "0", "-5", "abc"]) {
+        const pidFile = join(dir, "x.pid");
+        writeFileSync(pidFile, content);
+        await expect(expectGone(pidFile)).rejects.toThrow(/invalid pid/);
+      }
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it("aborting a running search stops rg and answers search_timeout quickly", async () => {
     const dir = mkdtempSync(join(tmpdir(), "2brain-fake-rg-"));
     extraDirs.push(dir);
     const { exe, pidFile } = fakeSlowExe(dir, "rg");
     const config = await loadVaultConfig(fixture.vaultDir);
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 100);
-    const started = performance.now();
+    let abortedAt = 0;
+    void waitForStart(pidFile).then(() => {
+      abortedAt = performance.now();
+      controller.abort();
+    });
     const outcome = await searchVault(fixture.vaultDir, config, {
       query: "x",
       limit: 5,
       signal: controller.signal,
-      timeoutMs: 30_000,
+      timeoutMs: 120_000,
       rgPath: exe,
     });
+    const answeredAt = performance.now();
     expect(outcome).toEqual({ ok: false, error: "search_timeout" });
-    expect(performance.now() - started).toBeLessThan(3000);
+    // Answered long before the fake rg would have finished on its own.
+    expect(abortedAt).toBeGreaterThan(0);
+    expect(answeredAt - abortedAt).toBeLessThan(FAKE_SLEEP_MS / 2);
     await expectGone(pidFile);
   });
 
@@ -329,12 +382,17 @@ describe("abort signal reaches the child processes", () => {
     process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
     try {
       const controller = new AbortController();
-      setTimeout(() => controller.abort(), 100);
-      const started = performance.now();
+      let abortedAt = 0;
+      void waitForStart(pidFile).then(() => {
+        abortedAt = performance.now();
+        controller.abort();
+      });
       await expect(
         logChangedPaths(fixture.vaultDir, NOW, controller.signal),
       ).rejects.toBeInstanceOf(GitError);
-      expect(performance.now() - started).toBeLessThan(3000);
+      const answeredAt = performance.now();
+      expect(abortedAt).toBeGreaterThan(0);
+      expect(answeredAt - abortedAt).toBeLessThan(FAKE_SLEEP_MS / 2);
       await expectGone(pidFile);
     } finally {
       process.env.PATH = previousPath;
