@@ -73,6 +73,12 @@ Environment variables (see `.env.example`):
 | `INGEST_TOKEN` | Required, at least 32 characters; the service exits at startup without it. Every request except `GET /health` must send it as `Authorization: Bearer <token>`; the value is compared exactly, so do not pad it with spaces. |
 | `PORT` | Listening port. Default `3000`. |
 | `HOST` | Listening address. Default `127.0.0.1`. |
+| `PUBLIC_BASE_URL` | Origin of the public MCP endpoint (https, or http for `localhost` or `127.0.0.1`; no path, query or credentials). Empty or unset: MCP stays disabled and the five variables below are not read. |
+| `OWNER_PASSPHRASE_HASH` | Required when `PUBLIC_BASE_URL` is set: `scrypt$N$r$p$salt$key` (16 byte salt and 32 byte key in base64url; N a power of two from 2^14 to 2^20, r 1 to 32, p 1 to 16). Quote it in `.env`, it contains `$`. |
+| `MCP_PORT` | Port of the MCP listener. Default `3001`. |
+| `AUTH_STORE_DIR` | Directory for the OAuth state. Default `/data/auth`. Must not be inside `VAULT_DIR`. |
+| `TRUST_PROXY_HOPS` | Number of reverse proxies in front of the service. Default `0`. |
+| `ALLOWED_REDIRECT_HOSTS` | Comma separated bare host names an OAuth client may redirect to. Default `claude.ai,claude.com,chatgpt.com`. |
 | `ANTHROPIC_API_KEY` | Listed for later work; the skeleton does not read it. |
 | `N8N_NETWORK` | Compose only: name of the external Docker network. Default `n8n`. |
 
