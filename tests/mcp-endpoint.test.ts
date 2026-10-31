@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { AuthInfo, McpServer } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it } from "vitest";
+import { createCodeStore } from "../src/auth/oauth/codes.js";
 import { type AuthStore, newId, openAuthStore } from "../src/auth/oauth/store.js";
 import { createPublicApp } from "../src/mcp/app.js";
 import {
@@ -61,6 +62,7 @@ async function harness(opts: Opts = {}) {
     },
   };
   const logs: string[] = [];
+  const codes = createCodeStore();
   const { app } = createPublicApp({
     baseUrl: ISSUER,
     log: (l) => logs.push(l),
@@ -72,6 +74,7 @@ async function harness(opts: Opts = {}) {
       trustProxyHops: 1,
       ownerPassphraseHash: "stored-hash",
       tokenNow: wallNow,
+      codes,
     },
   });
   const clientId = newId();
@@ -98,7 +101,7 @@ async function harness(opts: Opts = {}) {
     );
     return { id, accessToken, refreshToken };
   }
-  return { app, store, wall, logs, grant, lookups };
+  return { app, store, wall, logs, grant, lookups, codes, clientId };
 }
 type H = Awaited<ReturnType<typeof harness>>;
 
@@ -208,6 +211,17 @@ describe("R6.2: tokens that are not live for this resource", () => {
     const h = await harness();
     const g = await h.grant();
     await expectInvalid(h, { token: g.refreshToken });
+  });
+  it("an authorization code presented as Bearer", async () => {
+    const h = await harness();
+    await h.grant();
+    const code = h.codes.issue({
+      clientId: h.clientId,
+      redirectUri: "https://claude.ai/api/mcp/auth_callback",
+      codeChallenge: "c".repeat(43),
+      resource: RESOURCE,
+    });
+    await expectInvalid(h, { token: code });
   });
   it("a grant id presented as Bearer", async () => {
     const h = await harness();
@@ -332,6 +346,8 @@ describe("D1: fixed answers, nothing echoed, no-store", () => {
         }),
       ],
     ];
+    const parseError = (await answers[5]?.[1].clone().json()) as { error: { code: number } };
+    expect(parseError.error.code).toBe(-32700);
     for (const [status, res] of answers) {
       expect(res.status).toBe(status);
       expect(res.headers.get("cache-control"), String(status)).toBe("no-store");
@@ -502,13 +518,22 @@ describe("the request deadline", () => {
 
 describe("what a tool sees", () => {
   it("authInfo.token is the grant id, never the bearer value", async () => {
-    const seen: Array<{ token?: string; clientId?: string; resource?: string }> = [];
+    const seen: Array<{
+      token?: string;
+      clientId?: string;
+      resource?: string;
+      url?: string;
+      names?: string[];
+    }> = [];
     const spy: McpToolDefinition = {
       name: "spy",
       register(server) {
         server.registerTool("spy", { description: "records authInfo" }, (ctx) => {
-          const info = (ctx as unknown as { http?: { authInfo?: AuthInfo } }).http?.authInfo;
+          const http = (ctx as unknown as { http?: { authInfo?: AuthInfo; req?: Request } }).http;
+          const info = http?.authInfo;
           seen.push({
+            url: http?.req?.url,
+            names: [...(http?.req?.headers.keys() ?? [])].sort(),
             token: info?.token,
             clientId: info?.clientId,
             resource: info?.resource?.href,
@@ -521,10 +546,21 @@ describe("what a tool sees", () => {
     const g = await h.grant();
     const res = await call(h, {
       token: g.accessToken,
+      origin: "https://claude.ai",
+      headers: {
+        host: "evil.example.net",
+        cookie: "session=sentinel",
+        "x-forwarded-host": "evil.example.net",
+        "x-forwarded-for": "203.0.113.9",
+        "x-custom": "sentinel",
+        "mcp-protocol-version": "2025-06-18",
+      },
       json: { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "spy", arguments: {} } },
     });
     expect(res.status).toBe(200);
     expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe(RESOURCE);
+    expect(seen[0]?.names).toEqual(["accept", "content-type", "mcp-protocol-version"]);
     expect(seen[0]?.token).toBe(g.id);
     expect(seen[0]?.token).not.toBe(g.accessToken);
     expect(seen[0]?.resource).toBe(RESOURCE);
