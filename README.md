@@ -54,8 +54,18 @@ Environment variables (see `.env.example`):
 | `ANTHROPIC_API_KEY` | Listed for later work; the skeleton does not read it. |
 | `N8N_NETWORK` | Compose only: name of the external Docker network. Default `n8n`. |
 
-The vault may hold `.2brain/config.yaml`; today only `vault.archive_folder` (default `Archive`)
-is read.
+The vault holds its own settings in `.2brain/config.yaml` (format version 1): the archive and
+inbox folders (`vault.archive_folder`, default `archive`; `vault.inbox_folder`, default `inbox`),
+the owner's names for the canonical properties (`properties`), the areas (`areas`), an optional
+allow-list of sources (`sources`) and the note types with their stored value, folder and body rule
+(`types`). Every key is optional and a missing key takes its default; a section you write under
+`areas` or `types` replaces the default one, while `vault` and `properties` fill the keys you
+leave out. The file is strict: an unknown key, a wrong type or an unsafe folder or area name (a
+`..` segment, an absolute path, a backslash) is an error that names the file and the key.
+
+`vault-template/` is the default vault: a ready `.2brain/config.yaml` with the default values, and
+a `README.md` in every folder the config names (git does not track empty folders). Copy it to
+start a vault.
 
 ## Docker
 
