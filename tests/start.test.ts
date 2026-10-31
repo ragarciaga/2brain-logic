@@ -1,5 +1,5 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { join, resolve } from "node:path";
@@ -172,6 +172,62 @@ describe("built entry point", () => {
       expect(run.stderr).toContain("INGEST_TOKEN");
       expect(run.stdout + run.stderr).not.toContain("STARTMARKER");
     } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("R2.3: keeps running with an invalid vault config, logs it and answers writes with 503", async () => {
+    const fixture = createGitFixture();
+    const seed = fixture.cloneElsewhere("seed-config");
+    mkdirSync(join(seed, ".2brain"));
+    writeFileSync(join(seed, ".2brain", "config.yaml"), "other: 1\n");
+    git(seed, ["add", ".2brain/config.yaml"]);
+    git(seed, ["commit", "-m", "bad config"]);
+    git(seed, ["push", "origin", "main"]);
+
+    const port = await freePort();
+    const child = spawn(process.execPath, [ENTRY], {
+      cwd: ROOT,
+      env: childEnv({
+        VAULT_DIR: fixture.vaultDir,
+        VAULT_REMOTE: fixture.remote,
+        PORT: String(port),
+        INGEST_TOKEN: TOKEN,
+      }),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      output += chunk;
+    });
+    try {
+      const url = `http://127.0.0.1:${port}`;
+      await waitForHealth(url, child);
+      expect(child.exitCode).toBeNull();
+
+      const response = await fetch(`${url}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ path: "Inbox/blocked.md", frontmatter: {}, body: "hi\n" }),
+        headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "config_invalid",
+        file: ".2brain/config.yaml",
+        keyPath: "other",
+      });
+      expect(output).toContain("config_invalid: .2brain/config.yaml at other");
+      expect(output).not.toContain(TOKEN);
+    } finally {
+      child.kill();
+      await new Promise<void>((resolveClose) => {
+        if (child.exitCode !== null) resolveClose();
+        else child.once("close", () => resolveClose());
+      });
       fixture.cleanup();
     }
   });
