@@ -11,8 +11,10 @@
  *   lazy lookaheads of `escapedValue` stop at their line);
  * - the label candidate of `labeled_secret` has no left boundary, but its length is capped at 64
  *   characters; the words are judged by `isLabelKey` on that candidate only, never on the text;
- * - a rule that validates a candidate (IBAN, card, label) does it in `select`, which resumes by
- *   offset, so the total work stays linear in the input.
+ * - a rule that validates a candidate (IBAN, card) does it in `select`, which resumes by offset;
+ *   the label rule finds only the head of an assignment (label and separator) and judges the
+ *   label with `admit` before its value is read at all (`tail`), and a rejected head resumes the
+ *   scan right after itself. Either way the total work stays linear in the input.
  */
 
 /** A half-open range `[start, end)` inside the text a rule is asked to redact. */
@@ -27,9 +29,21 @@ export interface ScrubRule {
   /**
    * Global regex. With named groups `keep` and `secret`, `keep + secret` must equal the whole
    * match: `keep` stays and `secret` is what gets examined. Without them the whole match is.
-   * Only ever used through `String.prototype.replace`, so the shared `lastIndex` never leaks.
+   * The scanner runs a private copy, so the shared `lastIndex` never leaks.
    */
   pattern: RegExp;
+  /**
+   * Makes `pattern` only the head of the match. A sticky regex. The pattern then has a `keep`
+   * group equal to the whole match and no `secret` group. For each head, `admit` (default:
+   * always) is asked first; a head it rejects is skipped and the scan resumes right after the
+   * head, so a rejected head costs only the head pattern and the text after it is examined
+   * normally. For an admitted head, `tail` is matched at the end of the head: no match resumes
+   * after the head; a match is the `secret`, handled as with a `keep` and `secret` pattern, and
+   * the scan resumes after it.
+   */
+  tail?: RegExp;
+  /** Judges a head of a rule with a `tail` by its named groups. Never called without `tail`. */
+  admit?: (groups: Readonly<Record<string, string | undefined>>) => boolean;
   /**
    * Narrows or validates what was found. Returns the earliest span at or after `from`, or null.
    * The caller asks again from the end of each span, so a found value holding several secrets
@@ -222,7 +236,20 @@ const LABEL_CORE_WORDS: ReadonlySet<string> = new Set([
   "credential",
   "credentials",
   "apikey",
+  "secretkey",
+  "accesskey",
+  "privatekey",
 ]);
+// A single word that ends with one of these names a secret too ("PGPASSWORD", "authtoken",
+// "clientsecret", "mypwd"). "tokens", "tokenizer" and "passwordless" do not end with them.
+const LABEL_COMPOUND_ENDINGS: readonly string[] = [
+  "token",
+  "password",
+  "passwd",
+  "pwd",
+  "passphrase",
+  "secret",
+];
 const LABEL_KEY_PREFIXES: ReadonlySet<string> = new Set(["api", "access", "private"]);
 // A last word that makes the name something else than a secret ("token_count", "api_key_name").
 const LABEL_LAST_DENIED: ReadonlySet<string> = new Set([
@@ -265,8 +292,9 @@ function labelWords(label: string): string[] {
 
 /**
  * True when a label (a text label before `=` or `:`, or a frontmatter key) names a secret: its
- * words hold a core word (`password`, `secret`, `token`, `api` + `key`, ...) and the last word is
- * not one that turns it into something else (`count`, `url`, `name`, ...). Only the last 4 spaced
+ * words hold a core word (`password`, `secret`, `token`, `api` + `key`, ...) or a compound that
+ * ends with one (`PGPASSWORD`, `authtoken`), and the last word is not one that turns it into
+ * something else (`count`, `url`, `name`, ...). Only the last 4 spaced
  * words and the last 64 characters are read, which is also the most the text pattern can match.
  */
 export function isLabelKey(label: string): boolean {
@@ -276,6 +304,7 @@ export function isLabelKey(label: string): boolean {
   return words.some(
     (word, at) =>
       LABEL_CORE_WORDS.has(word) ||
+      LABEL_COMPOUND_ENDINGS.some((ending) => word.endsWith(ending)) ||
       (word === "key" && at > 0 && LABEL_KEY_PREFIXES.has(words[at - 1] as string)),
   );
 }
@@ -315,10 +344,15 @@ const LABELED_VALUE = [
   String.raw`[^\s"'\x60]{6,}`,
 ].join("|");
 
+// The head is a label and its separator; the lookahead only checks that a value can start there
+// (a quote, an escaped quote or 6 unspaced characters), so a separator that is followed by too
+// little can still back off to a shorter one (":=" then ":"). The value is read by `LABELED_TAIL`
+// and only for a head whose label `isLabelKey` admits, so a rejected head never scans its value.
 const LABELED_PATTERN = new RegExp(
-  `(?<keep>(?<label>${LABEL_CANDIDATE})(?:\\\\?["'\\x60])?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?<secret>${LABELED_VALUE})`,
+  `(?<keep>(?<label>${LABEL_CANDIDATE})(?:\\\\?["'\\x60])?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?=["'\\x60]|\\\\["']|[^\\s"'\\x60]{6})`,
   "gi",
 );
+const LABELED_TAIL = new RegExp(LABELED_VALUE, "y");
 
 /** The part of a matched value to redact: quotes (escaped ones too) stay; a placeholder is kept. */
 function valueSpan(found: string): ScrubSpan | null {
@@ -342,35 +376,9 @@ function valueSpan(found: string): ScrubSpan | null {
   return { start, end };
 }
 
-const NESTED_SKIPS = 32;
-
-function selectLabeled(
-  found: string,
-  from: number,
-  groups: Readonly<Record<string, string | undefined>>,
-): ScrubSpan | null {
-  if (isLabelKey(groups.label ?? "")) return from === 0 ? valueSpan(found) : null;
-  // The label names something else ("url", "token_count"), but its value may still hold a labeled
-  // secret ("url=https://host/?password=..."). The scan steps over at most NESTED_SKIPS labels
-  // that name something else and resumes at `from`, so the total work stays linear.
-  const scan = new RegExp(LABELED_PATTERN.source, LABELED_PATTERN.flags);
-  scan.lastIndex = from;
-  let skipped = 0;
-  for (let m = scan.exec(found); m !== null; m = scan.exec(found)) {
-    const keep = m.groups?.keep ?? "";
-    if (!isLabelKey(m.groups?.label ?? "")) {
-      if (++skipped >= NESTED_SKIPS) break;
-      scan.lastIndex = m.index + keep.length;
-      continue;
-    }
-    const nested = m.groups?.secret ?? "";
-    const span = startsRedacted(nested) ? null : valueSpan(nested);
-    if (span) {
-      const offset = m.index + keep.length;
-      return { start: offset + span.start, end: offset + span.end };
-    }
-  }
-  return null;
+/** The head was admitted by `isLabelKey`, so the value only needs its span (a placeholder is kept). */
+function selectLabeled(found: string, from: number): ScrubSpan | null {
+  return from === 0 ? valueSpan(found) : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -566,6 +574,8 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
   {
     id: "labeled_secret",
     pattern: LABELED_PATTERN,
+    tail: LABELED_TAIL,
+    admit: (groups) => isLabelKey(groups.label ?? ""),
     select: selectLabeled,
   },
   {

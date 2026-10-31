@@ -48,55 +48,82 @@ function placeholder(id: string): string {
   return `${REDACTED_PREFIX}${id}]`;
 }
 
-/** Applies one rule with a single `replace` pass and returns the new text and the hit count. */
+/**
+ * Applies one rule in a single forward pass over a private copy of its pattern and returns the new
+ * text and the hit count. A rule with a `tail` is read head first: a head `admit` rejects is
+ * skipped and the scan resumes right after it, a head without a tail match likewise, and a head
+ * with one continues as a `keep` and `secret` match whose scan resumes after the tail.
+ */
 function applyRule(text: string, rule: ScrubRule): { text: string; count: number } {
   if (!RULE_ID.test(rule.id) || !rule.pattern.global) throw new ScrubError(rule.id);
+  if (rule.tail !== undefined && !rule.tail.sticky) throw new ScrubError(rule.id);
   const mark = placeholder(rule.id);
+  const scan = new RegExp(rule.pattern.source, rule.pattern.flags);
+  const tail = rule.tail ? new RegExp(rule.tail.source, rule.tail.flags) : undefined;
   let count = 0;
-  const out = text.replace(rule.pattern, (...args: unknown[]) => {
-    const match = args[0] as string;
-    const last = args[args.length - 1];
-    const groups =
-      typeof last === "object" && last !== null
-        ? (last as Record<string, string | undefined>)
-        : undefined;
+  let out = "";
+  let copied = 0; // text before this offset is already in `out`
+  for (let m = scan.exec(text); m !== null; m = scan.exec(text)) {
+    const match = m[0];
+    const groups = m.groups as Record<string, string | undefined> | undefined;
     const keep = groups?.keep;
-    const hidden = groups?.secret;
-    if ((keep === undefined) !== (hidden === undefined)) throw new ScrubError(rule.id);
-    if (keep !== undefined && hidden !== undefined && keep + hidden !== match) {
+    let hidden = groups?.secret;
+    let end = m.index + match.length;
+    if (tail !== undefined) {
+      if (keep !== match || hidden !== undefined) throw new ScrubError(rule.id);
+      if (rule.admit !== undefined && !rule.admit(groups ?? {})) {
+        scan.lastIndex = Math.max(end, m.index + 1);
+        continue;
+      }
+      tail.lastIndex = end;
+      const value = tail.exec(text);
+      if (value === null || value[0] === "") {
+        scan.lastIndex = Math.max(end, m.index + 1);
+        continue;
+      }
+      hidden = value[0];
+      end += hidden.length;
+    } else if ((keep === undefined) !== (hidden === undefined)) {
+      throw new ScrubError(rule.id);
+    } else if (keep !== undefined && hidden !== undefined && keep + hidden !== match) {
       throw new ScrubError(rule.id);
     }
+    scan.lastIndex = Math.max(end, m.index + 1);
     const found = hidden ?? match;
-    if (startsRedacted(found)) return match;
+    if (startsRedacted(found)) continue;
+    let result = keep ?? "";
     if (!rule.select) {
       count++;
-      return (keep ?? "") + mark;
-    }
-    let result = keep ?? "";
-    let position = 0;
-    let spans = 0;
-    for (let from = 0; ; ) {
-      const span = rule.select(found, from, groups ?? {});
-      if (span === null) break;
-      if (
-        !Number.isInteger(span.start) ||
-        !Number.isInteger(span.end) ||
-        span.start < from ||
-        span.end <= span.start ||
-        span.end > found.length
-      ) {
-        throw new ScrubError(rule.id);
+      result += mark;
+    } else {
+      const named = tail !== undefined ? { ...groups, secret: found } : (groups ?? {});
+      let position = 0;
+      let spans = 0;
+      for (let from = 0; ; ) {
+        const span = rule.select(found, from, named);
+        if (span === null) break;
+        if (
+          !Number.isInteger(span.start) ||
+          !Number.isInteger(span.end) ||
+          span.start < from ||
+          span.end <= span.start ||
+          span.end > found.length
+        ) {
+          throw new ScrubError(rule.id);
+        }
+        result += found.slice(position, span.start) + mark;
+        position = span.end;
+        from = span.end;
+        spans++;
       }
-      result += found.slice(position, span.start) + mark;
-      position = span.end;
-      from = span.end;
-      spans++;
+      if (spans === 0) continue;
+      count += spans;
+      result += found.slice(position);
     }
-    if (spans === 0) return match;
-    count += spans;
-    return result + found.slice(position);
-  });
-  return { text: out, count };
+    out += text.slice(copied, m.index) + result;
+    copied = end;
+  }
+  return { text: out + text.slice(copied), count };
 }
 
 /**

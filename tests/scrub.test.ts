@@ -639,6 +639,81 @@ describe("labeled values", () => {
     expect(several.text).not.toContain(secret);
   });
 
+  it("finds a labeled secret after any number of non-secret assignments in the same run", () => {
+    const secret = join("hunter", "2xyz", "abcd");
+    const key = join("pass", "word");
+    const params = (count: number) =>
+      Array.from({ length: count }, (_unused, i) => `k${i}=abcdef`).join("&");
+    const json = `{${Array.from({ length: 40 }, (_unused, i) => `"k${i}":"abcdef"`).join(",")},"${key}":"${secret}"}`;
+    const url = `https://host.example.com/?${params(40)}&${key}=${secret}`;
+    const options = `run ${Array.from({ length: 40 }, (_unused, i) => `--o${i}=abcdef`).join(" ")} --${key}=${secret}`;
+    const cases: Array<[string, string]> = [
+      [json, json.replace(secret, MARK("labeled_secret"))],
+      [url, url.replace(secret, MARK("labeled_secret"))],
+      [`url=${url}`, `url=${url.replace(secret, MARK("labeled_secret"))}`],
+      [options, options.replace(secret, MARK("labeled_secret"))],
+      // A long run of rejected assignments that all sit inside one quoted value.
+      [
+        `cmd="${params(500)}&${key}=${secret}"`,
+        `cmd="${params(500)}&${key}=${MARK("labeled_secret")}"`,
+      ],
+    ];
+    for (const [input, expected] of cases) {
+      const result = scrub(input);
+      expect(result.text).toBe(expected);
+      expect([...result.hits]).toEqual([["labeled_secret", 1]]);
+    }
+  });
+
+  it("keeps a quoted value closed within 5 characters when exactly 4 characters follow, and redacts at 5", () => {
+    const kept = `${label}='ab'${join("cd", "ef")}`;
+    const four = scrub(kept);
+    expect(four.text).toBe(kept);
+    expect(four.hits.size).toBe(0);
+    const five = scrub(`${label}='ab'${join("cd", "efg")}`);
+    expect(five.text).toBe(`${label}='${MARK("labeled_secret")}`);
+    expect([...five.hits]).toEqual([["labeled_secret", 1]]);
+  });
+
+  it("reads a single-word compound that ends with a secret word as a label", () => {
+    const secret = join("abcd1234", "efgh");
+    for (const name of [
+      join("PG", "PASSWORD"),
+      join("AUTH", "TOKEN"),
+      join("auth", "token"),
+      join("client", "secret"),
+      join("secret", "key"),
+      join("api", "token"),
+      join("access", "token"),
+      join("my", "password"),
+      join("user", "pwd"),
+      join("github", "token"),
+      join("x", "token"),
+      join("access", "key"),
+      join("private", "key"),
+    ]) {
+      expect(scrub(`${name}=${secret}`).text).toBe(`${name}=${MARK("labeled_secret")}`);
+      expect(scrub(`${name}: ${secret}`).text).toBe(`${name}: ${MARK("labeled_secret")}`);
+      // The same key in frontmatter marks its value, whatever the value looks like.
+      expect(scrubFrontmatter({ [name]: "two words" }).data).toEqual({
+        [name]: MARK("labeled_secret"),
+      });
+    }
+    for (const name of [
+      join("secre", "tary"),
+      join("to", "kenizer"),
+      join("pass", "wordless"),
+      join("to", "kens"),
+      join("mon", "key"),
+      join("key", "board"),
+      join("sort_", "key"),
+      join("my", "token", "_count"),
+    ]) {
+      expect(scrub(`${name}=${secret}`).text).toBe(`${name}=${secret}`);
+      expect(scrubFrontmatter({ [name]: "two words" }).data).toEqual({ [name]: "two words" });
+    }
+  });
+
   it("reads the label by its words: spelling variants of a secret label are labels", () => {
     const secret = join("abcd1234", "efgh");
     for (const name of [
@@ -874,6 +949,21 @@ describe("isLabelKey", () => {
     ["pw", "d"],
     ["pass", "wd"],
     ["pass", "phrase"],
+    ["PG", "PASSWORD"],
+    ["AUTH", "TOKEN"],
+    ["auth", "token"],
+    ["client", "secret"],
+    ["secret", "key"],
+    ["api", "token"],
+    ["access", "token"],
+    ["my", "password"],
+    ["user", "pwd"],
+    ["github", "token"],
+    ["x", "token"],
+    ["access", "key"],
+    ["xAccess", "Key"],
+    ["my", "passphrase"],
+    ["my", "passwd"],
   ])("accepts %s%s", (a, b) => {
     expect(isLabelKey(join(a as string, b as string))).toBe(true);
   });
@@ -899,6 +989,10 @@ describe("isLabelKey", () => {
     ["ke", "y"],
     ["ti", "tle"],
     ["", ""],
+    ["my", "token_count"],
+    ["PG", "PASSWORD_URL"],
+    ["auth", "tokens"],
+    ["secret", "ary_token_name"],
   ])("rejects %s%s", (a, b) => {
     expect(isLabelKey(join(a as string, b as string))).toBe(false);
   });
@@ -1143,6 +1237,87 @@ describe("failures surface as ScrubError (D3, D7)", () => {
     expect(seen).toEqual([{ keep: "k=", secret: "abc" }, {}]);
   });
 
+  describe("head and tail rules", () => {
+    const heads = (admitted: string[], tail = /[0-9]+/y) =>
+      ({
+        id: "headed",
+        pattern: /(?<keep>(?<label>[a-z]+)=)/g,
+        tail,
+        admit: (groups) => {
+          admitted.push(groups.label ?? "");
+          return groups.label !== "no";
+        },
+        select: (_found, from) => (from === 0 ? { start: 0, end: 2 } : null),
+      }) satisfies ScrubRule;
+
+    it("resumes right after a rejected head, so a head inside the rejected value is examined", () => {
+      const admitted: string[] = [];
+      // The tail would swallow "ok=123" if it were read for the rejected head.
+      const result = scrub("no=ok=123 and no=77", [heads(admitted, /[a-z0-9=]+/y)]);
+      // "no=" is rejected; the scan resumes at "ok=", which is admitted and takes "123".
+      expect(result.text).toBe(`no=ok=${MARK("headed")}3 and no=77`);
+      expect(admitted).toEqual(["no", "ok", "no"]);
+      expect(result.hits.get("headed")).toBe(1);
+    });
+
+    it("resumes right after a head without a tail match, and after an admitted tail", () => {
+      const result = scrub("a=b=12 c=345 d=", [heads([])]);
+      // "a=" has no tail (b is not a digit), "b=" takes "12", "c=" takes "345", "d=" has none.
+      expect(result.text).toBe(`a=b=${MARK("headed")} c=${MARK("headed")}5 d=`);
+      expect(result.hits.get("headed")).toBe(2);
+    });
+
+    it("hands select the head groups plus the tail as secret, and the span is read against the tail", () => {
+      const seen: Array<Record<string, string | undefined>> = [];
+      const rule: ScrubRule = {
+        id: "seen",
+        pattern: /(?<keep>(?<label>[a-z]+)=)/g,
+        tail: /[0-9]+/y,
+        select: (_found, _from, groups) => {
+          seen.push({ ...groups });
+          return null;
+        },
+      };
+      expect(scrub("k=42", [rule]).text).toBe("k=42");
+      expect(seen).toEqual([{ keep: "k=", label: "k", secret: "42" }]);
+    });
+
+    it("keeps working when the replaced head is followed by more text, and without admit", () => {
+      const rule: ScrubRule = { id: "plain", pattern: /(?<keep>k=)/g, tail: /\d+/y };
+      const result = scrub("k=12 k=x k=3", [rule]);
+      expect(result.text).toBe(`k=${MARK("plain")} k=x k=${MARK("plain")}`);
+      expect(result.hits.get("plain")).toBe(2);
+    });
+
+    it("throws when the tail is not sticky, or the head is not exactly the keep group", () => {
+      const sticky = failing({ id: "nosticky", pattern: /(?<keep>k=)/g, tail: /\d+/g }, "k=1");
+      expect(sticky).toBeInstanceOf(ScrubError);
+      const partial = failing({ id: "partial", pattern: /(?<keep>k)=/g, tail: /\d+/y }, "k=1");
+      expect(partial).toBeInstanceOf(ScrubError);
+      const both = failing(
+        { id: "both", pattern: /(?<keep>k=)(?<secret>1)/g, tail: /\d+/y },
+        "k=12",
+      );
+      expect(both).toBeInstanceOf(ScrubError);
+      const bare = failing({ id: "bare", pattern: /k=/g, tail: /\d+/y }, "k=1");
+      expect(bare).toBeInstanceOf(ScrubError);
+    });
+
+    it("wraps a throwing admit, naming only the rule id", () => {
+      const rule: ScrubRule = {
+        id: "admitboom",
+        pattern: /(?<keep>k=)/g,
+        tail: /\d+/y,
+        admit() {
+          throw new Error(`leaky ${input}`);
+        },
+      };
+      const error = failing(rule, "k=1");
+      expect(error).toBeInstanceOf(ScrubError);
+      expect((error as ScrubError).message).toBe("Scrub rule admitboom failed");
+    });
+  });
+
   it("leaves a match alone when select finds nothing", () => {
     const rule: ScrubRule = { id: "none", pattern: /[a-z]+/g, select: () => null };
     const result = scrub("abc", [rule]);
@@ -1209,6 +1384,12 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["labels that name something else", repeat("a=bbbbbb ")],
     ["token_count runs", repeat("token_count=")],
     ["token_count runs with values", repeat("token_count=bbbbbb ")],
+    ["rejected assignments", repeat("a=b&")],
+    ["rejected assignments with values", repeat("a=bbbbbb&")],
+    ["rejected assignments in a quoted value", `x="${repeat("a=bbbbbb&")}`],
+    ["rejected assignments after url=", `url=${repeat("k=abcdef&")}`],
+    ["minified JSON keys", `{${repeat('"a":"bbbbbb",')}`],
+    ["rejected options", repeat("--o=abcdef ")],
     ["a value holding token_count runs", `x=${repeat("token_count=bbbbbb&")}`],
     ["a quoted value holding labels", `x="${repeat(join("a=bbbbbb pass", "word=cccccc "))}"`],
     ["short closed single quotes", repeat(join("pass", "word='ab'"))],
