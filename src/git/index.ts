@@ -51,6 +51,29 @@ export async function runGit(
   }
 }
 
+/**
+ * Like `runGit`, but returns stdout as raw bytes and never trims. Needed for `-z` output, where a
+ * leading space or newline is part of a file name.
+ */
+export async function runGitBuffer(
+  cwd: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<Buffer> {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
+      maxBuffer: 16 * 1024 * 1024,
+      encoding: "buffer",
+    });
+    return stdout;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    throw new GitError(args[0] ?? "unknown", typeof code === "number" ? code : null);
+  }
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -84,6 +107,20 @@ export async function commitFile(
   author: GitAuthor,
 ): Promise<string> {
   await runGit(dir, ["add", "--", relPath]);
+  await runGit(dir, ["commit", "-m", message], {
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+    ...committerEnv(author),
+  });
+  return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
+/** Commit what is staged as `author` and return the new commit sha. */
+export async function commitIndex(
+  dir: string,
+  message: string,
+  author: GitAuthor,
+): Promise<string> {
   await runGit(dir, ["commit", "-m", message], {
     GIT_AUTHOR_NAME: author.name,
     GIT_AUTHOR_EMAIL: author.email,

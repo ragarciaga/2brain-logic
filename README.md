@@ -74,10 +74,20 @@ configured folder, the log line only the code, and nothing is written. The defau
 Each write reads the vault config right after the pull, so a config change pushed from another
 clone applies to the next write without a restart.
 
+If the pull before a write stops on a rebase conflict, the service aborts the rebase and keeps both
+versions. The remote version stays at its path and each conflicting local version is added next to
+it as `<name> (conflict YYYY-MM-DD).md` (the date is the UTC day; a taken name gets ` 2`, ` 3`, ...
+inside the parentheses, so nothing is overwritten). The copy goes through the secret scrub like any
+note. Everything is committed once as `2brain: keep conflicting versions (<n> files)` and pushed,
+the service logs `conflicts_kept: <n>` (a count, never names or content), and the original request
+then goes on. The local commits are squashed into that one commit. If both versions carry the same
+`source_id`, a create with that id at a new path answers 409 `duplicate_source` naming the copy that
+sorts first. A pull failure that is not a rebase conflict is still 500 `write_failed`.
+
 > **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
 > ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) and scrubs secrets on create and a retry of
-> the same request is idempotent, but merge conflicts and push failures are not recovered
-> yet. Until then, use it only with a throwaway vault.
+> the same request is idempotent, and a rebase conflict keeps both versions, but push failures
+> are not retried yet. Until then, use it only with a throwaway vault.
 
 SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyChecking=no`.
 
