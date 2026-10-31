@@ -16,6 +16,7 @@ import {
 import type { AuthStore } from "../auth/oauth/store.js";
 import type { VaultWriter } from "../vault/write-note.js";
 import { PUBLIC_PATHS, type PublicAppEnv, type PublicUrls } from "./app.js";
+import { INFO_TOOLS } from "./tools/info.js";
 import { READ_TOOLS } from "./tools/read.js";
 import { WRITE_TOOLS } from "./tools/write.js";
 
@@ -56,11 +57,13 @@ export interface McpToolDefinition {
 
 /**
  * The tool registry: the read tools (`search`, `read`, `recent`) and the write tools (`save_note`,
- * `save_recipe`, `update_properties`). No tool deletes, moves or archives a file (R9.5).
+ * `save_recipe`, `update_properties`) and the read-only `vault_info`. No tool deletes, moves or
+ * archives a file (R9.5).
  */
 export const MCP_TOOLS: readonly McpToolDefinition[] = Object.freeze([
   ...READ_TOOLS,
   ...WRITE_TOOLS,
+  ...INFO_TOOLS,
 ]);
 
 /** Builds the SDK server with every tool of the registry registered with `deps`. */
