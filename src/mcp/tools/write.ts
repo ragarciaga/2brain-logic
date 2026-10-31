@@ -8,7 +8,7 @@ import {
   type VaultConfig,
 } from "../../config/vault-config.js";
 import { issuesOf, mapWriteError, redactedLogLine } from "../../server/errors.js";
-import { isSafePathSegment, NoteInput } from "../../vault/note-schema.js";
+import { isSafePathSegment, NoteInput, NotePatch } from "../../vault/note-schema.js";
 import {
   defaultScrubber,
   InvalidFrontmatterError,
@@ -20,10 +20,13 @@ import {
 import type { McpServerDeps, McpToolDefinition } from "../server.js";
 
 /**
- * The write tools: `save_note` and `save_recipe` (R9.1, R9.2, R9.4, R9.5).
+ * The write tools: `save_note`, `save_recipe` and `update_properties` (R9.1 to R9.5).
  *
- * - Both save through `VaultWriter.write`, the same create path as `POST /notes` (validation,
- *   scrub, dedupe, commit, push). Nothing here touches the vault or git directly.
+ * - `save_note` and `save_recipe` save through `VaultWriter.write`, the same create path as
+ *   `POST /notes`; `update_properties` goes through `VaultWriter.patch`, the same path as
+ *   `PATCH /notes` (validation, scrub, dedupe, commit, push). It sets properties only: an
+ *   `append` or a `body` is refused, so the body of a note is never touched. Nothing here touches
+ *   the vault or git directly.
  * - Every answer is `{ ok: true, ... }` or the body `mapWriteError` gives the ingest API for the
  *   same error, so codes and detail fields cannot drift. Handlers never throw, and no result or
  *   log line carries note content, a request value, an error message or a stack.
@@ -191,41 +194,35 @@ const text = (what: string, max: number) =>
     .min(1, { message: `${what} must not be empty` })
     .max(max, { message: `${what} is too long` });
 
-/** The two write tools. Options are test seams; production passes none. */
+/** The three write tools. Options are test seams; production passes none. */
 export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinition[] {
   const now = options.now ?? (() => new Date());
   const log = options.log ?? console.error;
   const scrubber = options.scrubber ?? defaultScrubber;
 
-  /** Save a note and shape the answer; the only place that calls the writer. */
-  async function save(tool: string, deps: McpServerDeps, input: unknown, build?: BuildStep) {
+  /** What one write operation gives back: the writer's result or the refusal to answer with. */
+  type Outcome = { ok: true; result: WriteResult } | { ok: false; failure: Refusal };
+
+  const invalidBody = (issues: unknown): Outcome => ({
+    ok: false,
+    failure: { status: 400, body: { ok: false, error: "invalid_body", issues }, log: undefined },
+  });
+
+  /**
+   * Run one write operation and shape the answer; the only place that turns a writer result or
+   * error into a tool result. `op` calls the writer and returns a refusal or its result; an error
+   * it throws is a bug of the tool and becomes `internal_error`.
+   */
+  async function run(tool: string, op: () => Promise<Outcome>) {
     const prefix = `mcp ${tool}: `;
     const refuse = (failure: Refusal) => {
       log(`${prefix}${failure.log ?? failure.body.error}`);
       return toResult(failure.body);
     };
     try {
-      let candidate = input;
-      if (build !== undefined) {
-        const root = resolve(deps.config.vaultDir);
-        const built = await build(() => deps.writer.withPulled(() => loadVaultConfig(root)));
-        if (!built.ok) return refuse(built.failure);
-        candidate = built.note;
-      }
-      const parsed = NoteInput.safeParse(candidate);
-      if (!parsed.success) {
-        return refuse({
-          status: 400,
-          body: { ok: false, error: "invalid_body", issues: issuesOf(parsed.error) },
-          log: undefined,
-        });
-      }
-      let result: WriteResult;
-      try {
-        result = await deps.writer.write(parsed.data);
-      } catch (error) {
-        return refuse(mapWriteError(error));
-      }
+      const outcome = await op();
+      if (!outcome.ok) return refuse(outcome.failure);
+      const { result } = outcome;
       const redactions = result.redactions ?? [];
       if (redactions.length > 0) log(`${prefix}${redactedLogLine(redactions)}`);
       return toResult({
@@ -241,9 +238,34 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
     }
   }
 
+  /** Call a writer method; a writer error becomes the refusal `mapWriteError` gives. */
+  async function viaWriter(call: () => Promise<WriteResult>): Promise<Outcome> {
+    try {
+      return { ok: true, result: await call() };
+    } catch (error) {
+      return { ok: false, failure: mapWriteError(error) };
+    }
+  }
+
   type BuildStep = (
     loadConfig: () => Promise<VaultConfig>,
   ) => Promise<ReturnType<typeof buildRecipe>>;
+
+  /** Create a note from the call's input, or from the note a build step makes of it. */
+  function save(tool: string, deps: McpServerDeps, input: unknown, build?: BuildStep) {
+    return run(tool, async () => {
+      let candidate = input;
+      if (build !== undefined) {
+        const root = resolve(deps.config.vaultDir);
+        const built = await build(() => deps.writer.withPulled(() => loadVaultConfig(root)));
+        if (!built.ok) return built;
+        candidate = built.note;
+      }
+      const parsed = NoteInput.safeParse(candidate);
+      if (!parsed.success) return invalidBody(issuesOf(parsed.error));
+      return viaWriter(() => deps.writer.write(parsed.data));
+    });
+  }
 
   const saveNote: McpToolDefinition = {
     name: "save_note",
@@ -305,7 +327,41 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
     },
   };
 
-  return [saveNote, saveRecipe];
+  const updateProperties: McpToolDefinition = {
+    name: "update_properties",
+    register(server: McpServer, deps: McpServerDeps) {
+      server.registerTool(
+        "update_properties",
+        {
+          description:
+            "Set frontmatter properties of an existing note. Top-level keys in set replace the stored ones and the others are kept. The body is never changed. Secrets are redacted before they are stored.",
+          // Loose on purpose: a key the schema does not name must reach the handler, which refuses
+          // it. A plain object schema would strip `append` and apply `set` as if it were absent.
+          inputSchema: z.looseObject({
+            path: text("path", PATH_MAX),
+            set: z.record(z.string(), z.unknown(), { message: "set must be an object" }),
+          }),
+        },
+        (args) =>
+          run("update_properties", async () => {
+            if (Object.hasOwn(args, "append")) {
+              return invalidBody([
+                {
+                  path: "append",
+                  message: "update_properties sets properties only; append is not accepted",
+                },
+              ]);
+            }
+            // The F1 patch schema is strict: `body` or any other extra key is refused here.
+            const parsed = NotePatch.safeParse(args);
+            if (!parsed.success) return invalidBody(issuesOf(parsed.error));
+            return viaWriter(() => deps.writer.patch(parsed.data));
+          }),
+      );
+    },
+  };
+
+  return [saveNote, saveRecipe, updateProperties];
 }
 
 export const WRITE_TOOLS: readonly McpToolDefinition[] = Object.freeze(createWriteTools());
