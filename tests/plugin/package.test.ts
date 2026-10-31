@@ -23,13 +23,27 @@ describe("plugin.json", () => {
     expect(manifest.name).toBe("2brain");
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(Object.keys(manifest).sort()).toStrictEqual([
+      "author",
       "description",
+      "icon",
+      "license",
       "name",
       "userConfig",
       "version",
     ]);
-    for (const key of ["author", "homepage", "repository"])
-      expect(manifest).not.toHaveProperty(key);
+    expect(manifest.author).toStrictEqual({ name: "2brain-logic contributors" });
+    expect(manifest.license).toBe("MIT");
+    for (const key of ["homepage", "repository"]) expect(manifest).not.toHaveProperty(key);
+  });
+
+  it("points icon at a real PNG file", () => {
+    expect(manifest.icon).toBe("./icon.png");
+    const bytes = readFileSync(join(PLUGIN_ROOT, manifest.icon));
+    expect(
+      bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    ).toBe(true);
+    expect(bytes.readUInt32BE(16)).toBeGreaterThanOrEqual(512);
+    expect(bytes.readUInt32BE(20)).toBe(bytes.readUInt32BE(16));
   });
 
   it("declares exactly the six options with title and description", () => {
@@ -112,7 +126,8 @@ describe("package shape", () => {
 });
 
 describe("plugin files pass the shared scans", () => {
-  const files = listPluginFiles();
+  // The icon is binary, so the text scans skip it; its signature is checked above.
+  const files = listPluginFiles().filter((f) => !f.endsWith(".png"));
   it("scanOwnerData finds nothing", () => {
     for (const f of files) expect([f, scanOwnerData(readPluginFile(f))]).toStrictEqual([f, []]);
   });
