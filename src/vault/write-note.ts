@@ -1,9 +1,10 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
-import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
+import { loadVaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
 import { stringifyNote } from "./frontmatter.js";
 import type { NoteInput } from "./note-schema.js";
+import { validateFrontmatter } from "./validate.js";
 
 export class NoteExistsError extends Error {
   constructor() {
@@ -20,6 +21,33 @@ export class UnsafePathError extends Error {
   }
 }
 
+/**
+ * A required frontmatter property is absent or has a rejected value. `missing` and `invalid` hold
+ * owner property names only; the message and the fields never carry a value from the note.
+ */
+export class InvalidFrontmatterError extends Error {
+  readonly missing: string[];
+  readonly invalid: string[];
+
+  constructor(missing: string[], invalid: string[]) {
+    super("Frontmatter is invalid");
+    this.name = "InvalidFrontmatterError";
+    this.missing = missing;
+    this.invalid = invalid;
+  }
+}
+
+/** The note's path is outside the folder its type requires. `expected` comes from the config. */
+export class WrongFolderError extends Error {
+  readonly expected: string;
+
+  constructor(expected: string) {
+    super("Note is outside the folder for its type");
+    this.name = "WrongFolderError";
+    this.expected = expected;
+  }
+}
+
 export interface WriteResult {
   path: string;
   commit: string;
@@ -33,12 +61,6 @@ export interface NoteWriterOptions {
   vaultDir: string;
   author: GitAuthor;
   git: GitApi;
-  /**
-   * Optional check of a note against the config just read. It runs inside the write queue, after
-   * the pull and the config load and before any file work; a throw rejects the write and leaves
-   * the vault untouched.
-   */
-  checkNote?: (note: NoteInput, config: VaultConfig) => void | Promise<void>;
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -61,24 +83,25 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
 }
 
 /**
- * Create the single write path into the vault: pull with rebase, read the vault config, write a
- * new file, commit, push. Writes are serialized because they share one working tree. The config
- * is read again after every pull, so a change pushed from another clone applies to the next write
- * without a restart; an invalid config throws `ConfigInvalidError` before any file work.
+ * Create the single write path into the vault: pull with rebase, read the vault config, validate
+ * the frontmatter and path against it, write a new file, commit, push. Writes are serialized
+ * because they share one working tree. The config is read again after every pull, so a change
+ * pushed from another clone applies to the next write without a restart; an invalid config throws
+ * `ConfigInvalidError` and an invalid note throws `InvalidFrontmatterError` or `WrongFolderError`,
+ * both before any file work. Validation never rewrites the frontmatter or the body.
  */
-export function createNoteWriter({
-  vaultDir,
-  author,
-  git,
-  checkNote,
-}: NoteWriterOptions): NoteWriter {
+export function createNoteWriter({ vaultDir, author, git }: NoteWriterOptions): NoteWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
 
   async function writeOne(note: NoteInput): Promise<WriteResult> {
     await git.pullRebase(root, author);
     const config = await loadVaultConfig(root);
-    await checkNote?.(note, config);
+    const verdict = validateFrontmatter(note.frontmatter, note.path, config);
+    if (!verdict.ok) {
+      if (verdict.error === "wrong_folder") throw new WrongFolderError(verdict.expected);
+      throw new InvalidFrontmatterError(verdict.missing, verdict.invalid);
+    }
 
     const target = resolve(root, note.path);
     if (!target.startsWith(root + sep)) throw new UnsafePathError();

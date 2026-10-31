@@ -81,6 +81,30 @@ function listVault(): string[] {
     .sort();
 }
 
+/** The four required properties with valid values under the default config. */
+const VALID = { type: "idea", area: "personal", date: "2026-10-31", source: "manual" };
+
+/** A valid create request at `path` (a type folder of the default config); `extra` is merged in. */
+function note(path: string, extra: Record<string, unknown> = {}, body = "x\n") {
+  return { path, frontmatter: { ...VALID, ...extra }, body };
+}
+
+let cloneCounter = 0;
+
+/** Commit `files` (path to content) from a second clone and push; returns the new sha. */
+function pushFromElsewhere(name: string, files: Record<string, string>): string {
+  cloneCounter += 1;
+  const dir = fixture.cloneElsewhere(`${name}-${cloneCounter}`);
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), content);
+    git(dir, ["add", path]);
+  }
+  git(dir, ["commit", "-m", `${name} config`]);
+  git(dir, ["push", "origin", "main"]);
+  return git(dir, ["rev-parse", "HEAD"]);
+}
+
 beforeEach(async () => {
   fixture = createGitFixture();
   gitCalls = [];
@@ -115,19 +139,19 @@ describe("ensureClone", () => {
 describe("POST /notes against a real remote", () => {
   it("D3: writes, commits as the configured author and pushes to remote main", async () => {
     const app = makeApp();
-    const input = {
-      path: "Inbox/idea.md",
-      frontmatter: { title: "Idea", tags: ["a", "b"] },
-      body: "First line\n\nSecond line\n",
-    };
+    const input = note(
+      "inbox/idea.md",
+      { title: "Idea", tags: ["a", "b"] },
+      "First line\n\nSecond line\n",
+    );
     const response = await post(app, input);
     expect(response.status).toBe(201);
     const result = (await response.json()) as { ok: boolean; path: string; commit: string };
     expect(result.ok).toBe(true);
-    expect(result.path).toBe("Inbox/idea.md");
+    expect(result.path).toBe("inbox/idea.md");
     expect(result.commit).toBe(remoteSha());
 
-    const parsed = parseNote(remoteFile("Inbox/idea.md"));
+    const parsed = parseNote(remoteFile("inbox/idea.md"));
     expect(parsed.data).toEqual(input.frontmatter);
     expect(parsed.content).toBe(input.body);
 
@@ -143,7 +167,7 @@ describe("POST /notes against a real remote", () => {
     git(other, ["push", "origin", "main"]);
     const otherSha = git(other, ["rev-parse", "HEAD"]);
 
-    const response = await post(makeApp(), { path: "mine.md", frontmatter: {}, body: "mine\n" });
+    const response = await post(makeApp(), note("inbox/mine.md", {}, "mine\n"));
     expect(response.status).toBe(201);
     const { commit } = (await response.json()) as { commit: string };
     // Throws (non-zero exit) unless otherSha is an ancestor of our pushed commit.
@@ -203,43 +227,44 @@ describe("POST /notes against a real remote", () => {
 
   it("D6: an existing path returns 409 and makes no commit", async () => {
     const app = makeApp();
-    const first = await post(app, { path: "dup.md", frontmatter: { v: 1 }, body: "one\n" });
+    const first = await post(app, note("inbox/dup.md", { v: 1 }, "one\n"));
     expect(first.status).toBe(201);
     const shaBefore = remoteSha();
 
-    const second = await post(app, { path: "dup.md", frontmatter: { v: 2 }, body: "two\n" });
+    const second = await post(app, note("inbox/dup.md", { v: 2 }, "two\n"));
     expect(second.status).toBe(409);
     expect(remoteSha()).toBe(shaBefore);
-    expect(parseNote(remoteFile("dup.md")).data).toEqual({ v: 1 });
+    expect(parseNote(remoteFile("inbox/dup.md")).data).toEqual({ ...VALID, v: 1 });
     expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
   });
 
   it("D6: a path that exists only on the remote returns 409 after the pull", async () => {
-    const shaBefore = remoteSha();
-    const response = await post(makeApp(), { path: "README.md", frontmatter: {}, body: "x\n" });
+    const shaBefore = pushFromElsewhere("remote-only", { "inbox/remote.md": "remote\n" });
+    const response = await post(makeApp(), note("inbox/remote.md"));
     expect(response.status).toBe(409);
     expect(remoteSha()).toBe(shaBefore);
+    expect(remoteFile("inbox/remote.md")).toBe("remote\n");
   });
 
   it("D7: two concurrent valid POSTs both return 201 and both notes reach the remote", async () => {
     const app = makeApp();
     const [a, b] = await Promise.all([
-      post(app, { path: "a.md", frontmatter: { n: "a" }, body: "a\n" }),
-      post(app, { path: "b.md", frontmatter: { n: "b" }, body: "b\n" }),
+      post(app, note("inbox/a.md", { n: "a" }, "a\n")),
+      post(app, note("inbox/b.md", { n: "b" }, "b\n")),
     ]);
     expect([a.status, b.status]).toEqual([201, 201]);
-    expect(parseNote(remoteFile("a.md")).data).toEqual({ n: "a" });
-    expect(parseNote(remoteFile("b.md")).data).toEqual({ n: "b" });
+    expect(parseNote(remoteFile("inbox/a.md")).data).toEqual({ ...VALID, n: "a" });
+    expect(parseNote(remoteFile("inbox/b.md")).data).toEqual({ ...VALID, n: "b" });
   });
 
   it("D16: a ---js body is stored as content, not frontmatter, and runs no code", async () => {
     const body = "---js\nglobalThis.__pwnedIntegration = true\n---\nreal\n";
-    const response = await post(makeApp(), { path: "inj.md", frontmatter: {}, body });
+    const response = await post(makeApp(), note("inbox/inj.md", {}, body));
     expect(response.status).toBe(201);
-    const stored = remoteFile("inj.md");
+    const stored = remoteFile("inbox/inj.md");
     expect(stored.startsWith("---\n")).toBe(true);
     const viaDefaultMatter = matter(stored);
-    expect(viaDefaultMatter.data).toEqual({});
+    expect(viaDefaultMatter.data).toEqual(VALID);
     expect(viaDefaultMatter.content).toBe(body);
     expect((globalThis as Record<string, unknown>).__pwnedIntegration).toBeUndefined();
   });
@@ -252,25 +277,27 @@ describe("POST /notes against a real remote", () => {
     ["CRLF", "a\r\nb\r\n"],
   ])("D3: the %s body is stored exactly as sent", async (name, body) => {
     const slug = name.replaceAll(" ", "-");
-    for (const [kind, frontmatter] of [
-      ["empty", {}],
+    for (const [kind, extra] of [
+      ["minimal", {}],
       ["full", { title: "T", n: 2 }],
     ] as const) {
-      const path = `rt/${slug}-${kind}.md`;
-      const response = await post(makeApp(), { path, frontmatter, body });
+      const path = `inbox/${slug}-${kind}.md`;
+      const sent = note(path, extra, body);
+      const response = await post(makeApp(), sent);
       expect(response.status).toBe(201);
       const parsed = parseNote(remoteFile(path));
-      expect(parsed.data).toEqual(frontmatter);
+      expect(parsed.data).toEqual(sent.frontmatter);
       expect(parsed.content).toBe(body);
     }
   });
 
   it("D16: a body that starts with its own fence round-trips with the input frontmatter", async () => {
     const body = "---\nk: v\n---\ntext\n";
-    const response = await post(makeApp(), { path: "fence.md", frontmatter: { a: 1 }, body });
+    const sent = note("inbox/fence.md", { a: 1 }, body);
+    const response = await post(makeApp(), sent);
     expect(response.status).toBe(201);
-    const parsed = parseNote(remoteFile("fence.md"));
-    expect(parsed.data).toEqual({ a: 1 });
+    const parsed = parseNote(remoteFile("inbox/fence.md"));
+    expect(parsed.data).toEqual(sent.frontmatter);
     expect(parsed.content).toBe(body);
   });
 
@@ -286,9 +313,9 @@ describe("POST /notes against a real remote", () => {
     });
 
     it("rejects a parent directory symlinked outside the vault and writes nothing there", async () => {
-      symlinkSync(outside, join(fixture.vaultDir, "link"));
+      symlinkSync(outside, join(fixture.vaultDir, "inbox"));
       const shaBefore = remoteSha();
-      const response = await post(makeApp(), { path: "link/x.md", frontmatter: {}, body: "x\n" });
+      const response = await post(makeApp(), note("inbox/x.md"));
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ ok: false, error: "unsafe_path" });
       expect(readdirSync(outside)).toEqual([]);
@@ -297,12 +324,8 @@ describe("POST /notes against a real remote", () => {
     });
 
     it("does not let mkdir -p create directories outside the vault through a symlink", async () => {
-      symlinkSync(outside, join(fixture.vaultDir, "link"));
-      const response = await post(makeApp(), {
-        path: "link/new/deeper/x.md",
-        frontmatter: {},
-        body: "x\n",
-      });
+      symlinkSync(outside, join(fixture.vaultDir, "inbox"));
+      const response = await post(makeApp(), note("inbox/new/deeper/x.md"));
       expect(response.status).toBe(400);
       expect(readdirSync(outside)).toEqual([]);
       expect(existsSync(join(outside, "new"))).toBe(false);
@@ -311,30 +334,15 @@ describe("POST /notes against a real remote", () => {
     it("rejects a symlink to a file at the target path without writing through it", async () => {
       const victim = join(outside, "victim.md");
       writeFileSync(victim, "keep\n");
-      symlinkSync(victim, join(fixture.vaultDir, "ln.md"));
-      const response = await post(makeApp(), { path: "ln.md", frontmatter: {}, body: "x\n" });
+      mkdirSync(join(fixture.vaultDir, "inbox"));
+      symlinkSync(victim, join(fixture.vaultDir, "inbox", "ln.md"));
+      const response = await post(makeApp(), note("inbox/ln.md"));
       expect(response.status).toBe(409);
       expect(readdirSync(outside)).toEqual(["victim.md"]);
     });
   });
 
   describe("the vault config is read again after every pull", () => {
-    let cloneCounter = 0;
-
-    /** Commit `files` (path to content) from a second clone and push; returns the new sha. */
-    function pushFromElsewhere(name: string, files: Record<string, string>): string {
-      cloneCounter += 1;
-      const dir = fixture.cloneElsewhere(`${name}-${cloneCounter}`);
-      for (const [path, content] of Object.entries(files)) {
-        mkdirSync(dirname(join(dir, path)), { recursive: true });
-        writeFileSync(join(dir, path), content);
-        git(dir, ["add", path]);
-      }
-      git(dir, ["commit", "-m", `${name} config`]);
-      git(dir, ["push", "origin", "main"]);
-      return git(dir, ["rev-parse", "HEAD"]);
-    }
-
     const invalidConfigs: Array<[string, string, string]> = [
       ["an unknown key", "vault:\n  colour: blue\n", "vault.colour"],
       ["a wrong type", "vault:\n  archive_folder: 42\n", "vault.archive_folder"],
@@ -344,11 +352,7 @@ describe("POST /notes against a real remote", () => {
       "R2.3: %s gives 503 and changes nothing",
       async (_name, yaml, keyPath) => {
         const configSha = pushFromElsewhere("bad", { ".2brain/config.yaml": yaml });
-        const response = await post(makeApp(), {
-          path: "inbox/blocked.md",
-          frontmatter: {},
-          body: "x\n",
-        });
+        const response = await post(makeApp(), note("inbox/blocked.md"));
         expect(response.status).toBe(503);
         expect(await response.json()).toEqual({
           ok: false,
@@ -368,11 +372,11 @@ describe("POST /notes against a real remote", () => {
     it("D1: after a 503, a fixing commit from another clone makes the next POST 201 without a restart", async () => {
       pushFromElsewhere("bad", { ".2brain/config.yaml": "vault:\n  colour: blue\n" });
       const app = makeApp();
-      const note = { path: "inbox/later.md", frontmatter: {}, body: "x\n" };
-      expect((await post(app, note)).status).toBe(503);
+      const sent = note("inbox/later.md");
+      expect((await post(app, sent)).status).toBe(503);
 
       pushFromElsewhere("fix", { ".2brain/config.yaml": "version: 1\n" });
-      const response = await post(app, note);
+      const response = await post(app, sent);
       expect(response.status).toBe(201);
       const { commit } = (await response.json()) as { commit: string };
       expect(remoteSha()).toBe(commit);
@@ -380,37 +384,177 @@ describe("POST /notes against a real remote", () => {
     });
 
     it("R2.4: a change to the areas pushed from another clone applies to the next create", async () => {
-      const seenAreas: string[][] = [];
-      const writer = createNoteWriter({
-        vaultDir: fixture.vaultDir,
-        author: TEST_AUTHOR,
-        git: spyGit(),
-        checkNote: (note, config) => {
-          seenAreas.push([...config.areas]);
-          const area = note.frontmatter.area;
-          if (typeof area !== "string" || !config.areas.includes(area)) {
-            throw new Error("area not in config");
-          }
-        },
-      });
-      const note = {
-        path: "travel/trip.md",
-        frontmatter: { area: "travel" },
-        body: "x\n",
-      };
+      const app = makeApp();
+      const sent = note("travel/projects/trip.md", { type: "project", area: "travel" });
 
       const shaBefore = remoteSha();
-      await expect(writer.write(note)).rejects.toThrow("area not in config");
+      const before = await post(app, sent);
+      expect(before.status).toBe(400);
+      expect(await before.json()).toEqual({
+        ok: false,
+        error: "invalid_frontmatter",
+        missing: [],
+        invalid: ["area"],
+      });
       expect(existsSync(join(fixture.vaultDir, "travel"))).toBe(false);
       expect(remoteSha()).toBe(shaBefore);
       expect(gitCalls).toEqual(["pullRebase"]);
-      expect(seenAreas).toEqual([["personal", "work"]]);
 
       pushFromElsewhere("areas", { ".2brain/config.yaml": "areas:\n  - personal\n  - travel\n" });
-      const result = await writer.write(note);
-      expect(result.commit).toBe(remoteSha());
-      expect(seenAreas[1]).toContain("travel");
-      expect(parseNote(remoteFile("travel/trip.md")).data).toEqual({ area: "travel" });
+      const after = await post(app, sent);
+      expect(after.status).toBe(201);
+      const { commit } = (await after.json()) as { commit: string };
+      expect(commit).toBe(remoteSha());
+      const stored = parseNote(remoteFile("travel/projects/trip.md"));
+      expect(stored.data).toEqual(sent.frontmatter);
+      expect(stored.content).toBe(sent.body);
+    });
+  });
+
+  describe("R3: frontmatter and folder validation", () => {
+    /** POST `payload`, expect the exact 400 body and a vault, remote and log left untouched. */
+    async function expectRejected(
+      payload: unknown,
+      expectedBody: unknown,
+      logLine: string,
+    ): Promise<string> {
+      const shaBefore = remoteSha();
+      const listingBefore = listVault();
+      const response = await post(makeApp(), payload);
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual(expectedBody);
+      expect(gitCalls).toEqual(["pullRebase"]);
+      expect(remoteSha()).toBe(shaBefore);
+      expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(shaBefore);
+      expect(listVault()).toEqual(listingBefore);
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+      expect(logs).toEqual([logLine]);
+      return `${text}\n${logs.join("\n")}`;
+    }
+
+    const invalidFrontmatter = (missing: string[], invalid: string[]) => ({
+      ok: false,
+      error: "invalid_frontmatter",
+      missing,
+      invalid,
+    });
+
+    it.each(["type", "area", "date", "source"])(
+      "R3.1: a create missing only %s returns 400 naming it",
+      async (name) => {
+        const sent = note("inbox/m.md");
+        delete (sent.frontmatter as Record<string, unknown>)[name];
+        await expectRejected(sent, invalidFrontmatter([name], []), "invalid_frontmatter rejected");
+      },
+    );
+
+    it("R3.1: empty frontmatter lists all four in the order type, area, date, source", async () => {
+      await expectRejected(
+        { path: "inbox/m.md", frontmatter: {}, body: "x\n" },
+        invalidFrontmatter(["type", "area", "date", "source"], []),
+        "invalid_frontmatter rejected",
+      );
+    });
+
+    it("R3.1: the names follow the properties mapping of the pushed config", async () => {
+      pushFromElsewhere("names", {
+        ".2brain/config.yaml":
+          "properties:\n  type: kind\n  area: domain\n  date: day\n  source: origin\n",
+      });
+      git(fixture.vaultDir, ["pull", "--rebase"]);
+      await expectRejected(
+        { path: "inbox/m.md", frontmatter: { ...VALID }, body: "x\n" },
+        invalidFrontmatter(["kind", "domain", "day", "origin"], []),
+        "invalid_frontmatter rejected",
+      );
+      gitCalls = [];
+      logs = [];
+      await expectRejected(
+        {
+          path: "inbox/m.md",
+          frontmatter: { kind: "idea", domain: "personal", day: "2026-10-31" },
+          body: "x\n",
+        },
+        invalidFrontmatter(["origin"], []),
+        "invalid_frontmatter rejected",
+      );
+    });
+
+    it.each([
+      ["an unknown type", { type: "memo" }, "type"],
+      ["an unknown area", { area: "garden" }, "area"],
+      ["a date that is not a calendar date", { date: "2026-02-30" }, "date"],
+      ["a date in another format", { date: "31/10/2026" }, "date"],
+    ])("R3.2/R3.3: %s returns 400 with the property in invalid", async (_name, extra, property) => {
+      await expectRejected(
+        note("inbox/m.md", extra),
+        invalidFrontmatter([], [property]),
+        "invalid_frontmatter rejected",
+      );
+    });
+
+    it("D1: no frontmatter value from the request reaches the body or the log", async () => {
+      const output = await expectRejected(
+        note("inbox/m.md", {
+          type: "VALUEMARKER-type",
+          area: "VALUEMARKER-area",
+          date: "VALUEMARKER-date",
+          source: "VALUEMARKER-source",
+          title: "VALUEMARKER-title",
+        }),
+        invalidFrontmatter([], ["type", "area", "date"]),
+        "invalid_frontmatter rejected",
+      );
+      expect(output).not.toContain("VALUEMARKER");
+      expect(output).not.toContain("manual");
+    });
+
+    it("R3.4: a path outside the type folder returns 400 wrong_folder with the folder", async () => {
+      await expectRejected(
+        note("notes/x.md"),
+        { ok: false, error: "wrong_folder", expected: "inbox" },
+        "wrong_folder rejected",
+      );
+    });
+
+    it("R3.4: {area} in the folder is expanded with the note's area", async () => {
+      await expectRejected(
+        note("personal/meetings/x.md", { type: "meeting", area: "work" }),
+        { ok: false, error: "wrong_folder", expected: "work/meetings" },
+        "wrong_folder rejected",
+      );
+    });
+
+    it("D1: a wrong_folder response and log carry no frontmatter value", async () => {
+      const output = await expectRejected(
+        note("VALUEMARKER/x.md", { title: "VALUEMARKER-title" }),
+        { ok: false, error: "wrong_folder", expected: "inbox" },
+        "wrong_folder rejected",
+      );
+      expect(output).not.toContain("VALUEMARKER");
+      expect(output).not.toContain("manual");
+    });
+
+    it("R3.4: a note inside its expanded type folder is accepted", async () => {
+      const sent = note("work/meetings/x.md", { type: "meeting", area: "work" });
+      const response = await post(makeApp(), sent);
+      expect(response.status).toBe(201);
+      expect(parseNote(remoteFile("work/meetings/x.md")).data).toEqual(sent.frontmatter);
+    });
+
+    it("R3.4: a type without a folder accepts any safe path", async () => {
+      pushFromElsewhere("folderless", {
+        ".2brain/config.yaml": "types:\n  scrap:\n    value: scrap-note\n",
+      });
+      // The type key (scrap) differs from its value (scrap-note): validation must store the
+      // value the request sent, never rewrite it to the config key.
+      const sent = note("anywhere/x.md", { type: "scrap-note" });
+      const response = await post(makeApp(), sent);
+      expect(response.status).toBe(201);
+      const stored = parseNote(remoteFile("anywhere/x.md"));
+      expect(stored.data).toEqual(sent.frontmatter);
+      expect(stored.content).toBe(sent.body);
     });
   });
 
@@ -425,7 +569,7 @@ describe("POST /notes against a real remote", () => {
       vi.spyOn(console, "warn").mockImplementation(() => undefined),
     ];
 
-    const response = await post(makeApp(), { path: "p.md", frontmatter: {}, body: "x\n" });
+    const response = await post(makeApp(), note("inbox/p.md"));
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain(marker);
     expect(logs.join("\n")).not.toContain(marker);
@@ -440,7 +584,7 @@ describe("POST /notes against a real remote", () => {
         vaultDir: fixture.vaultDir,
         author: TEST_AUTHOR,
         git: defaultGit,
-      }).write({ path: "q.md", frontmatter: {}, body: "x\n" });
+      }).write(note("inbox/q.md"));
     } catch (error) {
       caught = error;
     }
