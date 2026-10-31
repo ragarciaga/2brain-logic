@@ -245,8 +245,10 @@ export type RateLimitDeps = {
 /**
  * Hono middleware: answers 429 with `Retry-After` once a client (by `rateKey(clientIp(...))`) or
  * the whole rule is past its limit. The body is fixed and never carries the client IP or any
- * header value, and nothing is logged. Each call owns its own counters: mount one instance per
- * rule, never one instance on two rules.
+ * header value. The only output is the one fixed, value-free fallback line from `clientIp`
+ * (once per process), written when `trustProxyHops` is 1 or more and the forwarded entry is
+ * missing or not an IP. Each call owns its own counters: mount one instance per rule, never one
+ * instance on two rules.
  */
 export function rateLimit(rule: RateRule, deps: RateLimitDeps): MiddlewareHandler {
   assertWholeNumber(deps.trustProxyHops, "trustProxyHops", 0);

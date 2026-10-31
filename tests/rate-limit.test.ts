@@ -155,10 +155,26 @@ describe("rateLimit on a probe app (R7.1)", () => {
     }
   });
 
-  it("never logs", async () => {
+  it("never logs with hops 0", async () => {
     const app = limitedApp(0, () => 0);
     for (let i = 0; i < 12; i += 1) await call(app, "/signin");
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs exactly one fixed line with hops 1 and a missing forwarded entry, across requests", async () => {
+    vi.resetModules();
+    const fresh = await import("../src/auth/rate-limit.js");
+    const app = new Hono();
+    app.post(
+      "/signin",
+      fresh.rateLimit(fresh.RATE_RULES.signin, { trustProxyHops: 1, now: () => 0 }),
+      (c) => c.text("ok"),
+    );
+    for (let i = 0; i < 12; i += 1) await call(app, "/signin", { socket: C });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "rate-limit: forwarded entry missing or not an IP; keyed on socket",
+    );
   });
 
   it("does not call the next handler on 429", async () => {
@@ -191,6 +207,21 @@ describe("global ceilings", () => {
     expect(refused.retryAfter).toBe("3600");
     now = 3_600_000;
     expect((await call(app, "/register", { socket: "198.51.100.200" })).status).toBe(200);
+  });
+
+  it("token: several IPs reach the 600 per minute ceiling and a fresh IP is refused until the window ends", async () => {
+    let now = 0;
+    const app = limitedApp(0, () => now);
+    for (let i = 0; i < 600; i += 1) {
+      const address = `198.51.100.${(i % 10) + 1}`;
+      // 10 addresses x 60 requests each: no key limit is hit, only the sum reaches 600.
+      expect((await call(app, "/token", { socket: address })).status).toBe(200);
+    }
+    const refused = await call(app, "/token", { socket: "198.51.100.200" });
+    expect(refused.status).toBe(429);
+    expect(refused.retryAfter).toBe("60");
+    now = 60_000;
+    expect((await call(app, "/token", { socket: "198.51.100.200" })).status).toBe(200);
   });
 
   it("does not touch another rule", async () => {
