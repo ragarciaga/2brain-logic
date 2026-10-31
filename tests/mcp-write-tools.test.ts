@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
@@ -10,8 +18,10 @@ import { defaultGit, ensureClone, type GitApi, GitError } from "../src/git/index
 import { createMcpServer, MCP_TOOLS, type McpServerDeps } from "../src/mcp/server.js";
 import { createReadTools } from "../src/mcp/tools/read.js";
 import { buildRecipe, createWriteTools, slugify, WRITE_TOOLS } from "../src/mcp/tools/write.js";
+import { createApp } from "../src/server/app.js";
 import { mapWriteError } from "../src/server/errors.js";
-import { parseNote } from "../src/vault/frontmatter.js";
+import { parseNote, stringifyNote } from "../src/vault/frontmatter.js";
+import { ImmutableBodyError, NoteNotFoundError } from "../src/vault/operations.js";
 import {
   createNoteWriter,
   DuplicateSourceError,
@@ -632,8 +642,364 @@ describe("save_recipe (R9.2)", () => {
   });
 });
 
+describe("update_properties (R9.3, R9.4)", () => {
+  const TOOL = "update_properties";
+  // CRLF, a leading blank line and a trailing space: byte checks must see them unchanged.
+  const BODY = "\nLine one\r\nLine two \r\n\r\n  indented\n";
+  const MEETING = { ...FM, type: "meeting", title: "weekly" };
+  const MEETING_PATH = "personal/meetings/m.md";
+
+  /** Push from a second clone, then bring the commit into the vault clone. */
+  function seed(files: Record<string, string>): void {
+    push(files);
+    git(fixture.vaultDir, ["pull", "--ff-only"]);
+  }
+  function seedIdea(path = "inbox/a.md", extra: Record<string, unknown> = {}): void {
+    seed({ [path]: stringifyNote({ ...FM, title: "alpha", ...extra }, BODY) });
+  }
+  function seedMeeting(): string {
+    const text = stringifyNote(MEETING, "Transcript line\n");
+    seed({ [MEETING_PATH]: text });
+    return text;
+  }
+  const vaultBytes = (path: string) => readFileSync(join(fixture.vaultDir, path));
+
+  /** The body `PATCH /notes` gives for the same payload on the same writer. */
+  async function viaPatch(writer: VaultWriter, payload: unknown) {
+    const app = createApp({
+      writer,
+      ingestToken: "fictional-patch-token-0123456789-abcdefghij",
+      log: () => undefined,
+    });
+    const res = await app.request("/notes", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer fictional-patch-token-0123456789-abcdefghij",
+      },
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  }
+
+  it("merges set through the patch path and returns path, commit, unchanged and redactions", async () => {
+    seedIdea();
+    const { call } = await connect();
+    const before = remoteHead();
+    const r = await call(TOOL, { path: "inbox/a.md", set: { title: "beta", tags: ["x"] } });
+    expect(r.isError).toBe(false);
+    expect(r.data).toEqual({
+      ok: true,
+      path: "inbox/a.md",
+      commit: head(),
+      unchanged: false,
+      redactions: [],
+    });
+    expect(remoteHead()).toBe(head());
+    expect(head()).not.toBe(before);
+    expect(git(fixture.remote, ["log", "-1", "--format=%s"])).toBe("2brain: update inbox/a.md");
+    const stored = parseNote(remoteFile("inbox/a.md"));
+    expect(stored.data).toEqual({ ...FM, title: "beta", tags: ["x"] });
+    expect(stored.content).toBe(BODY);
+    expect(remoteFile("inbox/a.md").endsWith(`---\n${BODY}`)).toBe(true);
+    expect(JSON.parse(r.text)).toEqual(r.data);
+  });
+
+  it("a set equal to the current values is unchanged with a null commit and no new commit", async () => {
+    seedIdea();
+    const { call } = await connect();
+    await call(TOOL, { path: "inbox/a.md", set: { title: "beta" } });
+    const sha = head();
+    const again = await call(TOOL, { path: "inbox/a.md", set: { title: "beta" } });
+    expect(again.isError).toBe(false);
+    expect(again.data).toEqual({
+      ok: true,
+      path: "inbox/a.md",
+      commit: null,
+      unchanged: true,
+      redactions: [],
+    });
+    expect(head()).toBe(sha);
+    expect(remoteHead()).toBe(sha);
+  });
+
+  it("set alone on an immutable_body note succeeds and the body is unchanged", async () => {
+    const original = seedMeeting();
+    const { call } = await connect();
+    const r = await call(TOOL, { path: MEETING_PATH, set: { title: "renamed" } });
+    expect(r.isError).toBe(false);
+    expect(r.data.unchanged).toBe(false);
+    const stored = parseNote(remoteFile(MEETING_PATH));
+    expect(stored.data.title).toBe("renamed");
+    expect(stored.content).toBe(parseNote(original).content);
+  });
+
+  it("a type change away from an immutable type is immutable_body and writes nothing", async () => {
+    const original = seedMeeting();
+    const { call } = await connect();
+    const sha = head();
+    const r = await call(TOOL, { path: MEETING_PATH, set: { type: "idea", leak_field: SENTINEL } });
+    expect(r.isError).toBe(true);
+    expect(r.data).toEqual(mapWriteError(new ImmutableBodyError()).body);
+    expect(r.text).not.toContain(SENTINEL);
+    expect(logs.join("\n")).not.toContain(SENTINEL);
+    expect(vaultBytes(MEETING_PATH).toString("utf8")).toBe(original);
+    expect(head()).toBe(sha);
+    expect(remoteHead()).toBe(sha);
+  });
+
+  it("redacts a secret in a set value, counts it and logs the count", async () => {
+    seedIdea();
+    const { call } = await connect();
+    const r = await call(TOOL, { path: "inbox/a.md", set: { title: `t ${ANT}` } });
+    expect(r.isError).toBe(false);
+    expect(r.data.redactions).toEqual([{ rule: "anthropic_key", count: 1 }]);
+    expect(r.text).not.toContain(ANT);
+    expect(remoteFile("inbox/a.md")).not.toContain(ANT);
+    expect(remoteFile("inbox/a.md")).toContain("[REDACTED:anthropic_key]");
+    expect(logs).toContain("mcp update_properties: redacted: anthropic_key=1");
+    expect(logs.join("\n")).not.toContain(ANT);
+  });
+
+  describe("R9.4: every rejection has the ingest code and detail fields", () => {
+    const leaky = (path: string, set: Record<string, unknown> = {}) => ({
+      path,
+      set: { leak_field: SENTINEL, ...set },
+    });
+
+    /** Result equals the mapped body and the PATCH /notes body; the sentinel is nowhere. */
+    async function expectRejected(
+      writer: VaultWriter,
+      args: ReturnType<typeof leaky>,
+      expected: Record<string, unknown>,
+      logLine: string,
+      parity = true,
+    ) {
+      const { call } = await connect(writer);
+      const sha = head();
+      const reply = await call(TOOL, args);
+      expect(reply.isError).toBe(true);
+      expect(reply.data).toEqual(expected);
+      expect(JSON.parse(reply.text)).toEqual(expected);
+      expect(reply.text).not.toContain(SENTINEL);
+      expect(logs.join("\n")).not.toContain(SENTINEL);
+      expect(logs).toContain(logLine);
+      if (parity) expect((await viaPatch(writer, args)).body).toEqual(expected);
+      expect(head()).toBe(sha);
+      expect(remoteHead()).toBe(sha);
+    }
+
+    it("note_not_found", async () => {
+      const mapped = mapWriteError(new NoteNotFoundError());
+      await expectRejected(
+        makeWriter(),
+        leaky("inbox/missing.md"),
+        mapped.body,
+        `mcp update_properties: ${mapped.log}`,
+      );
+    });
+
+    it("invalid_frontmatter for a bad date", async () => {
+      seedIdea();
+      await expectRejected(
+        makeWriter(),
+        leaky("inbox/a.md", { date: "2026-02-30" }),
+        mapWriteError(new InvalidFrontmatterError([], ["date"])).body,
+        "mcp update_properties: invalid_frontmatter rejected",
+      );
+    });
+
+    it("wrong_folder names the expected folder", async () => {
+      seedIdea();
+      await expectRejected(
+        makeWriter(),
+        leaky("inbox/a.md", { type: "person" }),
+        mapWriteError(new WrongFolderError("people")).body,
+        "mcp update_properties: wrong_folder rejected",
+      );
+    });
+
+    it("immutable_body for a meeting moved to a mutable type, with the PATCH body", async () => {
+      seedMeeting();
+      await expectRejected(
+        makeWriter(),
+        leaky(MEETING_PATH, { type: "idea" }),
+        mapWriteError(new ImmutableBodyError()).body,
+        "mcp update_properties: immutable_body rejected",
+      );
+    });
+
+    it("duplicate_source", async () => {
+      seedIdea("inbox/a.md", { source_id: "id-1" });
+      seedIdea("inbox/b.md", { source_id: "id-2" });
+      await expectRejected(
+        makeWriter(),
+        leaky("inbox/b.md", { source_id: "id-1" }),
+        mapWriteError(new DuplicateSourceError("inbox/a.md")).body,
+        "mcp update_properties: duplicate_source rejected",
+      );
+    });
+
+    it("unsafe_path for a secret in the path, which reaches no result, log or object", async () => {
+      const { call } = await connect();
+      const sha = head();
+      const r = await call(TOOL, leaky(`inbox/${GHP}.md`));
+      expect(r.isError).toBe(true);
+      expect(r.data).toEqual(mapWriteError(new UnsafePathError()).body);
+      expect(r.text).not.toContain(GHP);
+      expect(logs.join("\n")).not.toContain(GHP);
+      expect(logs.join("\n")).not.toContain(SENTINEL);
+      expect(head()).toBe(sha);
+      expect(git(fixture.remote, ["log", "--all", "--format=%s%n%b"])).not.toContain(GHP);
+    });
+
+    it("config_invalid names only the file and key path", async () => {
+      seedIdea();
+      seed({ [CONFIG_FILE]: `vault:\n  colour: ${SENTINEL}\n` });
+      const writer = makeWriter();
+      const sha = head();
+      const { call } = await connect(writer);
+      const r = await call(TOOL, leaky("inbox/a.md"));
+      expect(r.isError).toBe(true);
+      expect(r.data).toEqual(
+        mapWriteError(new ConfigInvalidError(CONFIG_FILE, "vault.colour", "x")).body,
+      );
+      expect(r.text).not.toContain(SENTINEL);
+      expect(logs.join("\n")).not.toContain(SENTINEL);
+      expect(logs).toContain(
+        "mcp update_properties: config_invalid: .2brain/config.yaml at vault.colour",
+      );
+      expect((await viaPatch(writer, leaky("inbox/a.md"))).body).toEqual(r.data);
+      expect(head()).toBe(sha);
+      expect(remoteHead()).toBe(sha);
+    });
+
+    it("push_pending carries the path and the local head", async () => {
+      seedIdea();
+      const writer = makeWriter({ push: () => Promise.reject(new GitError("push", 1)) });
+      const { call } = await connect(writer);
+      const r = await call(TOOL, leaky("inbox/a.md"));
+      expect(r.isError).toBe(true);
+      expect(r.data).toEqual(mapWriteError(new PushPendingError("inbox/a.md", head(), 1)).body);
+      expect(r.text).not.toContain(SENTINEL);
+      expect(logs.join("\n")).not.toContain(SENTINEL);
+      expect(logs).toContain("mcp update_properties: push_pending: git push exit 1");
+    });
+
+    it("scrub_failed", async () => {
+      seedIdea();
+      const failing: Scrubber = {
+        scrub: () => {
+          throw new Error(SENTINEL);
+        },
+        scrubFrontmatter: () => {
+          throw new Error(SENTINEL);
+        },
+      };
+      await expectRejected(
+        makeWriter({}, failing),
+        leaky("inbox/a.md"),
+        mapWriteError(new ScrubFailedError()).body,
+        "mcp update_properties: scrub_failed",
+      );
+    });
+
+    it("an unknown writer exception is write_failed and its message never leaks", async () => {
+      const writer = makeWriter();
+      writer.patch = async () => {
+        throw new Error(`token=${SENTINEL}`);
+      };
+      await expectRejected(
+        writer,
+        leaky("inbox/a.md"),
+        mapWriteError(new Error("x")).body,
+        "mcp update_properties: write_failed: unexpected error",
+        false,
+      );
+    });
+
+    it("a bug in the tool's own code is internal_error with no message", async () => {
+      const writer = makeWriter();
+      writer.patch = async () => undefined as never;
+      const { call } = await connect(writer);
+      const r = await call(TOOL, leaky("inbox/a.md"));
+      expect(r.isError).toBe(true);
+      expect(r.data).toEqual({ ok: false, error: "internal_error" });
+      expect(logs).toContain("mcp update_properties: internal_error");
+      expect(logs.join("\n")).not.toContain(SENTINEL);
+    });
+  });
+
+  describe("D1: properties only, nothing written", () => {
+    async function expectInvalidBody(args: Record<string, unknown>, issuePath?: string) {
+      seedIdea();
+      const { call } = await connect();
+      const sha = head();
+      const bytes = vaultBytes("inbox/a.md");
+      const r = await call(TOOL, args);
+      expect(r.isError).toBe(true);
+      expect(r.data.error).toBe("invalid_body");
+      const issues = r.data.issues as Array<{ path: string; message: string }>;
+      expect(issues.length).toBeGreaterThan(0);
+      if (issuePath !== undefined) expect(issues.map((i) => i.path)).toContain(issuePath);
+      expect(r.text).not.toContain(SENTINEL);
+      expect(logs).toContain("mcp update_properties: invalid_body");
+      expect(vaultBytes("inbox/a.md").equals(bytes)).toBe(true);
+      expect(head()).toBe(sha);
+      expect(remoteHead()).toBe(sha);
+      return r;
+    }
+
+    it("append is refused, and the set next to it is not applied", async () => {
+      await expectInvalidBody(
+        { path: "inbox/a.md", set: { title: "beta" }, append: "more\n" },
+        "append",
+      );
+    });
+
+    it("an empty append is refused too", async () => {
+      await expectInvalidBody({ path: "inbox/a.md", set: { title: "beta" }, append: "" }, "append");
+    });
+
+    it("body is refused like PATCH /notes refuses an extra key", async () => {
+      const r = await expectInvalidBody({
+        path: "inbox/a.md",
+        set: { title: "beta" },
+        body: SENTINEL,
+      });
+      const viaApp = await viaPatch(makeWriter(), {
+        path: "inbox/a.md",
+        set: { title: "beta" },
+        body: SENTINEL,
+      });
+      expect(r.data).toEqual(viaApp.body);
+    });
+
+    it("an empty set is invalid_body", async () => {
+      await expectInvalidBody({ path: "inbox/a.md", set: {} }, "set");
+    });
+
+    it("a missing set is refused by the schema", async () => {
+      seedIdea();
+      const { call } = await connect();
+      const sha = head();
+      const r = await call(TOOL, { path: "inbox/a.md" });
+      expect(r.isError).toBe(true);
+      expect(head()).toBe(sha);
+    });
+  });
+
+  it("D2: advertises path and set only, both required", async () => {
+    const { client } = await connect();
+    const tool = (await client.listTools()).tools.find((t) => t.name === TOOL);
+    const schema = tool?.inputSchema as { properties: Record<string, unknown>; required: string[] };
+    expect(Object.keys(schema.properties).sort()).toEqual(["path", "set"]);
+    expect([...schema.required].sort()).toEqual(["path", "set"]);
+  });
+});
+
 describe("R9.5: the registry", () => {
-  it("lists exactly search, read, recent, save_note and save_recipe", async () => {
+  it("lists exactly search, read, recent, save_note, save_recipe and update_properties", async () => {
     const { client } = await connect();
     const listed = await client.listTools();
     expect(listed.tools.map((t) => t.name)).toEqual([
@@ -642,9 +1008,14 @@ describe("R9.5: the registry", () => {
       "recent",
       "save_note",
       "save_recipe",
+      "update_properties",
     ]);
     expect(MCP_TOOLS.map((t) => t.name)).toEqual(listed.tools.map((t) => t.name));
-    expect(WRITE_TOOLS.map((t) => t.name)).toEqual(["save_note", "save_recipe"]);
+    expect(WRITE_TOOLS.map((t) => t.name)).toEqual([
+      "save_note",
+      "save_recipe",
+      "update_properties",
+    ]);
     for (const tool of listed.tools) {
       expect(tool.name).not.toMatch(/delete|move|archive|remove|rename/i);
     }
