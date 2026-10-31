@@ -17,9 +17,10 @@ archive (which reuse the sync), then packaging.
 - Files: src/config/vault-config.ts, src/config/defaults.ts, vault-template/**, vault-template/.2brain/config.yaml, tests/vault-config.test.ts, tests/template.test.ts
 - Verify: `npm test -- tests/vault-config.test.ts tests/template.test.ts`; cases: absent config gives the defaults; mapped owner property names are exposed by the loaded config; an unknown key and a wrong-typed value each throw `ConfigInvalidError` with the file and key path; the template config parses to exactly the defaults object; every configured type folder (with `{area}` expanded per area) exists in the template; the template has no names, domains or emails other than example.com
 - Issue: #12
-- Status: todo
+- Status: done
 
 ### Decision log
+- 2026-10-31: README.md placeholders, extensible type keys, optional version, sections replace defaults; Tier B. Outcome: reviews pass after 1 kickback, PR #30.
 
 ## T2: Require INGEST_TOKEN at startup
 - Purpose: the service refuses to start without a strong ingest token and never echoes its value
