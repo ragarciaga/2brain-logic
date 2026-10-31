@@ -89,11 +89,29 @@ function isListable(path: string, config: VaultConfig): boolean {
   return NoteInput.shape.path.safeParse(path).success && !isArchived(path, config);
 }
 
-async function isRegularFile(root: string, path: string): Promise<boolean> {
+/** True when `real` is inside the real vault root and no segment below it starts with a dot. */
+function isVisibleInside(realRoot: string, real: string): boolean {
+  return (
+    isInside(realRoot, real) &&
+    !relative(realRoot, real)
+      .split(sep)
+      .some((segment) => segment.startsWith("."))
+  );
+}
+
+/**
+ * The real path of a regular file (not a symlink) whose real location is inside the vault and
+ * outside dot folders, or undefined. The realpath check catches a parent directory that was
+ * swapped for a symlink out of the vault.
+ */
+async function listableFile(root: string, path: string): Promise<string | undefined> {
   try {
-    return (await lstat(resolve(root, path))).isFile();
+    const target = resolve(root, path);
+    if (!(await lstat(target)).isFile()) return undefined;
+    const real = await realpath(target);
+    return isVisibleInside(await realpath(root), real) ? real : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -101,11 +119,11 @@ const stem = (path: string): string => basename(path, ".md");
 
 /** Frontmatter and title of a stored note; a file that cannot be read or parsed has neither. */
 async function readTitle(
-  root: string,
+  real: string,
   path: string,
 ): Promise<{ title: string; data: Record<string, unknown> }> {
   try {
-    const bytes = await readFile(resolve(root, path));
+    const bytes = await readFile(real);
     const { data } = parseNote(bytes.toString("utf8"));
     const title = data.title;
     return { title: typeof title === "string" && title !== "" ? title : stem(path), data };
@@ -227,9 +245,10 @@ export function searchVault(
       const lineNumber = record.data?.line_number;
       if (raw === undefined || text === undefined || typeof lineNumber !== "number") return;
       const path = raw.startsWith("./") ? raw.slice(2) : raw;
-      if (!isListable(path, config) || !(await isRegularFile(root, path))) return;
-      if (ownKill || results.length >= limit) return;
-      const { title } = await readTitle(root, path);
+      if (!isListable(path, config)) return;
+      const real = await listableFile(root, path);
+      if (real === undefined || ownKill || results.length >= limit) return;
+      const { title } = await readTitle(real, path);
       results.push({
         path,
         title,
@@ -274,14 +293,7 @@ export async function readVaultNote(root: string, path: string): Promise<ReadOut
     }
     return fail("note_not_found");
   }
-  if (!isInside(realRoot, real)) return fail("unsafe_path");
-  if (
-    relative(realRoot, real)
-      .split(sep)
-      .some((segment) => segment.startsWith("."))
-  ) {
-    return fail("unsafe_path");
-  }
+  if (!isVisibleInside(realRoot, real)) return fail("unsafe_path");
   const info = await stat(real);
   if (!info.isFile()) return fail("note_not_found");
   if (info.size > MAX_READ_BYTES) return fail("note_too_large");
@@ -314,8 +326,10 @@ export async function recentNotes(
   const notes: RecentNote[] = [];
   for (const { path, date } of changed) {
     if (notes.length >= params.limit) break;
-    if (!isListable(path, config) || !(await isRegularFile(root, path))) continue;
-    const { title, data } = await readTitle(root, path);
+    if (!isListable(path, config)) continue;
+    const real = await listableFile(root, path);
+    if (real === undefined) continue;
+    const { title, data } = await readTitle(real, path);
     const type = data[config.properties.type];
     notes.push({ path, title, type: typeof type === "string" ? type : null, date });
   }

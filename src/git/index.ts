@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -155,6 +156,7 @@ export async function unstageFile(dir: string, relPath: string): Promise<void> {
   await runGit(dir, ["reset", "-q", "--", relPath]);
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 /**
@@ -169,20 +171,31 @@ export async function logChangedPaths(
   signal?: AbortSignal,
 ): Promise<Array<{ path: string; date: string }>> {
   const stamp = since.toISOString().replace(/\.\d{3}Z$/, "Z");
+  // A random marker per call: a committed file name cannot forge a record header it cannot know.
+  const marker = randomBytes(12).toString("hex");
   const out = await runGitBuffer(
     dir,
-    ["log", "-z", "--name-only", "--no-renames", "--format=%x1e%cI", `--since=${stamp}`, "HEAD"],
+    [
+      "log",
+      "-z",
+      "--name-only",
+      "--no-renames",
+      `--format=%x1e${marker}%cI`,
+      `--since=${stamp}`,
+      "HEAD",
+    ],
     {},
     signal ? { signal } : {},
   );
   const seen = new Map<string, string>();
-  for (const record of out.toString("latin1").split("\x1e").slice(1)) {
+  for (const record of out.toString("latin1").split(`\x1e${marker}`).slice(1)) {
     // With -z the date ends at a NUL, then a newline, then the NUL-terminated names.
     const end = record.indexOf("\0");
     if (end < 0) continue;
     const date = record.slice(0, end);
-    // 0x1e never occurs inside a UTF-8 sequence, and latin1 maps bytes 1:1, so names can be
-    // re-sliced into the original bytes and decoded strictly.
+    // Defense in depth next to the marker: a header must be a strict ISO 8601 committer date.
+    if (!ISO_DATE.test(date)) continue;
+    // latin1 maps bytes 1:1, so names can be re-sliced into the original bytes and decoded strictly.
     const names = Buffer.from(record.slice(end + 1).replace(/^\n/, ""), "latin1");
     for (const raw of splitNul(names)) {
       let path: string;

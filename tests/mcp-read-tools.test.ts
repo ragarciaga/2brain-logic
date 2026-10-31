@@ -1,12 +1,26 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadVaultConfig } from "../src/config/vault-config.js";
-import { defaultGit, ensureClone, type GitApi, GitError } from "../src/git/index.js";
+import {
+  defaultGit,
+  ensureClone,
+  type GitApi,
+  GitError,
+  logChangedPaths,
+} from "../src/git/index.js";
 import { createMcpServer, type McpServerDeps } from "../src/mcp/server.js";
 import { createReadTools, type ReadToolOptions, searchVault } from "../src/mcp/tools/read.js";
 import { stringifyNote } from "../src/vault/frontmatter.js";
@@ -254,6 +268,75 @@ describe.skipIf(!rgAvailable)("search (R8.1)", () => {
   });
 });
 
+/** A node script that records its pid and sleeps, standing in for rg or git. */
+function fakeSlowExe(dir: string, name: string): { exe: string; pidFile: string } {
+  mkdirSync(dir, { recursive: true });
+  const exe = join(dir, name);
+  const pidFile = join(dir, `${name}.pid`);
+  writeFileSync(
+    exe,
+    `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, 8000);\n`,
+  );
+  chmodSync(exe, 0o755);
+  return { exe, pidFile };
+}
+
+async function expectGone(pidFile: string): Promise<void> {
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  for (let i = 0; i < 40; i += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  process.kill(pid, "SIGKILL");
+  throw new Error("the child process is still running");
+}
+
+describe("abort signal reaches the child processes", () => {
+  it("aborting a running search stops rg and answers search_timeout quickly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "2brain-fake-rg-"));
+    extraDirs.push(dir);
+    const { exe, pidFile } = fakeSlowExe(dir, "rg");
+    const config = await loadVaultConfig(fixture.vaultDir);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const started = performance.now();
+    const outcome = await searchVault(fixture.vaultDir, config, {
+      query: "x",
+      limit: 5,
+      signal: controller.signal,
+      timeoutMs: 30_000,
+      rgPath: exe,
+    });
+    expect(outcome).toEqual({ ok: false, error: "search_timeout" });
+    expect(performance.now() - started).toBeLessThan(3000);
+    await expectGone(pidFile);
+  });
+
+  it("aborting git log stops git and rejects with GitError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "2brain-fake-git-"));
+    extraDirs.push(dir);
+    const { pidFile } = fakeSlowExe(dir, "git");
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
+    try {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 100);
+      const started = performance.now();
+      await expect(
+        logChangedPaths(fixture.vaultDir, NOW, controller.signal),
+      ).rejects.toBeInstanceOf(GitError);
+      expect(performance.now() - started).toBeLessThan(3000);
+      await expectGone(pidFile);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+});
+
 describe("search failures that need no rg", () => {
   it("an already aborted signal gives search_timeout", async () => {
     const config = await loadVaultConfig(fixture.vaultDir);
@@ -457,6 +540,49 @@ describe("recent (R8.3)", () => {
     ]);
   });
 
+  it("orders different paths by commit date even when the history is skewed", async () => {
+    push({ "inbox/a.md": note("a\n") }, daysAgo(2));
+    push({ "inbox/b.md": note("b\n") }, daysAgo(3));
+    const { call } = await connect();
+    expect(list(await call("recent", {})).map((n) => n.path)).toEqual(["inbox/a.md", "inbox/b.md"]);
+  });
+
+  it("ignores a committed file name that imitates a log record header", async () => {
+    const evil = "inbox/a\u001e2099-01-01T00:00:00+00:00";
+    try {
+      push({ [evil]: "x\n", "inbox/z.md": note("z\n") }, daysAgo(5));
+    } catch {
+      return; // the filesystem refuses the name
+    }
+    const { call } = await connect();
+    const r = await call("recent", {});
+    expect(list(r)).toEqual([
+      expect.objectContaining({ path: "inbox/z.md", date: expect.stringMatching(/^2029-12-27/) }),
+    ]);
+  });
+
+  it("does not read a title or type through a directory swapped for a symlink", async () => {
+    push({ "linked/leak.md": note("needle\n", { title: "Inside title" }) }, daysAgo(1));
+    git(fixture.vaultDir, ["pull", "--ff-only"]);
+    const outside = join(fixture.root, "outside-dir");
+    mkdirSync(outside);
+    writeFileSync(
+      join(outside, "leak.md"),
+      stringifyNote({ ...FM, title: "OUTSIDE TITLE", type: "outside-type" }, "needle\n"),
+    );
+    rmSync(join(fixture.vaultDir, "linked"), { recursive: true });
+    symlinkSync(outside, join(fixture.vaultDir, "linked"));
+    const writer = makeWriter({ pullRebase: async () => undefined });
+    const { call } = await connect({}, writer);
+    const r = await call("recent", {});
+    expect(list(r)).toEqual([]);
+    expect(r.text).not.toContain("OUTSIDE");
+    if (rgAvailable) {
+      const found = await call("search", { query: "needle" });
+      expect(found.text).not.toContain("OUTSIDE");
+    }
+  });
+
   it("defaults to 20 results and caps limit at 50", async () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 55; i += 1) files[`inbox/n${String(i).padStart(2, "0")}.md`] = note("x\n");
@@ -549,6 +675,7 @@ describe("error text hygiene (D3) and tools never write", () => {
     const head = git(fixture.vaultDir, ["rev-parse", "HEAD"]);
     await call("recent", {});
     await call("read", { path: "inbox/a.md" });
+    if (rgAvailable) await call("search", { query: "needle" });
     expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(head);
     expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
   });
