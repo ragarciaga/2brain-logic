@@ -5,7 +5,7 @@ import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
 import { NoteInput, NotePatch } from "../vault/note-schema.js";
-import { NoteNotFoundError } from "../vault/operations.js";
+import { ImmutableBodyError, NoteNotFoundError } from "../vault/operations.js";
 import { SourceIndexLimitError } from "../vault/source-index.js";
 import {
   DuplicateSourceError,
@@ -121,6 +121,10 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
     }
     if (error instanceof NoteExistsError) {
       return c.json({ ok: false, error: "note_exists" }, 409);
+    }
+    if (error instanceof ImmutableBodyError) {
+      log("immutable_body rejected");
+      return c.json({ ok: false, error: "immutable_body" }, 409);
     }
     if (error instanceof NoteNotFoundError) {
       log("note_not_found");

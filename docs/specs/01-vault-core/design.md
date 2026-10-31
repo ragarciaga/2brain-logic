@@ -97,7 +97,7 @@ type Err = { ok: false; error: string; [detail: string]: unknown };
 | Endpoint / function | Input | Output | Errors | Serves |
 |---|---|---|---|---|
 | `POST /notes` | path, frontmatter, body | 201 Ok; 200 Ok with `unchanged` | 400 invalid_body, invalid_frontmatter, wrong_folder, unsafe_path; 401; 409 note_exists, duplicate_source; 502 push_pending; 503 config_invalid; 500 scrub_failed, write_failed | R3, R4, R5, R8 |
-| `PATCH /notes` | path, set, append | 200 Ok | 400; 401; 404 note_not_found; 409 immutable_body; 502; 503; 500 | R6, R4.1 |
+| `PATCH /notes` | path, set, append (immutability is one-way: a set that moves an immutable-body note to a mutable type is also 409 immutable_body) | 200 Ok | 400; 401; 404 note_not_found; 409 immutable_body; 502; 503; 500 | R6, R4.1 |
 | `POST /notes/archive` | path | 200 Ok with the new path | 400; 401; 404; 409 already_archived, archive_target_exists; 502; 503 | R7 |
 | `GET /health` | none | 200 `{ ok: true }` | none | R1.2, R10.1 |
 | `scrub(text)` | string | `{ text, hits: Map<rule, count> }` | throws ScrubError | R4 |

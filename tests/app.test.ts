@@ -3,7 +3,7 @@ import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
 import type { NoteInput, NotePatch } from "../src/vault/note-schema.js";
-import { NoteNotFoundError } from "../src/vault/operations.js";
+import { ImmutableBodyError, NoteNotFoundError } from "../src/vault/operations.js";
 import { SourceIndexLimitError } from "../src/vault/source-index.js";
 import {
   DuplicateSourceError,
@@ -543,6 +543,7 @@ describe("PATCH /notes", () => {
       { error: "config_invalid", file: CONFIG_FILE, keyPath: "types" },
     ],
     ["scrub_failed", new ScrubFailedError(), 500, { error: "scrub_failed" }],
+    ["immutable_body", new ImmutableBodyError(), 409, { error: "immutable_body" }],
     ["unsafe_path", new UnsafePathError(), 400, { error: "unsafe_path" }],
     [
       "invalid_frontmatter",
@@ -577,6 +578,25 @@ describe("PATCH /notes", () => {
     },
   );
 
+  it.each([
+    ["set and append", { ...validPatch, append: "more" }],
+    ["append only", { path: "Inbox/idea.md", append: "more" }],
+    ["an empty append", { path: "Inbox/idea.md", append: "" }],
+  ])("accepts %s and passes the parsed input to patch", async (_name, payload) => {
+    const { app, writer } = setup();
+    const response = await patchRequest(app, JSON.stringify(payload));
+    expect(response.status).toBe(200);
+    expect(writer.patch).toHaveBeenCalledWith(payload);
+  });
+
+  it("logs only the code for immutable_body", async () => {
+    const { app, logs } = setup(undefined, async () => {
+      throw new ImmutableBodyError();
+    });
+    await patchRequest(app, JSON.stringify(validPatch));
+    expect(logs).toEqual(["immutable_body rejected"]);
+  });
+
   it("logs only the code for note_not_found", async () => {
     const { app, logs } = setup(undefined, async () => {
       throw new NoteNotFoundError();
@@ -586,8 +606,10 @@ describe("PATCH /notes", () => {
   });
 
   const invalid: Array<[string, string]> = [
-    ["append", JSON.stringify({ ...validPatch, append: "more" })],
-    ["a missing set", JSON.stringify({ path: "a.md" })],
+    ["neither set nor append", JSON.stringify({ path: "a.md" })],
+    ["an append that is not a string", JSON.stringify({ path: "a.md", append: 5 })],
+    ["an append with NUL", JSON.stringify({ path: "a.md", append: "a\u0000b" })],
+    ["an empty set with an append", JSON.stringify({ path: "a.md", set: {}, append: "x" })],
     ["an empty set", JSON.stringify({ path: "a.md", set: {} })],
     ["a set of only __proto__", '{"path":"a.md","set":{"__proto__":{}}}'],
     ["a set that is an array", JSON.stringify({ path: "a.md", set: ["x"] })],
