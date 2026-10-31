@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/pro
 import { dirname, resolve, sep } from "node:path";
 import { loadVaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
-import { syncBeforeWrite } from "../git/sync.js";
+import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../git/sync.js";
 import { parseNote, stringifyNote } from "./frontmatter.js";
 import type { NoteInput } from "./note-schema.js";
 import {
@@ -69,6 +69,26 @@ export class ScrubFailedError extends Error {
   }
 }
 
+/**
+ * The note is committed locally but the push did not land (a transient failure after all retries,
+ * or a rejection because the remote moved). `commit` is the local HEAD sha; the next write pushes
+ * it. The message is fixed and there is no `cause`: nothing from git (URL, stderr) reaches a
+ * response or a log through it.
+ */
+export class PushPendingError extends Error {
+  readonly path: string;
+  readonly commit: string;
+  readonly exitCode: number | null;
+
+  constructor(path: string, commit: string, exitCode: number | null) {
+    super("Push is pending");
+    this.name = "PushPendingError";
+    this.path = path;
+    this.commit = commit;
+    this.exitCode = exitCode;
+  }
+}
+
 /** How many times one scrub rule redacted something in a note. Rule id and count only. */
 export interface Redaction {
   rule: string;
@@ -122,6 +142,8 @@ export interface NoteWriterOptions {
   now?: () => Date;
   /** Receives the `conflicts_kept: <n>` line. Defaults to `console.error`. */
   log?: (message: string) => void;
+  /** Waits between push retries. Defaults to a real timer; tests inject one that returns at once. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -175,14 +197,20 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
  * Create the single write path into the vault: refuse a path that matches a scrub rule
  * (`UnsafePathError`, before any git work), pull with rebase (on a rebase conflict the sync in
  * src/git/sync.ts keeps both versions: the remote one at its path, the local one as
- * `<name> (conflict YYYY-MM-DD).md`, scrubbed like any note, committed and pushed, and the write
- * goes on), read the vault config, validate
+ * `<name> (conflict YYYY-MM-DD).md`, scrubbed like any note, committed, and the write goes on; an
+ * interrupted rebuild is recovered first and logged as `rebuild_recovered`), read the vault
+ * config, validate
  * the frontmatter and path against it, scrub secrets from the frontmatter and the body, validate
  * the scrubbed frontmatter again. If the target already holds a regular file with the same bytes
- * as the scrubbed note, the result is `unchanged` (no commit, no push); other content there is
- * `NoteExistsError`. At a free path, a `source_id` that belongs to another note is
- * `DuplicateSourceError`. Otherwise write a new file, commit, push; if the commit fails and HEAD
- * did not move, the file is unstaged and removed so a retry starts clean. Writes are serialized because
+ * as the scrubbed note and that file is tracked at HEAD, the result is `unchanged` (no commit; a
+ * push only when the branch is ahead of its upstream, so a commit left pending by a failed push is
+ * delivered); other content there is `NoteExistsError`. An identical file that is not tracked at
+ * HEAD (a crash between writing and committing) is committed and pushed like a create. At a free
+ * path, a `source_id` that belongs to another note is `DuplicateSourceError`. Otherwise write a
+ * new file, commit, push (one attempt plus retries after 1 s, 2 s and 4 s; an exit-1 rejection is
+ * not retried). A push that never lands throws `PushPendingError` with the local commit; the next
+ * write pushes it with its own. If the commit fails and HEAD did not move, the file is unstaged
+ * and removed (unless it was already there) so a retry starts clean. Writes are serialized because
  * they share one working tree. The config is read again after every pull, so a change pushed from
  * another clone applies to the next write without a restart; an invalid config throws
  * `ConfigInvalidError` and an invalid note throws `InvalidFrontmatterError` or `WrongFolderError`,
@@ -199,6 +227,7 @@ export function createNoteWriter({
   sourceIndex = createSourceIndex(),
   now = () => new Date(),
   log = console.error,
+  sleep = (ms) => new Promise<void>((done) => setTimeout(done, ms)),
 }: NoteWriterOptions): NoteWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
@@ -227,7 +256,8 @@ export function createNoteWriter({
     }
     if (pathHasSecret) throw new UnsafePathError();
 
-    const { conflicts } = await syncBeforeWrite(root, { git, author, now, prepareCopy });
+    const { conflicts, recovered } = await syncBeforeWrite(root, { git, author, now, prepareCopy });
+    if (recovered) log("rebuild_recovered");
     if (conflicts > 0) log(`conflicts_kept: ${conflicts}`);
     const config = await loadVaultConfig(root);
     const verdict = validateFrontmatter(note.frontmatter, note.path, config);
@@ -264,12 +294,21 @@ export function createNoteWriter({
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
     }
+    // An identical file that HEAD does not track was left by a crash between write and commit.
+    let adopted = false;
     if (existing !== undefined) {
       if (!existing.isFile() || existing.size !== Buffer.byteLength(bytes)) {
         throw new NoteExistsError();
       }
       if (!(await readFile(target)).equals(Buffer.from(bytes))) throw new NoteExistsError();
-      return { path: note.path, commit: null, unchanged: true, ...redactionsPart };
+      if (await trackedAtHead(root, note.path)) {
+        const pending = await pushIfAhead(root, { push: git.push, sleep });
+        if (pending !== undefined && !pending.pushed) {
+          throw new PushPendingError(note.path, pending.commit, pending.exitCode);
+        }
+        return { path: note.path, commit: null, unchanged: true, ...redactionsPart };
+      }
+      adopted = true;
     }
 
     const head = await git.headSha(root);
@@ -283,21 +322,23 @@ export function createNoteWriter({
       if (found !== undefined && found !== note.path) throw new DuplicateSourceError(found);
     }
 
-    try {
-      await mkdir(parent, { recursive: true });
-    } catch (error) {
-      // A file already sits where a directory is needed: the path is taken.
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
-      throw error;
-    }
-    if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
+    if (!adopted) {
+      try {
+        await mkdir(parent, { recursive: true });
+      } catch (error) {
+        // A file already sits where a directory is needed: the path is taken.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
+        throw error;
+      }
+      if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
 
-    try {
-      await writeFile(target, bytes, { flag: "wx" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
-      throw error;
+      try {
+        await writeFile(target, bytes, { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
+        throw error;
+      }
     }
 
     let commit: string;
@@ -309,16 +350,19 @@ export function createNoteWriter({
       try {
         if ((await git.headSha(root)) === head) {
           await git.unstageFile(root, note.path);
-          await unlink(target).catch((e: NodeJS.ErrnoException) => {
-            if (e.code !== "ENOENT") throw e;
-          });
+          if (!adopted) {
+            await unlink(target).catch((e: NodeJS.ErrnoException) => {
+              if (e.code !== "ENOENT") throw e;
+            });
+          }
         }
       } catch {
         // swallowed on purpose
       }
       throw error;
     }
-    await git.push(root);
+    const outcome = await pushWithRetry(root, { push: git.push, sleep });
+    if (!outcome.pushed) throw new PushPendingError(note.path, outcome.commit, outcome.exitCode);
     return scrubbed.redactions.length > 0
       ? { path: note.path, commit, redactions: scrubbed.redactions }
       : { path: note.path, commit };

@@ -103,7 +103,7 @@ type Err = { ok: false; error: string; [detail: string]: unknown };
 | `scrub(text)` | string | `{ text, hits: Map<rule, count> }` | throws ScrubError | R4 |
 | `loadVaultConfig(dir)` | vault dir | VaultConfig | ConfigInvalidError(file, keyPath) | R2 |
 | `syncBeforeWrite(dir)` | vault dir | `{ conflicts: number }` | GitError | R8.1, R8.2 |
-| `pushWithRetry(dir, waits)` | vault dir | `{ pushed: boolean, commit }` | none (returns pushed false) | R8.3, R8.4 |
+| `pushWithRetry(dir, { push, sleep, waits })` | vault dir | `{ pushed, commit, exitCode? }` | none (returns pushed false) | R8.3, R8.4 |
 | `init-vault <dir>` | target dir | copied and skipped lists on stdout | exit 1 when the target is a file | R9.2 |
 
 Commit messages: `2brain: add <path>`, `2brain: update <path>`, `2brain: archive <path> -> <new path>`, `2brain: keep conflicting versions (<n> files)`.
@@ -115,11 +115,13 @@ Commit messages: `2brain: add <path>`, `2brain: update <path>`, `2brain: archive
 | Token missing or short at startup | fatal | exit 1, message names `INGEST_TOKEN` | none | R1.3 |
 | Invalid config | per request | 503 `config_invalid` with file and key path | none (fixed by a vault commit) | R2.3 |
 | Rebase conflict on pull | per request | abort, conflict copies, commit, continue the request | none | R8.1, R8.2 |
-| Push rejected or network error | per request | retry, then 502 `push_pending` with the commit | 3 retries, 1 s, 2 s, 4 s (injectable for tests) | R8.3 |
+| Network error on push (git exit other than 1) | per request | retry, then 502 `push_pending` with the local commit | 3 retries, 1 s, 2 s, 4 s (injectable for tests) | R8.3 |
+| Push rejected (git exit 1, the remote moved) | per request | no retry, 502 `push_pending` at once; the next write's pull rebases and pushes | none | R8.3, R8.4 |
+| Process died during a conflict rebuild | next write | `reset --hard` to the sha held by the local marker ref `refs/2brain/rebuild-local`, log `rebuild_recovered`, rebuild again | none | R8.2 |
 | Scrubber exception | per request | 500 `scrub_failed`, nothing written | none | R4.4 |
 | Any git error elsewhere | per request | 500 `write_failed`, GitError redaction | none | preserved behavior |
 
-- Idempotency: identical content at the path is a no-op 200 (R5.1); a known `source_id` is a 409 with the existing path (R5.2); a patch that changes nothing is a no-op (R6.5). Every operation ends with a push attempt when the local branch is ahead, so a pending commit leaves with the next request (R8.4).
+- Idempotency: identical content at the path is a no-op 200 (R5.1); a known `source_id` is a 409 with the existing path (R5.2); a patch that changes nothing is a no-op (R6.5). A create that commits pushes with retries; an unchanged create pushes only when the branch is ahead of its upstream, so a pending commit leaves with the next request (R8.4). Answers other than 201 and 200 (400, 409) do not push. An identical file not tracked at HEAD is committed and pushed (201).
 - Concurrency limit: one operation at a time per vault (existing queue), because git operations on one clone cannot run in parallel. (R5, R6, R7, R8)
 - Cleanup: the conflict handler never leaves `.git/rebase-merge` or `.git/rebase-apply`; a failed write that created a file before the commit removes that untracked file so a retry is not a false 409. (R8.2, R5.1)
 

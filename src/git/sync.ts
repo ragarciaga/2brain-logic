@@ -171,24 +171,98 @@ interface Copy {
   bytes: Buffer;
 }
 
+/** Waits before retry 1, 2 and 3 of a push (ms). One attempt plus one retry per entry. */
+export const PUSH_RETRY_WAITS_MS: readonly number[] = [1000, 2000, 4000];
+
+/**
+ * Local ref that holds the pre-rebuild HEAD while a conflict rebuild runs. It is set by the rebuild
+ * itself and removed when the rebuild ends; one that is found at the start of a sync means the
+ * process died in the middle. It is never pushed (`push origin HEAD` sends only HEAD).
+ */
+const REBUILD_REF = "refs/2brain/rebuild-local";
+
+export type PushOutcome =
+  | { pushed: true; commit: string }
+  | { pushed: false; commit: string; exitCode: number | null };
+
+export interface PushRetryOptions {
+  push: (dir: string) => Promise<void>;
+  sleep: (ms: number) => Promise<void>;
+  waits?: readonly number[];
+}
+
+/**
+ * Push HEAD. A failure with exit code 1 is a ref rejection (the remote moved): it is not retried,
+ * because the next pull rebases and the next write pushes. Any other git failure (exit 128, no
+ * code) is treated as transient and retried after each wait in `waits`. Never throws for a
+ * `GitError`; the outcome carries the HEAD sha at the time of the call and the last exit code, and
+ * nothing else from git (no URL, no stderr). Other errors are rethrown.
+ */
+export async function pushWithRetry(dir: string, opts: PushRetryOptions): Promise<PushOutcome> {
+  const waits = opts.waits ?? PUSH_RETRY_WAITS_MS;
+  const commit = await runGit(dir, ["rev-parse", "HEAD"]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await opts.push(dir);
+      return { pushed: true, commit };
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      const wait = waits[attempt];
+      if (error.exitCode === 1 || wait === undefined) {
+        return { pushed: false, commit, exitCode: error.exitCode };
+      }
+      await opts.sleep(wait);
+    }
+  }
+}
+
+/** Push (with retries) only when HEAD is ahead of `@{upstream}`; undefined when nothing is pending. */
+export async function pushIfAhead(
+  dir: string,
+  opts: PushRetryOptions,
+): Promise<PushOutcome | undefined> {
+  const ahead = await runGit(dir, ["rev-list", "--count", "@{upstream}..HEAD"]);
+  if (ahead === "0") return undefined;
+  return pushWithRetry(dir, opts);
+}
+
+/** True when `relPath` is a file recorded in the HEAD commit. */
+export async function trackedAtHead(dir: string, relPath: string): Promise<boolean> {
+  return (await runGit(dir, ["ls-tree", "--name-only", "HEAD", "--", relPath])) !== "";
+}
+
+async function dropRebuildRef(dir: string): Promise<void> {
+  await runGit(dir, ["update-ref", "-d", REBUILD_REF]);
+}
+
 /**
  * Pull with rebase. When the pull stops on a rebase conflict, abort the rebase and rebuild one
  * commit on top of the remote: every remote version stays at its path, every local-only change is
- * kept, and each conflicting local version is added as a conflict copy next to it. The commit is
- * pushed. Nothing is deleted. A pull failure that is not a rebase conflict is rethrown unchanged.
- * Returns how many files conflicted.
+ * kept, and each conflicting local version is added as a conflict copy next to it. The rebuilt
+ * commit is pushed once, without failing the sync; the write that follows pushes it again with
+ * retries. Nothing is deleted. A pull failure that is not a rebase conflict is rethrown unchanged.
+ * If a previous rebuild was interrupted (its marker ref exists), the vault is first put back at
+ * the commit the marker holds, so the rebuild runs again from a clean state; `recovered` is then
+ * true. Returns how many files conflicted.
  */
 export async function syncBeforeWrite(
   dir: string,
   opts: SyncOptions,
-): Promise<{ conflicts: number }> {
+): Promise<{ conflicts: number; recovered: boolean }> {
+  let recovered = false;
+  const marker = await runGit(dir, ["for-each-ref", "--format=%(objectname)", REBUILD_REF]);
+  if (marker !== "") {
+    await runGit(dir, ["reset", "-q", "--hard", marker]);
+    await dropRebuildRef(dir);
+    recovered = true;
+  }
   try {
     await opts.git.pullRebase(dir, opts.author);
-    return { conflicts: 0 };
+    return { conflicts: 0, recovered };
   } catch (error) {
     if (!(error instanceof GitError)) throw error;
     if (!(await rebaseInProgress(dir))) throw error;
-    return resolveConflict(dir, opts, error);
+    return { ...(await resolveConflict(dir, opts, error)), recovered };
   }
 }
 
@@ -250,6 +324,7 @@ async function resolveConflict(
   const written: string[] = [];
   const root = resolve(dir);
   try {
+    await runGit(dir, ["update-ref", REBUILD_REF, local]);
     await runGit(dir, ["reset", "-q", "--soft", upstream]);
     const upstreamHas = await readEntries(dir, upstream, upstreamChanged);
     const present = upstreamChanged.filter((p) => upstreamHas.has(p));
@@ -302,22 +377,32 @@ async function resolveConflict(
     if (missingLocalPaths(localTree, upstreamTouched, indexed).length > 0) throw original;
 
     const staged = await runGitBuffer(dir, ["diff", "--cached", "--name-only", "-z"]);
-    if (staged.length === 0) return { conflicts: conflicting.length };
+    if (staged.length === 0) {
+      await dropRebuildRef(dir);
+      return { conflicts: conflicting.length };
+    }
     await commitIndex(
       dir,
       `2brain: keep conflicting versions (${conflicting.length} files)`,
       opts.author,
     );
+    await dropRebuildRef(dir);
   } catch (error) {
     // Best effort: put the vault back where it was, then report the original problem.
     try {
       for (const file of written) await unlink(file).catch(() => undefined);
       await runGit(dir, ["reset", "-q", "--hard", local]);
+      await dropRebuildRef(dir);
     } catch {
       // swallowed on purpose
     }
     throw error instanceof NameDecodeError ? original : error;
   }
-  await opts.git.push(dir);
+  // One attempt: the write's own push delivers this commit, with retries.
+  try {
+    await opts.git.push(dir);
+  } catch (error) {
+    if (!(error instanceof GitError)) throw error;
+  }
   return { conflicts: conflicting.length };
 }

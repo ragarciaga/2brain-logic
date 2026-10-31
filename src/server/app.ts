@@ -10,6 +10,7 @@ import {
   InvalidFrontmatterError,
   NoteExistsError,
   type NoteWriter,
+  PushPendingError,
   ScrubFailedError,
   UnsafePathError,
   WrongFolderError,
@@ -136,6 +137,13 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
         if (error instanceof WrongFolderError) {
           log("wrong_folder rejected");
           return c.json({ ok: false, error: "wrong_folder", expected: error.expected }, 400);
+        }
+        if (error instanceof PushPendingError) {
+          log(`push_pending: git push exit ${error.exitCode ?? "unknown"}`);
+          return c.json(
+            { ok: false, error: "push_pending", path: error.path, commit: error.commit },
+            502,
+          );
         }
         if (error instanceof GitError) {
           log(`write_failed: git ${error.subcommand} exit ${error.exitCode ?? "unknown"}`);
