@@ -191,6 +191,7 @@ describe("healthcheck script behavior", () => {
       writer: {
         write: async () => ({ path: "x.md", commit: "abc" }),
         patch: async () => ({ path: "x.md", commit: "abc" }),
+        archive: async () => ({ path: "archive/x.md", commit: "abc" }),
       },
       ingestToken: "fictional-compose-token-0123456789-abcdefghij",
     });

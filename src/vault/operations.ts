@@ -10,6 +10,32 @@ export class NoteNotFoundError extends Error {
   }
 }
 
+/** The note is already inside the archive folder. The message is fixed and names no path. */
+export class AlreadyArchivedError extends Error {
+  constructor() {
+    super("Note is already archived");
+    this.name = "AlreadyArchivedError";
+  }
+}
+
+/** Something already sits at the archive target. The message is fixed and names no path. */
+export class ArchiveTargetExistsError extends Error {
+  constructor() {
+    super("Archive target already exists");
+    this.name = "ArchiveTargetExistsError";
+  }
+}
+
+/** `path` is the archive folder or below it. Case-sensitive, like git paths. */
+export function isInArchive(path: string, folder: string): boolean {
+  return path === folder || path.startsWith(`${folder}/`);
+}
+
+/** Where an archived note goes: the archive folder, then the original path. */
+export function archiveTarget(path: string, folder: string): string {
+  return `${folder}/${path}`;
+}
+
 export interface StoredNote {
   data: Record<string, unknown>;
   body: string;

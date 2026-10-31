@@ -38,7 +38,7 @@ flowchart LR
 | Frontmatter validator | code | Required properties, allowed type, area and date, type folder | src/vault/validate.ts | R3.1 to R3.4, R6.1 |
 | Secret scrubber | code | Ordered rule list, replacement, counts | src/vault/scrub/rules.ts, src/vault/scrub/index.ts | R4.1 to R4.4 |
 | Source index | code | `source_id` to path map, rebuilt when HEAD changes, reads only the frontmatter block | src/vault/source-index.ts | R5.2 |
-| Operations | code | create (idempotent), patch (set, append, immutable body), archive (move). The flows (`write`, `patch`) are in src/vault/write-note.ts on shared step helpers; the pure note logic (read a stored note, merge, unchanged test) is in src/vault/operations.ts | src/vault/write-note.ts, src/vault/operations.ts | R5, R6, R7 |
+| Operations | code | create (idempotent), patch (set, append, immutable body), archive (move). The flows (`write`, `patch`, `archive`) are in src/vault/write-note.ts on shared step helpers; the pure note logic (read a stored note, merge, unchanged test) is in src/vault/operations.ts | src/vault/write-note.ts, src/vault/operations.ts | R5, R6, R7 |
 | Push with retry | code | 3 retries, injectable waits (1, 2, 4 s); `push_pending` | src/git/sync.ts | R8.3, R8.4 |
 | Routes | code | `POST /notes`, `PATCH /notes`, `POST /notes/archive`, error mapping | src/server/app.ts | R1, R3 to R8 |
 | init-vault CLI | code | Copy the template without overwriting, report skipped files | src/cli.ts, vault-template/ | R9.2 |

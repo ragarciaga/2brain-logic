@@ -58,6 +58,7 @@ function setup() {
   const writer = {
     write: vi.fn(async () => ({ path: "x.md", commit: "abc" })),
     patch: vi.fn(async () => ({ path: "x.md", commit: "abc" })),
+    archive: vi.fn(async () => ({ path: "archive/x.md", commit: "abc" })),
   };
   const app = createApp({ writer, ingestToken: TOKEN, log: () => undefined });
   return { app, writer };
