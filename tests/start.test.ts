@@ -27,6 +27,7 @@ const app = createApp({
   writer: {
     write: async () => ({ path: "x.md", commit: "abc" }),
     patch: async () => ({ path: "x.md", commit: "abc" }),
+    archive: async () => ({ path: "archive/x.md", commit: "abc" }),
   },
   ingestToken: TOKEN,
 });

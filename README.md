@@ -2,7 +2,7 @@
 
 A self-feeding second brain. Meetings, emails, ideas and AI work sessions land as Markdown notes
 in an Obsidian vault stored in Git. This repository is the service that writes them: today a
-walking skeleton with one thin slice (`GET /health`, `POST /notes` and `PATCH /notes`) from HTTP to a pushed commit.
+walking skeleton with one thin slice (`GET /health`, `POST /notes`, `PATCH /notes` and `POST /notes/archive`) from HTTP to a pushed commit.
 
 Product context: [docs/brief.md](docs/brief.md). Decisions: [docs/adr/](docs/adr/).
 
@@ -67,6 +67,21 @@ leaves the vault, is 400 `unsafe_path`; a stored note whose frontmatter cannot b
 `invalid_frontmatter` with empty lists; giving `source_id` the value of another note is 409
 `duplicate_source`. A body with a key other than `path`, `set` and `append`, or with neither `set`
 nor `append`, is 400 `invalid_body`. The other statuses are those of `POST /notes`.
+
+`POST /notes/archive` takes `{"path":"inbox/hello.md"}` and moves that note with `git mv` to
+`<archive folder>/<its path>` (the folder is `vault.archive_folder` in `.2brain/config.yaml`,
+`archive` by default), so `inbox/hello.md` becomes `archive/inbox/hello.md` with the same bytes and
+its history. Any note moves, transcripts included; the body is never rewritten. It runs through the
+same queue, pull, config reload and retrying push as the other writes, commits
+`2brain: archive <path> -> <new path>`, and answers 200
+`{"ok":true,"path":"<new path>","commit":"<sha>"}`. A path already inside the archive folder is 409
+`already_archived`; something already at the target is 409 `archive_target_exists`; nothing moves in
+either case. A missing path, a directory, or a file the repository does not track is 404
+`note_not_found`; a symlink at the source, at the target or in a directory on either path is 400
+`unsafe_path`. If the commit fails before HEAD moves, the note is moved back. The other statuses
+(400 `invalid_body` for a key other than `path`, 401, 502 `push_pending` with the new path, 503, 500)
+are those of `PATCH /notes`. There is no delete: the service has no route or operation that removes a
+vault file, and "remove" means archive.
 
 When the scrub redacted anything, the 201 body also carries `"redactions":[{"rule":"<id>","count":<n>}]`
 (rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line (several pairs are joined with ", " on that one line);

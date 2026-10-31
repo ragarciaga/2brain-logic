@@ -5,12 +5,16 @@ import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
 import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../git/sync.js";
 import { parseNote, stringifyNote } from "./frontmatter.js";
-import type { NoteInput, NotePatch } from "./note-schema.js";
+import type { NoteArchive, NoteInput, NotePatch } from "./note-schema.js";
 import {
+  AlreadyArchivedError,
+  ArchiveTargetExistsError,
   appendBody,
   appendedBytes,
+  archiveTarget,
   ImmutableBodyError,
   isImmutableBody,
+  isInArchive,
   mergeProperties,
   NoteNotFoundError,
   propertiesUnchanged,
@@ -144,6 +148,11 @@ export interface NoteWriter {
    * without it, is refused.
    */
   patch(input: NotePatch): Promise<WriteResult>;
+  /**
+   * Move an existing note to `<archive folder>/<its path>` with its bytes and history (any note,
+   * an `immutable_body` one included; the body is never rewritten). Nothing is ever deleted.
+   */
+  archive(input: NoteArchive): Promise<WriteResult>;
 }
 
 /** What a read learned from its pull: `stale` is true when the pull failed and the clone is as it was. */
@@ -276,9 +285,9 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
 }
 
 /**
- * Create the single write path into the vault, for creating a note (`write`) and for setting
- * properties of an existing one (`patch`). Both run on one queue (they share one working tree) and
- * share the same steps: refuse a path that matches a scrub rule (`UnsafePathError`, before any git
+ * Create the single write path into the vault, for creating a note (`write`), for setting
+ * properties of an existing one (`patch`) and for moving one to the archive folder (`archive`). All
+ * run on one queue (they share one working tree) and share the same steps: refuse a path that matches a scrub rule (`UnsafePathError`, before any git
  * work), pull with rebase (on a rebase conflict the sync in src/git/sync.ts keeps both versions:
  * the remote one at its path, the local one as `<name> (conflict YYYY-MM-DD).md`, scrubbed like
  * any note, committed, and the write goes on; an interrupted rebuild is recovered first and logged
@@ -319,6 +328,14 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
  * property change rewrites the frontmatter block (comments and quoting are lost); either change
  * commits `2brain: update <path>` and pushes. If the commit fails and HEAD did not move, the file
  * is unstaged and the original bytes are restored.
+ *
+ * `archive` moves a tracked note with `git mv` to `<vault.archive_folder>/<its path>`, byte for byte
+ * (any note, an `immutable_body` one included; the body is never read or rewritten), commits
+ * `2brain: archive <path> -> <new path>` and pushes. A path already inside the archive folder is
+ * `AlreadyArchivedError`; anything at the target (or a file where a target directory is needed) is
+ * `ArchiveTargetExistsError`; a missing, untracked or non-file source is `NoteNotFoundError`; a
+ * symlink on either path is `UnsafePathError`. If the commit fails and HEAD did not move, the note
+ * is moved back; if HEAD moved, the move stays. Nothing is deleted.
  *
  * `withPulled` gives the read tools the same queue: it pulls (the same sync, with the same logs),
  * then runs the caller's function inside the queue slot, so a read waits for an earlier write and
@@ -592,6 +609,100 @@ export function createNoteWriter({
     return { path: input.path, commit, ...redactionsPart };
   }
 
+  /**
+   * lstat every prefix of `rel` from the vault root down. A symlink anywhere is `UnsafePathError`.
+   * `NoteNotFoundError` when a component is absent or a parent is not a directory; the last
+   * component must be a regular file. Nothing is followed.
+   */
+  async function lstatSourceChain(rel: string): Promise<void> {
+    const parts = rel.split("/");
+    for (let i = 1; i <= parts.length; i += 1) {
+      let info: Stats;
+      try {
+        info = await lstat(resolve(root, ...parts.slice(0, i)));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") throw new NoteNotFoundError();
+        throw error;
+      }
+      if (info.isSymbolicLink()) throw new UnsafePathError();
+      if (i < parts.length ? !info.isDirectory() : !info.isFile()) throw new NoteNotFoundError();
+    }
+  }
+
+  /**
+   * lstat every prefix of the archive target. A symlink anywhere is `UnsafePathError`; a file where
+   * a directory is needed, or anything at the target itself, is `ArchiveTargetExistsError`. The
+   * walk stops at the first absent component (nothing can exist below it).
+   */
+  async function lstatTargetChain(rel: string): Promise<void> {
+    const parts = rel.split("/");
+    for (let i = 1; i <= parts.length; i += 1) {
+      let info: Stats;
+      try {
+        info = await lstat(resolve(root, ...parts.slice(0, i)));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return;
+        if (code === "ENOTDIR") throw new ArchiveTargetExistsError();
+        throw error;
+      }
+      if (info.isSymbolicLink()) throw new UnsafePathError();
+      if (i === parts.length || !info.isDirectory()) throw new ArchiveTargetExistsError();
+    }
+  }
+
+  async function archiveOne(input: NoteArchive): Promise<WriteResult> {
+    refuseSecretPath(input.path);
+    const config = await syncAndLoadConfig();
+    const folder = config.vault.archive_folder;
+    if (isInArchive(input.path, folder)) throw new AlreadyArchivedError();
+    const to = archiveTarget(input.path, folder);
+    refuseSecretPath(to);
+
+    // Source: a tracked regular file with no symlink on the way. The body is never read or
+    // rewritten; the move keeps the bytes.
+    await resolveParent(input.path);
+    await lstatSourceChain(input.path);
+    if (!(await trackedAtHead(root, input.path))) throw new NoteNotFoundError();
+
+    // Target: nothing may be there, and no symlink on the way.
+    const { parent, realRoot } = await resolveParent(to);
+    await lstatTargetChain(to);
+
+    const head = await git.headSha(root);
+    try {
+      await mkdir(parent, { recursive: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" || code === "ENOTDIR") throw new ArchiveTargetExistsError();
+      throw error;
+    }
+    if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
+
+    await git.moveFile(root, input.path, to);
+    let commit: string;
+    try {
+      commit = await git.commitPaths(
+        root,
+        [input.path, to],
+        `2brain: archive ${input.path} -> ${to}`,
+        author,
+      );
+    } catch (error) {
+      // Only when HEAD did not move: move the note back. Best effort, then the original error is
+      // rethrown. A landed commit keeps the move.
+      try {
+        if ((await git.headSha(root)) === head) await git.moveFile(root, to, input.path);
+      } catch {
+        // swallowed on purpose
+      }
+      throw error;
+    }
+    await pushOrPending(to);
+    return { path: to, commit };
+  }
+
   function enqueue<T>(fn: () => Promise<T>): Promise<T> {
     const run = queue.then(fn);
     queue = run.catch(() => undefined);
@@ -601,6 +712,7 @@ export function createNoteWriter({
   return {
     write: (note) => enqueue(() => writeOne(note)),
     patch: (input) => enqueue(() => patchOne(input)),
+    archive: (input) => enqueue(() => archiveOne(input)),
     withPulled: (fn) =>
       enqueue(async () => {
         let stale = false;

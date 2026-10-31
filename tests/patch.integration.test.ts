@@ -23,6 +23,7 @@ let sleeps: number[];
 
 function spyGit(overrides: Partial<GitApi> = {}): GitApi {
   return {
+    ...defaultGit,
     pullRebase: (...args) => {
       gitCalls.push("pullRebase");
       return defaultGit.pullRebase(...args);

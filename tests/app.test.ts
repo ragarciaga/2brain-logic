@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
-import type { NoteInput, NotePatch } from "../src/vault/note-schema.js";
-import { ImmutableBodyError, NoteNotFoundError } from "../src/vault/operations.js";
+import type { NoteArchive, NoteInput, NotePatch } from "../src/vault/note-schema.js";
+import {
+  AlreadyArchivedError,
+  ArchiveTargetExistsError,
+  ImmutableBodyError,
+  NoteNotFoundError,
+} from "../src/vault/operations.js";
 import { SourceIndexLimitError } from "../src/vault/source-index.js";
 import {
   DuplicateSourceError,
@@ -19,10 +24,18 @@ import {
 const TOKEN = "fictional-app-token-0123456789-abcdefghijk";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
 
-function setup(write?: NoteWriter["write"], patch?: NoteWriter["patch"]) {
+function setup(
+  write?: NoteWriter["write"],
+  patch?: NoteWriter["patch"],
+  archive?: NoteWriter["archive"],
+) {
   const writer = {
     write: vi.fn(write ?? (async (note: NoteInput) => ({ path: note.path, commit: "abc123" }))),
     patch: vi.fn(patch ?? (async (input: NotePatch) => ({ path: input.path, commit: "def456" }))),
+    archive: vi.fn(
+      archive ??
+        (async (input: NoteArchive) => ({ path: `archive/${input.path}`, commit: "ghi789" })),
+    ),
   };
   const logs: string[] = [];
   const app = createApp({ writer, ingestToken: TOKEN, log: (message) => logs.push(message) });
@@ -678,5 +691,121 @@ describe("PATCH /notes", () => {
     });
     expect(response.status).toBe(401);
     expect(writer.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /notes/archive", () => {
+  function archiveRequest(app: ReturnType<typeof setup>["app"], body: string, headers?: object) {
+    return app.request("/notes/archive", {
+      method: "POST",
+      body,
+      headers: { ...AUTH, "content-type": "application/json", ...headers },
+    });
+  }
+
+  it("returns 200 with the new path and calls only archive", async () => {
+    const { app, writer } = setup();
+    const response = await archiveRequest(app, JSON.stringify({ path: "inbox/a.md" }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      path: "archive/inbox/a.md",
+      commit: "ghi789",
+    });
+    expect(writer.archive).toHaveBeenCalledExactlyOnceWith({ path: "inbox/a.md" });
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(writer.patch).not.toHaveBeenCalled();
+  });
+
+  const invalid: Array<[string, unknown]> = [
+    ["no path", {}],
+    ["a dot-dot path", { path: "../a.md" }],
+    ["a non-md path", { path: "inbox/a.txt" }],
+    ["an extra key", { path: "inbox/a.md", force: true }],
+    ["a non-string path", { path: 3 }],
+  ];
+  it.each(invalid)(
+    "returns 400 invalid_body for %s and never calls archive",
+    async (_name, body) => {
+      const { app, writer } = setup();
+      const response = await archiveRequest(app, JSON.stringify(body));
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toBe("invalid_body");
+      expect(writer.archive).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns 415 for a wrong content type and 400 for invalid JSON", async () => {
+    const { app, writer } = setup();
+    const wrong = await archiveRequest(app, JSON.stringify({ path: "a.md" }), {
+      "content-type": "text/plain",
+    });
+    expect(wrong.status).toBe(415);
+    const broken = await archiveRequest(app, "{nope");
+    expect(broken.status).toBe(400);
+    expect(await broken.json()).toEqual({ ok: false, error: "invalid_json" });
+    expect(writer.archive).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 without a token", async () => {
+    const { app, writer } = setup();
+    const response = await app.request("/notes/archive", {
+      method: "POST",
+      body: JSON.stringify({ path: "a.md" }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(response.status).toBe(401);
+    expect(writer.archive).not.toHaveBeenCalled();
+  });
+
+  it("maps AlreadyArchivedError to 409 already_archived", async () => {
+    const { app, logs } = setup(undefined, undefined, async () => {
+      throw new AlreadyArchivedError();
+    });
+    const response = await archiveRequest(app, JSON.stringify({ path: "a.md" }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ ok: false, error: "already_archived" });
+    expect(logs).toEqual(["already_archived rejected"]);
+  });
+
+  it("maps ArchiveTargetExistsError to 409 archive_target_exists", async () => {
+    const { app, logs } = setup(undefined, undefined, async () => {
+      throw new ArchiveTargetExistsError();
+    });
+    const response = await archiveRequest(app, JSON.stringify({ path: "a.md" }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ ok: false, error: "archive_target_exists" });
+    expect(logs).toEqual(["archive_target_exists rejected"]);
+  });
+
+  it("maps NoteNotFoundError to 404, PushPendingError to 502, ConfigInvalidError to 503", async () => {
+    const cases: Array<[Error, number, string]> = [
+      [new NoteNotFoundError(), 404, "note_not_found"],
+      [new PushPendingError("archive/a.md", "abc", 128), 502, "push_pending"],
+      [new ConfigInvalidError(CONFIG_FILE, "vault.archive_folder", "bad"), 503, "config_invalid"],
+      [new UnsafePathError(), 400, "unsafe_path"],
+    ];
+    for (const [error, status, code] of cases) {
+      const { app } = setup(undefined, undefined, async () => {
+        throw error;
+      });
+      const response = await archiveRequest(app, JSON.stringify({ path: "a.md" }));
+      expect(response.status).toBe(status);
+      expect(((await response.json()) as { error: string }).error).toBe(code);
+    }
+  });
+
+  it("has no delete route: DELETE answers 404 and no writer method runs", async () => {
+    const { app, writer } = setup();
+    for (const path of ["/notes", "/notes/archive"]) {
+      const response = await app.request(path, { method: "DELETE", headers: AUTH });
+      expect(response.status).toBe(404);
+    }
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(writer.patch).not.toHaveBeenCalled();
+    expect(writer.archive).not.toHaveBeenCalled();
+    const methods = app.routes.filter((r) => r.path !== "/*").map((r) => r.method);
+    expect(methods).not.toContain("DELETE");
+    expect(app.routes.filter((r) => r.method === "ALL").map((r) => r.path)).toEqual(["/*"]);
   });
 });

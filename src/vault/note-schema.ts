@@ -70,3 +70,8 @@ export const NotePatch = z
   });
 
 export type NotePatch = z.infer<typeof NotePatch>;
+
+/** Archive an existing note: only its path. Strict: any other key is refused. */
+export const NoteArchive = z.strictObject({ path: NotePath });
+
+export type NoteArchive = z.infer<typeof NoteArchive>;

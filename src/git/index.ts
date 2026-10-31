@@ -241,12 +241,48 @@ function splitNul(buffer: Buffer): Buffer[] {
   return parts;
 }
 
+/**
+ * Move a tracked file with `git mv` (staged rename, history kept). Never forced: an existing
+ * target or an untracked source makes git fail instead of overwriting.
+ */
+export async function moveFile(dir: string, from: string, to: string): Promise<void> {
+  await runGit(dir, ["mv", "--", from, to]);
+}
+
+/**
+ * Commit only the named paths (whatever else is staged stays out) as `author` and return the new
+ * commit sha. After a `moveFile`, name both the old and the new path to commit the rename.
+ */
+export async function commitPaths(
+  dir: string,
+  paths: string[],
+  message: string,
+  author: GitAuthor,
+): Promise<string> {
+  await runGit(dir, ["commit", "-m", message, "--", ...paths], {
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+    ...committerEnv(author),
+  });
+  return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
 export interface GitApi {
   pullRebase: typeof pullRebase;
   commitFile: typeof commitFile;
   push: typeof push;
   headSha: typeof headSha;
   unstageFile: typeof unstageFile;
+  moveFile: typeof moveFile;
+  commitPaths: typeof commitPaths;
 }
 
-export const defaultGit: GitApi = { pullRebase, commitFile, push, headSha, unstageFile };
+export const defaultGit: GitApi = {
+  pullRebase,
+  commitFile,
+  push,
+  headSha,
+  unstageFile,
+  moveFile,
+  commitPaths,
+};

@@ -4,8 +4,13 @@ import type { z } from "zod";
 import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
-import { NoteInput, NotePatch } from "../vault/note-schema.js";
-import { ImmutableBodyError, NoteNotFoundError } from "../vault/operations.js";
+import { NoteArchive, NoteInput, NotePatch } from "../vault/note-schema.js";
+import {
+  AlreadyArchivedError,
+  ArchiveTargetExistsError,
+  ImmutableBodyError,
+  NoteNotFoundError,
+} from "../vault/operations.js";
 import { SourceIndexLimitError } from "../vault/source-index.js";
 import {
   DuplicateSourceError,
@@ -126,6 +131,14 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
       log("immutable_body rejected");
       return c.json({ ok: false, error: "immutable_body" }, 409);
     }
+    if (error instanceof AlreadyArchivedError) {
+      log("already_archived rejected");
+      return c.json({ ok: false, error: "already_archived" }, 409);
+    }
+    if (error instanceof ArchiveTargetExistsError) {
+      log("archive_target_exists rejected");
+      return c.json({ ok: false, error: "archive_target_exists" }, 409);
+    }
     if (error instanceof NoteNotFoundError) {
       log("note_not_found");
       return c.json({ ok: false, error: "note_not_found" }, 404);
@@ -193,6 +206,20 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
     }
     try {
       return okResponse(c, await writer.patch(parsed.data), 200);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.post("/notes/archive", limit, async (c) => {
+    const body = await readJsonBody(c);
+    if (!body.ok) return body.response;
+    const parsed = NoteArchive.safeParse(body.value);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: "invalid_body", issues: issuesOf(parsed.error) }, 400);
+    }
+    try {
+      return okResponse(c, await writer.archive(parsed.data), 200);
     } catch (error) {
       return errorResponse(c, error);
     }
