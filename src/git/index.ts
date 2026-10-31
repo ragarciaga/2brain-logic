@@ -101,9 +101,12 @@ export async function headSha(dir: string): Promise<string> {
   return runGit(dir, ["rev-parse", "HEAD"]);
 }
 
-/** Remove one path from the index only; a path that is not staged is not an error. */
+/**
+ * Reset one path's index entry to HEAD; the working tree is untouched. A path that is not staged
+ * is not an error. A path tracked in HEAD never ends up as a staged deletion.
+ */
 export async function unstageFile(dir: string, relPath: string): Promise<void> {
-  await runGit(dir, ["rm", "--cached", "--quiet", "--ignore-unmatch", "--", relPath]);
+  await runGit(dir, ["reset", "-q", "--", relPath]);
 }
 
 export interface GitApi {

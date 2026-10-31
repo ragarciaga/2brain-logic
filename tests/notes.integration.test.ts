@@ -1028,6 +1028,28 @@ describe("POST /notes against a real remote", () => {
       }
     });
 
+    it("D3 (h): a failed commit at a path tracked in HEAD but missing from the tree stages no deletion", async () => {
+      pushFromElsewhere("tracked", { "inbox/t.md": "tracked\n" });
+      git(fixture.vaultDir, ["pull", "--rebase"]);
+      // A dirty tree would fail the pull, so the file goes missing right after the pull.
+      const app = makeApp({
+        pullRebase: async (...args) => {
+          await defaultGit.pullRebase(...args);
+          rmSync(join(fixture.vaultDir, "inbox", "t.md"));
+        },
+        commitFile: async (dir, relPath) => {
+          await runGit(dir, ["add", "--", relPath]);
+          throw new GitError("commit", 1);
+        },
+      });
+      expect((await post(app, note("inbox/t.md"))).status).toBe(500);
+      expect(logs).toEqual(["write_failed: git commit exit 1"]);
+      expect(git(fixture.vaultDir, ["diff", "--cached", "--name-status"])).toBe("");
+      expect(git(fixture.vaultDir, ["ls-tree", "-r", "--name-only", "HEAD", "inbox/t.md"])).toBe(
+        "inbox/t.md",
+      );
+    });
+
     it("D3 (h): a commit that lands and then throws keeps the file tracked and the tree clean", async () => {
       const app = makeApp({
         commitFile: async (...args) => {

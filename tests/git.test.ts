@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { commitFile, ensureClone, headSha, runGit, unstageFile } from "../src/git/index.js";
@@ -39,6 +39,16 @@ describe("literal pathspecs", () => {
     await unstageFile(fixture.vaultDir, "[cd].md");
     expect(git(fixture.vaultDir, ["diff", "--cached", "--name-only"])).toBe("c.md");
     expect(readFileSync(join(fixture.vaultDir, "[cd].md"), "utf8")).toBe("cd\n");
+  });
+
+  it("unstageFile on a tracked file that was deleted and re-created stages no deletion", async () => {
+    rmSync(join(fixture.vaultDir, "a.md"));
+    writeFileSync(join(fixture.vaultDir, "a.md"), "recreated\n");
+    git(fixture.vaultDir, ["add", "--", "a.md"]);
+    await unstageFile(fixture.vaultDir, "a.md");
+    expect(git(fixture.vaultDir, ["diff", "--cached", "--name-status"])).toBe("");
+    expect(git(fixture.vaultDir, ["ls-files", "--", "a.md"])).toBe("a.md");
+    expect(readFileSync(join(fixture.vaultDir, "a.md"), "utf8")).toBe("recreated\n");
   });
 
   it("unstageFile resolves for a path that was never staged", async () => {
