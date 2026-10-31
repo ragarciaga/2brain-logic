@@ -734,6 +734,165 @@ describe("labeled values", () => {
       expect(scrub(`${name}: ${secret}`).text).toBe(`${name}: ${secret}`);
     }
   });
+
+  it("reads a one-word label that ends in a key word or in credential(s) as a label", () => {
+    const secret = join("abcd1234", "efgh");
+    for (const name of [
+      join("secretaccess", "key"),
+      join("AWS", "SECRETACCESSKEY"),
+      join("aws_", "secretaccesskey"),
+      join("my", "apikey"),
+      join("GOOGLE", "APIKEY"),
+      join("OPENAI", "APIKEY"),
+      join("my", "secretkey"),
+      join("STRIPE", "SECRETKEY"),
+      join("aws", "accesskey"),
+      join("ssh", "privatekey"),
+      join("db", "credentials"),
+      join("client", "credentials"),
+      join("user", "credential"),
+      join("token", "key"),
+      join("my", "apikey2"),
+      join("my", "apikey_prod"),
+      join("MYAPI", "_KEY"),
+      join("xaccess", "_key"),
+      join("xprivate", "_key"),
+    ]) {
+      expect(scrub(`${name}=${secret}`).text).toBe(`${name}=${MARK("labeled_secret")}`);
+      expect(scrub(`${name}: ${secret}`).text).toBe(`${name}: ${MARK("labeled_secret")}`);
+      expect(scrubFrontmatter({ [name]: "two words" }).data).toEqual({
+        [name]: MARK("labeled_secret"),
+      });
+    }
+    for (const name of [
+      join("mon", "key"),
+      join("sort", "_key"),
+      join("secre", "tary"),
+      join("to", "kenizer"),
+      join("max_to", "kens"),
+      join("pass", "word_policy"),
+      join("api_key", "_name"),
+      join("to", "ken_count"),
+      join("DB_PASS", "WORD_URL"),
+      join("key", "board"),
+      join("my", "apikey_name"),
+      join("db", "credentials_url"),
+    ]) {
+      expect(scrub(`${name}=${secret}`).text).toBe(`${name}=${secret}`);
+      expect(scrubFrontmatter({ [name]: "two words" }).data).toEqual({ [name]: "two words" });
+    }
+  });
+
+  it("pins the := and => separators", () => {
+    const pass = join("pass", "word");
+    const token = join("to", "ken");
+    // A value of 6 or more characters after := keeps the separator.
+    expect(scrub(`${pass}:=${join("abc", "def")}`).text).toBe(`${pass}:=${MARK("labeled_secret")}`);
+    expect(scrub(`${pass} := ${join("abcd", "efgh")}`).text).toBe(
+      `${pass} := ${MARK("labeled_secret")}`,
+    );
+    // With 5 characters after :=, the = is part of the value (the head backs off to ":").
+    expect(scrub(`${pass}:=${join("abc", "de")}`).text).toBe(`${pass}:${MARK("labeled_secret")}`);
+    expect(scrub(`${token} => ${join("abcd", "efgh")}`).text).toBe(
+      `${token} => ${MARK("labeled_secret")}`,
+    );
+    expect(scrub(`${token}=>${join("abcd", "efgh")}`).text).toBe(
+      `${token}=>${MARK("labeled_secret")}`,
+    );
+    expect(scrub(`${token} =>${join("abc", "de")}`).text).toBe(
+      `${token} =${MARK("labeled_secret")}`,
+    );
+  });
+});
+
+describe("label sweep over the shapes of the previous grammar (Revision 8)", () => {
+  // The label grammar of 4e528b7 was one regex: a core word (or `api`, `access`, `private` with an
+  // optional joiner and `key`), an optional `key` or `access key` suffix and an optional tail,
+  // in any casing, with no left boundary. The shapes below are the product of those parts. The
+  // product was run through that head: it redacted every shape as text, and every shape as a
+  // frontmatter key except those flagged `inFrontmatter: false`. All of those must still be
+  // redacted. Two kinds of shape that it redacted are left out on purpose, see `shapes`.
+  const PREFIXES = ["", "my", "AWS_", "the ", "A1"];
+  const JOINS = ["", " ", "_", "-"];
+  const CORES = [
+    join("pass", "word"),
+    join("pass", "wd"),
+    "pwd",
+    join("pass", "phrase"),
+    join("sec", "ret"),
+    join("to", "ken"),
+    "credential",
+    "credentials",
+    ...["api", "access", "private"].flatMap((word) => JOINS.map((joiner) => `${word}${joiner}key`)),
+  ];
+  const SUFFIXES = [
+    "",
+    ...["", " ", "_", ".", "-"].flatMap((joiner) =>
+      ["key", ...JOINS.map((inner) => `access${inner}key`)].map((rest) => `${joiner}${rest}`),
+    ),
+  ];
+  const TAILS = ["", "_prod", ".v2", "-ro", "_a_b", "1", "123", "_abcdefghijkl"];
+  const capitalize = (text: string) =>
+    text.replace(
+      /(^|[ _.-])([a-z])/g,
+      (_all, edge: string, letter: string) => edge + letter.toUpperCase(),
+    );
+  const CASINGS: Record<string, (body: string, tail: string) => string> = {
+    lower: (body, tail) => body + tail,
+    upper: (body, tail) => (body + tail).toUpperCase(),
+    title: (body, tail) => capitalize(body + tail),
+    camel: (body, tail) =>
+      capitalize(body)
+        .replace(/[ _.-]+/g, "")
+        .replace(/^[A-Z]/, (letter) => letter.toLowerCase()) + tail,
+  };
+
+  interface Shape {
+    label: string;
+    inFrontmatter: boolean;
+  }
+  function* shapes(): Generator<Shape> {
+    for (const prefix of PREFIXES) {
+      for (const core of CORES) {
+        for (const suffix of SUFFIXES) {
+          // Exclusion 1: a `key` suffix after a core that already ends in `key` ("apikeykey").
+          if (suffix === "key" && core.endsWith("key")) continue;
+          for (const tail of TAILS) {
+            // Exclusion 2: a spaced label whose last word passes 15 characters is not a
+            // candidate (the cap of Revision 5; the words of a spaced label are short).
+            if (tail === "_abcdefghijkl" && (core.includes(" ") || suffix.includes(" "))) continue;
+            for (const [casing, apply] of Object.entries(CASINGS)) {
+              yield {
+                label: apply(`${prefix}${core}${suffix}`, tail),
+                // The previous frontmatter key pattern had no space in its left part.
+                inFrontmatter: !(prefix.includes(" ") && casing !== "camel"),
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  it("redacts every shape that the previous grammar redacted, as text and as a key", () => {
+    const value = join("k3Vq9x", "Lm2Pz7", "Rt4W");
+    const textMisses: string[] = [];
+    const keyMisses: string[] = [];
+    let checked = 0;
+    for (const { label, inFrontmatter } of shapes()) {
+      checked++;
+      if (scrub(`${label}=${value}`).text !== `${label}=${MARK("labeled_secret")}`) {
+        textMisses.push(label);
+      }
+      if (inFrontmatter) {
+        const data = scrubFrontmatter({ [label]: "two words" }).data;
+        if (data[label] !== MARK("labeled_secret")) keyMisses.push(label);
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(textMisses.slice(0, 10)).toEqual([]);
+    expect(keyMisses.slice(0, 10)).toEqual([]);
+  }, 60_000);
 });
 
 describe("scrubFrontmatter (R4.1)", () => {
@@ -964,6 +1123,27 @@ describe("isLabelKey", () => {
     ["xAccess", "Key"],
     ["my", "passphrase"],
     ["my", "passwd"],
+    ["secret", "accesskey"],
+    ["AWS", "SECRETACCESSKEY"],
+    ["aws_", "secretaccesskey"],
+    ["my", "apikey"],
+    ["GOOGLE", "APIKEY"],
+    ["OPENAI", "APIKEY"],
+    ["my", "secretkey"],
+    ["STRIPE", "SECRETKEY"],
+    ["aws", "accesskey"],
+    ["ssh", "privatekey"],
+    ["db", "credentials"],
+    ["client", "credentials"],
+    ["user", "credential"],
+    ["credential", "key"],
+    ["token", "key"],
+    ["my", "apikey2"],
+    ["my", "apikey_prod"],
+    ["MYAPI", "_KEY"],
+    ["xaccess", "_key"],
+    ["xprivate", "_key"],
+    ["my", "Api Key"],
   ])("accepts %s%s", (a, b) => {
     expect(isLabelKey(join(a as string, b as string))).toBe(true);
   });
@@ -993,6 +1173,13 @@ describe("isLabelKey", () => {
     ["PG", "PASSWORD_URL"],
     ["auth", "tokens"],
     ["secret", "ary_token_name"],
+    ["my", "apikey_name"],
+    ["db", "credentials_url"],
+    ["x", "privatekey_path"],
+    ["therapy", "_key"],
+    ["turkey", ""],
+    ["donkey", "_id"],
+    ["secret", "keyword"],
   ])("rejects %s%s", (a, b) => {
     expect(isLabelKey(join(a as string, b as string))).toBe(false);
   });
@@ -1382,6 +1569,11 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["15 character words joined by spaces", repeat("aaaaaaaaaaaaaaa ")],
     ["dotted identifier", repeat("a.b-c_")],
     ["labels that name something else", repeat("a=bbbbbb ")],
+    ["compound key labels", repeat(join("AWS", "SECRETACCESS", "KEY", "=bbbbbb "))],
+    ["compound key labels that name something else", repeat("myapikey_name=bbbbbb&")],
+    ["credentials labels", repeat("dbcredentials_url=bbbbbb;")],
+    ["words ending in api before key", repeat("xapi_key_xaccess_key_")],
+    ["64 character compound labels", repeat(`${"a".repeat(50)}secretaccesskey_`)],
     ["token_count runs", repeat("token_count=")],
     ["token_count runs with values", repeat("token_count=bbbbbb ")],
     ["rejected assignments", repeat("a=b&")],

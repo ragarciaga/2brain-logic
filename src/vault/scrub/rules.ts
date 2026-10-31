@@ -250,7 +250,14 @@ const LABEL_COMPOUND_ENDINGS: readonly string[] = [
   "passphrase",
   "secret",
 ];
-const LABEL_KEY_PREFIXES: ReadonlySet<string> = new Set(["api", "access", "private"]);
+// A single word that names a key: a core word, "api", "access", "private" or "credential(s)", then
+// "key" ("awssecretaccesskey", "GOOGLEAPIKEY", "sshprivatekey", "tokenkey", "credentialkey"); or
+// one that ends with "credential" or "credentials" ("dbcredentials"). "monkey" and "keyboard"
+// match neither. A trailing digit run is already gone: `labelWords` splits at digits.
+const LABEL_COMPOUND_KEY =
+  /(?:password|passwd|pwd|passphrase|secret|token|api|access|private|credentials?)(?:access)?key$|credentials?$/;
+// "key" names a secret when the word before it ends with one of these ("API Key", "MYAPI_KEY").
+const LABEL_KEY_PREFIXES: readonly string[] = ["api", "access", "private"];
 // A last word that makes the name something else than a secret ("token_count", "api_key_name").
 const LABEL_LAST_DENIED: ReadonlySet<string> = new Set([
   "count",
@@ -292,10 +299,12 @@ function labelWords(label: string): string[] {
 
 /**
  * True when a label (a text label before `=` or `:`, or a frontmatter key) names a secret: its
- * words hold a core word (`password`, `secret`, `token`, `api` + `key`, ...) or a compound that
- * ends with one (`PGPASSWORD`, `authtoken`), and the last word is not one that turns it into
- * something else (`count`, `url`, `name`, ...). Only the last 4 spaced
- * words and the last 64 characters are read, which is also the most the text pattern can match.
+ * words hold a core word (`password`, `secret`, `token`, `api` + `key`, ...), a compound that
+ * ends with one (`PGPASSWORD`, `authtoken`), a compound key (`AWSSECRETACCESSKEY`, `myapikey`,
+ * `dbcredentials`), or `key` after a word that ends in `api`, `access` or `private` (`MYAPI_KEY`),
+ * and the last word is not one that turns it into something else (`count`, `url`, `name`, ...).
+ * Only the last 4 spaced words and the last 64 characters are read, which is also the most the
+ * text pattern can match.
  */
 export function isLabelKey(label: string): boolean {
   const words = labelWords(label.split(" ").slice(-4).join(" ").slice(-64));
@@ -305,7 +314,10 @@ export function isLabelKey(label: string): boolean {
     (word, at) =>
       LABEL_CORE_WORDS.has(word) ||
       LABEL_COMPOUND_ENDINGS.some((ending) => word.endsWith(ending)) ||
-      (word === "key" && at > 0 && LABEL_KEY_PREFIXES.has(words[at - 1] as string)),
+      LABEL_COMPOUND_KEY.test(word) ||
+      (word === "key" &&
+        at > 0 &&
+        LABEL_KEY_PREFIXES.some((prefix) => (words[at - 1] as string).endsWith(prefix))),
   );
 }
 
