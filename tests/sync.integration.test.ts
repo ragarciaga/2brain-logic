@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultGit, ensureClone, type GitApi, GitError } from "../src/git/index.js";
@@ -345,6 +345,123 @@ describe("syncBeforeWrite through the note writer", () => {
       expect(remoteFile("inbox/a.md")).toBe(REMOTE);
     },
   );
+
+  describe("upstream deletions and renames", () => {
+    function otherClone(): string {
+      counter += 1;
+      return fixture.cloneElsewhere(`other-${counter}`);
+    }
+
+    it("keeps the conflict copy when upstream also deletes a tracked file", async () => {
+      remoteCommit({ "inbox/del.md": bytes("d\n") });
+      git(fixture.vaultDir, ["pull", "--rebase"]);
+      localCommit({ "inbox/a.md": LOCAL });
+      const other = otherClone();
+      writeIn(other, { "inbox/a.md": REMOTE });
+      git(other, ["rm", "-q", "inbox/del.md"]);
+      git(other, ["commit", "-m", "remote"]);
+      git(other, ["push", "origin", "main"]);
+
+      expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+      expect(remoteFiles()).not.toContain("inbox/del.md");
+      expect(remoteFile(COPY)).toBe(LOCAL);
+      expectVaultMatchesRemote();
+    });
+
+    it("keeps the conflict copy when upstream also renames a tracked file", async () => {
+      remoteCommit({ "inbox/old.md": bytes("r\n") });
+      git(fixture.vaultDir, ["pull", "--rebase"]);
+      localCommit({ "inbox/a.md": LOCAL });
+      const other = otherClone();
+      writeIn(other, { "inbox/a.md": REMOTE });
+      git(other, ["mv", "inbox/old.md", "inbox/new.md"]);
+      git(other, ["commit", "-am", "remote"]);
+      git(other, ["push", "origin", "main"]);
+
+      expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+      expect(remoteFiles()).not.toContain("inbox/old.md");
+      expect(remoteFile("inbox/new.md")).toBe(bytes("r\n"));
+      expect(remoteFile(COPY)).toBe(LOCAL);
+      expectVaultMatchesRemote();
+    });
+  });
+
+  describe("cases the rebuild refuses and leaves untouched", () => {
+    function expectUntouched(local: string, keptPath: string, upstream: string): void {
+      // The rebuild starts with a soft reset to upstream; a refusal must come before it.
+      expect(git(fixture.vaultDir, ["reflog", "show", "HEAD"])).not.toContain(
+        `reset: moving to ${upstream}`,
+      );
+      expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(local);
+      expect(existsSync(join(fixture.vaultDir, keptPath))).toBe(true);
+      expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+      expect(rebaseDirs()).toBe(false);
+    }
+
+    it("a local file under a directory that upstream made a file", async () => {
+      const local = localCommit({ "Folder/note.md": LOCAL, "inbox/a.md": LOCAL });
+      const up = remoteCommit({ Folder: "file\n", "inbox/a.md": REMOTE });
+      const response = await post(makeApp(), note("inbox/b.md"));
+      expect(response.status).toBe(500);
+      expect(logs.some((l) => /^write_failed: git pull exit \d+$/.test(l))).toBe(true);
+      expectUntouched(local, "Folder/note.md", up);
+    });
+
+    it("a local file where upstream put a directory", async () => {
+      const local = localCommit({ Folder: "file\n", "inbox/a.md": LOCAL });
+      const up = remoteCommit({ "Folder/note.md": REMOTE, "inbox/a.md": REMOTE });
+      const response = await post(makeApp(), note("inbox/b.md"));
+      expect(response.status).toBe(500);
+      expect(logs.some((l) => /^write_failed: git pull exit \d+$/.test(l))).toBe(true);
+      expectUntouched(local, "Folder", up);
+    });
+
+    it("a remote-only file name that is not valid UTF-8", async (ctx) => {
+      const local = localCommit({ "inbox/a.md": LOCAL });
+      counter += 1;
+      const other = fixture.cloneElsewhere(`other-${counter}`);
+      writeIn(other, { "inbox/a.md": REMOTE });
+      try {
+        writeFileSync(
+          Buffer.concat([Buffer.from(`${other}/inbox/`), Buffer.from([0xff, 0x2e, 0x6d, 0x64])]),
+          "x\n",
+        );
+      } catch {
+        ctx.skip();
+        return;
+      }
+      git(other, ["add", "-A"]);
+      git(other, ["commit", "-m", "remote"]);
+      git(other, ["push", "origin", "main"]);
+      const up = git(other, ["rev-parse", "HEAD"]);
+
+      const response = await post(makeApp(), note("inbox/b.md"));
+      expect(response.status).toBe(500);
+      expect(logs.some((l) => /^write_failed: git pull exit \d+$/.test(l))).toBe(true);
+      expectUntouched(local, "inbox/a.md", up);
+    });
+  });
+
+  it("D2: an untracked file at the conflict name is never overwritten", async () => {
+    localCommit({ "inbox/a.md": LOCAL });
+    remoteCommit({ "inbox/a.md": REMOTE });
+    writeFileSync(join(fixture.vaultDir, COPY), "untracked\n");
+
+    expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+    expect(remoteFile(`inbox/a (conflict ${DAY} 2).md`)).toBe(LOCAL);
+    expect(readFileSync(join(fixture.vaultDir, COPY), "utf8")).toBe("untracked\n");
+    expect(remoteFiles()).not.toContain(COPY);
+  });
+
+  it("makes no copy and counts nothing for a path both sides changed identically", async () => {
+    localCommit({ "inbox/a.md": LOCAL, "inbox/same.md": bytes("same\n") });
+    remoteCommit({ "inbox/a.md": REMOTE, "inbox/same.md": bytes("same\n") });
+
+    expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+    expect(logs).toContain("conflicts_kept: 1");
+    expect(remoteFiles().filter((p) => p.includes("conflict"))).toEqual([COPY]);
+    expect(remoteFile("inbox/same.md")).toBe(bytes("same\n"));
+  });
 
   it("a push failure after the conflict commit is retried by the next write", async () => {
     localCommit({ "inbox/a.md": LOCAL });

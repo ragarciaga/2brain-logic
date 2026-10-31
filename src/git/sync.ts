@@ -64,8 +64,17 @@ async function rebaseInProgress(dir: string): Promise<boolean> {
   return false;
 }
 
+/** A path name in git output is not valid UTF-8, so it cannot be handled safely as text. */
+class NameDecodeError extends Error {}
+
 function splitNul(buffer: Buffer): string[] {
-  const parts = buffer.toString("utf8").split("\0");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    throw new NameDecodeError("Path name is not valid UTF-8");
+  }
+  const parts = text.split("\0");
   if (parts[parts.length - 1] === "") parts.pop();
   return parts;
 }
@@ -119,6 +128,28 @@ async function deepestRealAncestor(target: string): Promise<string> {
   }
 }
 
+/** Every ancestor directory of every path, as `a`, `a/b` for `a/b/c`. */
+function ancestorDirs(paths: string[]): Set<string> {
+  const dirs = new Set<string>();
+  for (const path of paths) {
+    let slash = path.indexOf("/");
+    while (slash !== -1) {
+      dirs.add(path.slice(0, slash));
+      slash = path.indexOf("/", slash + 1);
+    }
+  }
+  return dirs;
+}
+
+/** True when a path changed on one side is a directory that the other side's changes put files in. */
+function hasDirectoryFileClash(localChanged: string[], upstreamChanged: string[]): boolean {
+  const upstreamDirs = ancestorDirs(upstreamChanged);
+  const localDirs = ancestorDirs(localChanged);
+  return (
+    localChanged.some((p) => upstreamDirs.has(p)) || upstreamChanged.some((p) => localDirs.has(p))
+  );
+}
+
 function inside(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(root + sep);
 }
@@ -161,14 +192,25 @@ async function resolveConflict(
   const upstream = await runGit(dir, ["rev-parse", "--verify", "@{upstream}"]);
   const base = await runGit(dir, ["merge-base", "HEAD", upstream]);
 
-  const localChanged = await changedPaths(dir, base, local);
-  const upstreamChanged = await changedPaths(dir, base, upstream);
-  const upstreamSet = new Set(upstreamChanged);
-  const both = localChanged.filter((p) => upstreamSet.has(p));
-  const localEntries = await readEntries(dir, local, both);
-  const upstreamEntries = await readEntries(dir, upstream, both);
-  const conflicting = both.filter((p) => !sameEntry(localEntries.get(p), upstreamEntries.get(p)));
+  let localChanged: string[];
+  let upstreamChanged: string[];
+  let localEntries: Map<string, Entry>;
+  let conflicting: string[];
+  try {
+    localChanged = await changedPaths(dir, base, local);
+    upstreamChanged = await changedPaths(dir, base, upstream);
+    const upstreamSet = new Set(upstreamChanged);
+    const both = localChanged.filter((p) => upstreamSet.has(p));
+    localEntries = await readEntries(dir, local, both);
+    const upstreamEntries = await readEntries(dir, upstream, both);
+    conflicting = both.filter((p) => !sameEntry(localEntries.get(p), upstreamEntries.get(p)));
+  } catch (error) {
+    if (error instanceof NameDecodeError) throw original;
+    throw error;
+  }
   if (conflicting.length === 0) throw original;
+  // A file on one side where the other side has a directory cannot be rebuilt in place.
+  if (hasDirectoryFileClash(localChanged, upstreamChanged)) throw original;
 
   const day = opts.now().toISOString().slice(0, 10);
   const copies: Copy[] = [];
@@ -204,7 +246,7 @@ async function resolveConflict(
       await runGit(dir, ["checkout", "-q", upstream, "--", ...group]);
     }
     for (const group of chunks(gone)) {
-      await runGit(dir, ["rm", "-q", "--ignore-unmatch", "--", ...group]);
+      await runGit(dir, ["rm", "-q", "-f", "--ignore-unmatch", "--", ...group]);
     }
 
     const realRoot = await realpath(root);
@@ -239,6 +281,14 @@ async function resolveConflict(
       await runGit(dir, ["add", "--", rel]);
     }
 
+    // Every local path that upstream did not change must still be staged.
+    const upstreamTouched = new Set(upstreamChanged);
+    const localTree = splitNul(
+      await runGitBuffer(dir, ["ls-tree", "-r", "-z", "--name-only", local]),
+    );
+    const indexed = new Set(splitNul(await runGitBuffer(dir, ["ls-files", "-z"])));
+    if (localTree.some((p) => !upstreamTouched.has(p) && !indexed.has(p))) throw original;
+
     const staged = await runGitBuffer(dir, ["diff", "--cached", "--name-only", "-z"]);
     if (staged.length === 0) return { conflicts: conflicting.length };
     await commitIndex(
@@ -254,7 +304,7 @@ async function resolveConflict(
     } catch {
       // swallowed on purpose
     }
-    throw error;
+    throw error instanceof NameDecodeError ? original : error;
   }
   await opts.git.push(dir);
   return { conflicts: conflicting.length };
