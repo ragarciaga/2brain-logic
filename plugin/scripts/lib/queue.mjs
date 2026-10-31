@@ -33,6 +33,7 @@ function privateDir(path) {
  * @property {Record<string, string>} event
  * @property {number} attempts
  * @property {string} createdAt ISO timestamp
+ * @property {string} [area] area resolved when the job was stored
  */
 
 /**
@@ -106,9 +107,10 @@ export function createQueue({ dataDir, now, log }) {
 
   /**
    * @param {Record<string, unknown>} event hook input
+   * @param {{ area?: string }} [options] `area` is stored with the job when it is a string
    * @returns {Job}
    */
-  function enqueue(event) {
+  function enqueue(event, options = {}) {
     const id = event?.session_id;
     if (typeof id !== "string" || !SESSION_ID.test(id)) {
       throw new TypeError("invalid session id");
@@ -129,6 +131,7 @@ export function createQueue({ dataDir, now, log }) {
       attempts: 0,
       createdAt: new Date(t).toISOString(),
     };
+    if (typeof options.area === "string") data.area = options.area;
     writeAtomic(queueDir, name, data);
     return { name, data };
   }
