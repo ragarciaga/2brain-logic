@@ -49,12 +49,12 @@ export function parseNote(text: string): ParsedNote {
 
 /**
  * Serialize a note. The result always starts with a `---` block, even for empty frontmatter, so
- * a body that starts with its own fence is just content. A body gets one trailing newline.
+ * a body that starts with its own fence is just content. The body is stored verbatim, with no
+ * newline added, so `parseNote(stringifyNote(fm, body)).content` equals `body`.
  */
 export function stringifyNote(frontmatter: Record<string, unknown>, body: string): string {
   const dump = yamlEngine.stringify(frontmatter).trim();
-  const tail = body.endsWith("\n") ? body : `${body}\n`;
-  return `---\n${dump}\n---\n${tail}`;
+  return `---\n${dump}\n---\n${body}`;
 }
 
 /**

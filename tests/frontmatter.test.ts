@@ -34,9 +34,23 @@ describe("stringifyNote", () => {
     expect(parsed.content).toBe(body);
   });
 
-  it("ensures one trailing newline on the body", () => {
-    expect(parseNote(stringifyNote({ a: 1 }, "no newline")).content).toBe("no newline\n");
-    expect(parseNote(stringifyNote({ a: 1 }, "")).content).toBe("\n");
+  const bodies: Array<[string, string]> = [
+    ["empty", ""],
+    ["no trailing newline", "no newline"],
+    ["one trailing newline", "a\n"],
+    ["two trailing newlines", "a\n\n"],
+    ["CRLF", "a\r\nb\r\n"],
+    ["a leading newline", "\nb\n"],
+  ];
+
+  it.each(bodies)("stores the body verbatim: %s", (_name, body) => {
+    for (const fm of [{}, { a: 1 }]) {
+      const stored = stringifyNote(fm, body);
+      expect(stored.endsWith(body)).toBe(true);
+      const parsed = parseNote(stored);
+      expect(parsed.data).toEqual(fm);
+      expect(parsed.content).toBe(body);
+    }
   });
 
   it("round-trips a date-like string as a string", () => {

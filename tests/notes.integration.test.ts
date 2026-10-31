@@ -115,7 +115,7 @@ describe("POST /notes against a real remote", () => {
 
     const parsed = parseNote(remoteFile("Inbox/idea.md"));
     expect(parsed.data).toEqual(input.frontmatter);
-    expect(parsed.content.trimEnd()).toBe(input.body.trimEnd());
+    expect(parsed.content).toBe(input.body);
 
     const author = git(fixture.remote, ["log", "-1", "--format=%an <%ae>", "main"]);
     expect(author).toBe(`${TEST_AUTHOR.name} <${TEST_AUTHOR.email}>`);
@@ -202,8 +202,29 @@ describe("POST /notes against a real remote", () => {
     expect(stored.startsWith("---\n")).toBe(true);
     const viaDefaultMatter = matter(stored);
     expect(viaDefaultMatter.data).toEqual({});
-    expect(viaDefaultMatter.content.trimEnd()).toBe(body.trimEnd());
+    expect(viaDefaultMatter.content).toBe(body);
     expect((globalThis as Record<string, unknown>).__pwnedIntegration).toBeUndefined();
+  });
+
+  it.each([
+    ["empty", ""],
+    ["no trailing newline", "no newline"],
+    ["one trailing newline", "a\n"],
+    ["two trailing newlines", "a\n\n"],
+    ["CRLF", "a\r\nb\r\n"],
+  ])("D3: the %s body is stored exactly as sent", async (name, body) => {
+    const slug = name.replaceAll(" ", "-");
+    for (const [kind, frontmatter] of [
+      ["empty", {}],
+      ["full", { title: "T", n: 2 }],
+    ] as const) {
+      const path = `rt/${slug}-${kind}.md`;
+      const response = await post(makeApp(), { path, frontmatter, body });
+      expect(response.status).toBe(201);
+      const parsed = parseNote(remoteFile(path));
+      expect(parsed.data).toEqual(frontmatter);
+      expect(parsed.content).toBe(body);
+    }
   });
 
   it("D16: a body that starts with its own fence round-trips with the input frontmatter", async () => {
