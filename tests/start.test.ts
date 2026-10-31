@@ -1,11 +1,12 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { newId, openAuthStore } from "../src/auth/oauth/store.js";
 import { createApp } from "../src/server/app.js";
 import { startServer } from "../src/server/start.js";
 import { createGitFixture, git } from "./helpers/git-fixture.js";
@@ -489,6 +490,133 @@ describe("built entry point", () => {
       await stop(child);
       fixture.cleanup();
     }
+  });
+
+  describe("R5.5, R5.6: the auth store at startup", () => {
+    const publicEnv = (
+      fixture: { vaultDir: string; remote: string; root: string },
+      authDir: string,
+    ) =>
+      childEnv({
+        VAULT_DIR: fixture.vaultDir,
+        VAULT_REMOTE: fixture.remote,
+        PORT: "0",
+        INGEST_TOKEN: TOKEN,
+        PUBLIC_BASE_URL: "https://brain.example.com",
+        OWNER_PASSPHRASE_HASH: goodHash(),
+        MCP_PORT: "0",
+        AUTH_STORE_DIR: authDir,
+      });
+
+    const BAD_FILES: Array<[string, string]> = [
+      ["garbage", "STOREMARKER this is not json"],
+      ["a wrong version", '{"version":2,"clients":{},"grants":{},"note":"STOREMARKER"}'],
+      ["an unknown key", '{"version":1,"clients":{},"grants":{},"note":"STOREMARKER"}'],
+    ];
+
+    it.each(BAD_FILES)(
+      "D9: %s in auth.json exits 1 naming auth.json, with no content, no path and nothing listening",
+      async (_name, content) => {
+        const fixture = createGitFixture();
+        try {
+          const authDir = join(fixture.root, "auth");
+          mkdirSync(authDir, { mode: 0o700 });
+          writeFileSync(join(authDir, "auth.json"), content);
+          const run = await runToExit(publicEnv(fixture, authDir));
+          expect(run.code).toBe(1);
+          expect(run.stderr).toContain("auth.json");
+          const output = run.stdout + run.stderr;
+          expect(output).not.toContain("STOREMARKER");
+          expect(output).not.toContain(fixture.root);
+          expect(output).not.toContain("listening");
+        } finally {
+          fixture.cleanup();
+        }
+      },
+    );
+
+    it("D9: the store is opened before either port is bound (a taken PORT does not hide a bad auth.json)", async () => {
+      const fixture = createGitFixture();
+      const blocker = createServer();
+      try {
+        await new Promise<void>((done) => blocker.listen(0, "127.0.0.1", () => done()));
+        const taken = (blocker.address() as AddressInfo).port;
+        const authDir = join(fixture.root, "auth");
+        mkdirSync(authDir, { mode: 0o700 });
+        writeFileSync(join(authDir, "auth.json"), "STOREMARKER this is not json");
+        const run = await runToExit({ ...publicEnv(fixture, authDir), PORT: String(taken) });
+        expect(run.code).toBe(1);
+        expect(run.stderr).toContain("auth.json");
+        expect(run.stderr).not.toContain("EADDRINUSE");
+      } finally {
+        await new Promise<void>((done) => blocker.close(() => done()));
+        fixture.cleanup();
+      }
+    });
+
+    it("keeps clients across a restart: a store written by the library is opened by the built entry", async () => {
+      const fixture = createGitFixture();
+      const authDir = join(fixture.root, "auth");
+      const [port, mcpPort] = await twoFreePorts();
+      const otherVault = join(fixture.root, "other-vault");
+      mkdirSync(otherVault);
+      const seed = await openAuthStore({ dir: authDir, vaultDir: otherVault });
+      await seed.update((tx) =>
+        tx.putClient(newId(), { authMethod: "none", redirectUris: ["https://claude.ai/cb"] }),
+      );
+      seed.close();
+      const { child, read } = spawnService({
+        ...publicEnv(fixture, authDir),
+        PORT: String(port),
+        MCP_PORT: String(mcpPort),
+      });
+      try {
+        await waitForOutput(read, "mcp listening", child);
+        expect(read()).toContain("auth store open: 1 clients");
+      } finally {
+        await stop(child);
+        fixture.cleanup();
+      }
+    });
+
+    it.skipIf(process.platform !== "linux")(
+      "a store directory that is a symlink into the vault exits 1 naming AUTH_STORE_DIR and VAULT_DIR, before anything listens",
+      async () => {
+        const fixture = createGitFixture();
+        try {
+          const link = join(fixture.root, "link-to-vault");
+          symlinkSync(fixture.vaultDir, link);
+          const run = await runToExit(publicEnv(fixture, join(link, "auth")));
+          expect(run.code).toBe(1);
+          expect(run.stderr).toContain("AUTH_STORE_DIR");
+          expect(run.stderr).toContain("VAULT_DIR");
+          expect(run.stdout + run.stderr).not.toContain(fixture.root);
+          expect(run.stdout).not.toContain("listening");
+          expect(existsSync(join(fixture.vaultDir, "auth"))).toBe(false);
+        } finally {
+          fixture.cleanup();
+        }
+      },
+    );
+
+    it("a missing AUTH_STORE_DIR is created and the service starts", async () => {
+      const fixture = createGitFixture();
+      const [port, mcpPort] = await twoFreePorts();
+      const authDir = join(fixture.root, "fresh", "auth");
+      const { child, read } = spawnService({
+        ...publicEnv(fixture, authDir),
+        PORT: String(port),
+        MCP_PORT: String(mcpPort),
+      });
+      try {
+        await waitForOutput(read, "mcp listening", child);
+        expect(read()).toContain("auth store open: 0 clients");
+        expect(existsSync(authDir)).toBe(true);
+      } finally {
+        await stop(child);
+        fixture.cleanup();
+      }
+    });
   });
 
   describe("R1.3: a bad public configuration exits 1 naming the variable, not its value", () => {
