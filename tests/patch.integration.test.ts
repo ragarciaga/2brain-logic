@@ -595,4 +595,247 @@ describe("PATCH /notes against a real remote", () => {
     expect(vaultFile("inbox/other.md").equals(otherBefore)).toBe(true);
     expect(git(fixture.vaultDir, ["show", "--name-only", "--format=", "HEAD"])).toBe("inbox/a.md");
   });
+
+  describe("append", () => {
+    const SECRET = ["ghp", "C".repeat(36)].join("_");
+    const MEETING = { ...VALID, type: "meeting", title: "weekly" };
+    const MEETING_PATH = "personal/meetings/m.md";
+
+    function seedMeeting(body = "Transcript line\n"): string {
+      const text = stringifyNote(MEETING, body);
+      seed({ [MEETING_PATH]: text });
+      return text;
+    }
+
+    function expectNothingWritten(before: string, original: Buffer, path: string) {
+      expect(head()).toBe(before);
+      expect(vaultFile(path).equals(original)).toBe(true);
+      expect(gitCalls).not.toContain("commitFile");
+      expect(gitCalls).not.toContain("push");
+    }
+
+    it("R6.2: adds the text after a body ending in a newline, earlier bytes unchanged, pushed", async () => {
+      const original = Buffer.from(seedIdea());
+      const before = head();
+      const response = await patch(makeApp(), { path: "inbox/a.md", append: "new text" });
+      expect(response.status).toBe(200);
+      const after = head();
+      expect(after).not.toBe(before);
+      expect(await response.json()).toEqual({ ok: true, path: "inbox/a.md", commit: after });
+      const stored = vaultFile("inbox/a.md");
+      expect(stored.subarray(0, original.length).equals(original)).toBe(true);
+      expect(stored.subarray(original.length).toString("utf8")).toBe("\nnew text");
+      expect(git(fixture.vaultDir, ["log", "-1", "--format=%s"])).toBe("2brain: update inbox/a.md");
+      expect(remoteSha()).toBe(after);
+      expect(remoteFile("inbox/a.md")).toBe(stored.toString("utf8"));
+      expect(status()).toBe("");
+    });
+
+    it("R6.2: a body without a final newline gets one blank line", async () => {
+      seedIdea("inbox/a.md", {}, "Line one");
+      const response = await patch(makeApp(), { path: "inbox/a.md", append: "new text" });
+      expect(response.status).toBe(200);
+      expect(parseNote(remoteFile("inbox/a.md")).content).toBe("Line one\n\nnew text");
+    });
+
+    it("set plus append merges the data and keeps the old body as a prefix", async () => {
+      seedIdea();
+      const response = await patch(makeApp(), {
+        path: "inbox/a.md",
+        set: { title: "beta" },
+        append: "more",
+      });
+      expect(response.status).toBe(200);
+      const stored = parseNote(remoteFile("inbox/a.md"));
+      expect(stored.data.title).toBe("beta");
+      expect(stored.content.startsWith(BODY)).toBe(true);
+      expect(stored.content.endsWith("more")).toBe(true);
+    });
+
+    it("append only keeps a hand-formatted frontmatter comment", async () => {
+      const text =
+        "---\n# keep me\ntype: idea\narea: personal\ndate: 2026-10-31\nsource: manual\n---\nBody\n";
+      seed({ "inbox/h.md": text });
+      const response = await patch(makeApp(), { path: "inbox/h.md", append: "tail" });
+      expect(response.status).toBe(200);
+      expect(remoteFile("inbox/h.md")).toBe(`${text}\ntail`);
+    });
+
+    it("R6.3: append to a meeting is 409 immutable_body and writes nothing, empty append too", async () => {
+      const original = Buffer.from(seedMeeting());
+      const before = head();
+      gitCalls = [];
+      for (const append of ["added", ""]) {
+        const response = await patch(makeApp(), { path: MEETING_PATH, append });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ ok: false, error: "immutable_body" });
+      }
+      expectNothingWritten(before, original, MEETING_PATH);
+    });
+
+    it("R6.3: set alone on a meeting is 200 and the body is unchanged", async () => {
+      seedMeeting();
+      const response = await patch(makeApp(), { path: MEETING_PATH, set: { title: "renamed" } });
+      expect(response.status).toBe(200);
+      const stored = parseNote(remoteFile(MEETING_PATH));
+      expect(stored.data.title).toBe("renamed");
+      expect(stored.content).toBe("Transcript line\n");
+    });
+
+    it("R6.3: set plus append on a meeting is 409 and writes nothing", async () => {
+      const original = Buffer.from(seedMeeting());
+      const before = head();
+      gitCalls = [];
+      const response = await patch(makeApp(), {
+        path: MEETING_PATH,
+        set: { title: "renamed" },
+        append: "added",
+      });
+      expect(response.status).toBe(409);
+      expectNothingWritten(before, original, MEETING_PATH);
+    });
+
+    it("R6.3: changing the type into meeting, or out of it, with an append is 409", async () => {
+      const idea = Buffer.from(seedIdea());
+      const before = head();
+      gitCalls = [];
+      const into = await patch(makeApp(), {
+        path: "inbox/a.md",
+        set: { type: "meeting" },
+        append: "x",
+      });
+      expect(into.status).toBe(409);
+      expectNothingWritten(before, idea, "inbox/a.md");
+
+      const meeting = Buffer.from(seedMeeting());
+      const before2 = head();
+      gitCalls = [];
+      const out = await patch(makeApp(), {
+        path: MEETING_PATH,
+        set: { type: "idea" },
+        append: "x",
+      });
+      expect(out.status).toBe(409);
+      expectNothingWritten(before2, meeting, MEETING_PATH);
+    });
+
+    it("R6.3: the type is read under the owner's property name and value", async () => {
+      seed({
+        ".2brain/config.yaml": [
+          "properties:",
+          "  type: kind",
+          "types:",
+          "  meeting:",
+          "    value: call",
+          '    folder: "{area}/calls"',
+          "    immutable_body: true",
+          "  note:",
+          "    value: meeting",
+          "    folder: inbox",
+          "",
+        ].join("\n"),
+      });
+      const base = { area: "personal", date: "2026-10-31", source: "manual" };
+      seed({
+        "personal/calls/c.md": stringifyNote({ ...base, kind: "call" }, "Body\n"),
+        "inbox/n.md": stringifyNote({ ...base, kind: "meeting" }, "Body\n"),
+      });
+      const blocked = await patch(makeApp(), { path: "personal/calls/c.md", append: "x" });
+      expect(blocked.status).toBe(409);
+      const allowed = await patch(makeApp(), { path: "inbox/n.md", append: "x" });
+      expect(allowed.status).toBe(200);
+    });
+
+    it("R4.1: a secret in append is stored redacted and reported", async () => {
+      seedIdea();
+      const response = await patch(makeApp(), { path: "inbox/a.md", append: `token ${SECRET}` });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: true,
+        path: "inbox/a.md",
+        commit: head(),
+        redactions: [{ rule: "github_token", count: 1 }],
+      });
+      expect(remoteFile("inbox/a.md").endsWith("token [REDACTED:github_token]")).toBe(true);
+      expect(remoteFile("inbox/a.md")).not.toContain(SECRET);
+    });
+
+    it("R4.1: secrets in set and append count together in one entry", async () => {
+      seedIdea();
+      const response = await patch(makeApp(), {
+        path: "inbox/a.md",
+        set: { title: `t ${SECRET}` },
+        append: `a ${SECRET}`,
+      });
+      expect(await response.json()).toMatchObject({
+        redactions: [{ rule: "github_token", count: 2 }],
+      });
+    });
+
+    it("R4.1: a scrubber that throws on the appended text gives 500 scrub_failed, nothing written", async () => {
+      const original = Buffer.from(seedIdea());
+      const before = head();
+      gitCalls = [];
+      const scrubber: Scrubber = {
+        scrub: (text) => {
+          if (text.includes("BOOM")) throw new Error("rule failed");
+          return scrub(text);
+        },
+        scrubFrontmatter,
+      };
+      const response = await patch(makeApp({}, scrubber), { path: "inbox/a.md", append: "BOOM" });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "scrub_failed" });
+      expectNothingWritten(before, original, "inbox/a.md");
+    });
+
+    it("D1: an empty append on a mutable note is 200 unchanged and touches nothing", async () => {
+      const original = Buffer.from(seedIdea());
+      const before = head();
+      gitCalls = [];
+      const response = await patch(makeApp(), { path: "inbox/a.md", append: "" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: true,
+        path: "inbox/a.md",
+        commit: null,
+        unchanged: true,
+      });
+      expectNothingWritten(before, original, "inbox/a.md");
+    });
+
+    it("an unparseable note and a non-UTF-8 note with append are 400 invalid_frontmatter", async () => {
+      const broken = "---\nkey: [unclosed\n---\nBody\n";
+      seed({ "inbox/broken.md": broken });
+      const response = await patch(makeApp(), { path: "inbox/broken.md", append: "x" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "invalid_frontmatter",
+        missing: [],
+        invalid: [],
+      });
+      expect(vaultFile("inbox/broken.md").toString("utf8")).toBe(broken);
+
+      const bytes = Buffer.concat([
+        Buffer.from("---\ntype: idea\n---\nBody "),
+        Buffer.from([0xff, 0x0a]),
+      ]);
+      seed({ "inbox/bin.md": "placeholder" });
+      writeFileSync(join(fixture.vaultDir, "inbox", "bin.md"), bytes);
+      git(fixture.vaultDir, ["add", "inbox/bin.md"]);
+      git(fixture.vaultDir, ["commit", "-m", "raw bytes"]);
+      const second = await patch(makeApp(), { path: "inbox/bin.md", append: "x" });
+      expect(second.status).toBe(400);
+      expect(await second.json()).toMatchObject({ error: "invalid_frontmatter", invalid: [] });
+      expect(vaultFile("inbox/bin.md").equals(bytes)).toBe(true);
+    });
+
+    it("a NUL in append is 400 invalid_body", async () => {
+      seedIdea();
+      const response = await patch(makeApp(), { path: "inbox/a.md", append: "a\u0000b" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ ok: false, error: "invalid_body" });
+    });
+  });
 });

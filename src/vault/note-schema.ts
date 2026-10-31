@@ -49,14 +49,24 @@ export const NoteInput = z.object({
 export type NoteInput = z.infer<typeof NoteInput>;
 
 /**
- * Set properties of an existing note. Strict: any other key (`append` included) is refused. A
- * `__proto__` key is dropped by the record, so a `set` made only of it is empty and refused.
+ * Patch an existing note: `set` properties, `append` text to the body, or both; at least one is
+ * required. Strict: any other key is refused. A `__proto__` key is dropped by the record, so a
+ * `set` made only of it is empty and refused. `append` may be an empty string.
  */
-export const NotePatch = z.strictObject({
-  path: NotePath,
-  set: z
-    .record(z.string(), z.unknown())
-    .refine((set) => Object.keys(set).length > 0, { message: "set must not be empty" }),
-});
+export const NotePatch = z
+  .strictObject({
+    path: NotePath,
+    set: z
+      .record(z.string(), z.unknown())
+      .refine((set) => Object.keys(set).length > 0, { message: "set must not be empty" })
+      .optional(),
+    append: z
+      .string()
+      .refine((text) => !text.includes("\u0000"), { message: "append must not contain NUL" })
+      .optional(),
+  })
+  .refine((patch) => patch.set !== undefined || patch.append !== undefined, {
+    message: "set or append is required",
+  });
 
 export type NotePatch = z.infer<typeof NotePatch>;

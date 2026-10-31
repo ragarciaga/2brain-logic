@@ -7,6 +7,10 @@ import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../g
 import { parseNote, stringifyNote } from "./frontmatter.js";
 import type { NoteInput, NotePatch } from "./note-schema.js";
 import {
+  appendBody,
+  appendedBytes,
+  ImmutableBodyError,
+  isImmutableBody,
   mergeProperties,
   NoteNotFoundError,
   propertiesUnchanged,
@@ -134,7 +138,10 @@ export interface WriteResult {
 
 export interface NoteWriter {
   write(note: NoteInput): Promise<WriteResult>;
-  /** Set frontmatter properties of an existing note; the body is never touched. */
+  /**
+   * Set frontmatter properties of an existing note and/or append text to its body. Earlier body
+   * bytes are never changed; an append to a type configured `immutable_body` is refused.
+   */
   patch(input: NotePatch): Promise<WriteResult>;
 }
 
@@ -218,6 +225,24 @@ export function scrubProperties(
   }
 }
 
+/** Scrub one text (an appended body part). Any exception becomes `ScrubFailedError`, no cause. */
+export function scrubText(
+  scrubber: Scrubber,
+  text: string,
+): { text: string; redactions: Redaction[] } {
+  try {
+    const scrubbed = scrubber.scrub(text);
+    return { text: scrubbed.text, redactions: toRedactions(scrubbed.hits) };
+  } catch {
+    throw new ScrubFailedError();
+  }
+}
+
+/** Merge redaction lists, adding the counts of equal rules, sorted by rule id. */
+export function combineRedactions(...lists: Redaction[][]): Redaction[] {
+  return toRedactions(...lists.map((list) => new Map(list.map((r) => [r.rule, r.count]))));
+}
+
 /** Throw the validation error for a frontmatter that does not satisfy the vault config. */
 function assertValid(
   frontmatter: Record<string, unknown>,
@@ -277,14 +302,20 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
  * already there) so a retry starts clean.
  *
  * `patch` merges `set` into the frontmatter of the existing note at the path (top-level keys are
- * replaced, the others kept) and keeps the body byte for byte. A missing path, a directory or a
+ * replaced, the others kept) and/or appends `append` to its body. A missing path, a directory or a
  * non-file there is `NoteNotFoundError`; a symlink is `UnsafePathError`; a note whose frontmatter
- * cannot be read is `InvalidFrontmatterError` with empty lists. Only the incoming `set` values are
- * scrubbed (the stored note is trusted as it is). If every `set` value already equals the stored
- * one, the file is left alone and the result is `unchanged` (a push only when the branch is ahead).
- * A `source_id` set to the value of another note is `DuplicateSourceError`. A change rewrites the
- * frontmatter block (comments and quoting are lost), commits `2brain: update <path>` and pushes. If
- * the commit fails and HEAD did not move, the file is unstaged and the original bytes are restored.
+ * cannot be read is `InvalidFrontmatterError` with empty lists. Any `append` (an empty one
+ * included) on a note whose stored or merged type is configured `immutable_body: true` is
+ * `ImmutableBodyError`, checked before validation, scrub or any file work. Only the incoming `set`
+ * values and the appended text are scrubbed (the stored note is trusted as it is). The appended
+ * text goes after the old body bytes, which stay as they are, separated by exactly one blank line
+ * (see `appendBody`). With no property change the original bytes plus the suffix are stored, so
+ * the frontmatter keeps its formatting. If every `set` value already equals the stored one and the
+ * append is empty, the file is left alone and the result is `unchanged` (a push only when the
+ * branch is ahead). A `source_id` set to the value of another note is `DuplicateSourceError`. A
+ * property change rewrites the frontmatter block (comments and quoting are lost); either change
+ * commits `2brain: update <path>` and pushes. If the commit fails and HEAD did not move, the file
+ * is unstaged and the original bytes are restored.
  *
  * `withPulled` gives the read tools the same queue: it pulls (the same sync, with the same logs),
  * then runs the caller's function inside the queue slot, so a read waits for an earlier write and
@@ -489,17 +520,36 @@ export function createNoteWriter({
     if (stored === undefined) throw new InvalidFrontmatterError([], []);
     const { data, body } = stored;
 
+    const set = input.set ?? {};
+    // A transcript body is never modified: refuse any append before validation, scrub or writes.
+    if (
+      input.append !== undefined &&
+      (isImmutableBody(data, config) || isImmutableBody(mergeProperties(data, set), config))
+    ) {
+      throw new ImmutableBodyError();
+    }
+
     // Validate the merge as the caller sent it, then scrub only the incoming values and validate
     // what will be stored.
-    assertValid(mergeProperties(data, input.set), input.path, config);
-    const scrubbed = scrubProperties(scrubber, input.set);
+    assertValid(mergeProperties(data, set), input.path, config);
+    const scrubbed =
+      input.set === undefined
+        ? { data: {}, redactions: [] as Redaction[] }
+        : scrubProperties(scrubber, input.set);
+    const added =
+      input.append === undefined
+        ? { text: "", redactions: [] as Redaction[] }
+        : scrubText(scrubber, input.append);
     const merged = mergeProperties(data, scrubbed.data);
     assertValid(merged, input.path, config);
-    const redactionsPart =
-      scrubbed.redactions.length > 0 ? { redactions: scrubbed.redactions } : {};
+    const allRedactions = combineRedactions(scrubbed.redactions, added.redactions);
+    const redactionsPart = allRedactions.length > 0 ? { redactions: allRedactions } : {};
 
-    const bytes = stringifyNote(merged, body);
-    if (propertiesUnchanged(data, scrubbed.data) || original.equals(Buffer.from(bytes))) {
+    const newBody = appendBody(body, added.text);
+    const bytes = propertiesUnchanged(data, scrubbed.data)
+      ? appendedBytes(original, stored, newBody)
+      : Buffer.from(stringifyNote(merged, newBody));
+    if (original.equals(bytes)) {
       const pending = await pushIfAhead(root, { push: git.push, sleep });
       if (pending !== undefined && !pending.pushed) {
         throw new PushPendingError(input.path, pending.commit, pending.exitCode);

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { parseNote } from "./frontmatter.js";
+import type { VaultConfig } from "../config/vault-config.js";
+import { parseNote, stringifyNote } from "./frontmatter.js";
 
 /** No regular note exists at the path. The message is fixed and names no path. */
 export class NoteNotFoundError extends Error {
@@ -62,4 +63,63 @@ export function propertiesUnchanged(
   return Object.keys(set).every(
     (key) => Object.hasOwn(data, key) && isDeepStrictEqual(data[key], set[key]),
   );
+}
+
+/** The note's type is configured `immutable_body: true`. The message is fixed and names nothing. */
+export class ImmutableBodyError extends Error {
+  constructor() {
+    super("Note body is immutable");
+    this.name = "ImmutableBodyError";
+  }
+}
+
+/**
+ * The type of a note (read under the owner's `type` property name, matched against the owner's
+ * type values) is configured `immutable_body: true`. A missing or non-string type is false.
+ */
+export function isImmutableBody(data: Record<string, unknown>, config: VaultConfig): boolean {
+  const key = config.properties.type;
+  if (!Object.hasOwn(data, key)) return false;
+  const typeValue = data[key];
+  if (typeof typeValue !== "string") return false;
+  const entry = Object.values(config.types).find((candidate) => candidate.value === typeValue);
+  return entry?.immutable_body === true;
+}
+
+/**
+ * The body after an append: the old body bytes, then exactly one blank line, then `text`
+ * unchanged. An empty `text` returns the body; an empty body returns `text`.
+ */
+export function appendBody(body: string, text: string): string {
+  if (text === "") return body;
+  if (body === "") return text;
+  if (/\r?\n\r?\n$/.test(body)) return body + text;
+  if (body.endsWith("\r\n")) return `${body}\r\n${text}`;
+  if (body.endsWith("\n")) return `${body}\n${text}`;
+  return `${body}\n\n${text}`;
+}
+
+/**
+ * The file bytes for a note whose properties did not change and whose body grew from
+ * `stored.body` to `newBody`. When the original can take the suffix as is, the original bytes
+ * (frontmatter formatting included) are kept; otherwise the note is re-assembled.
+ */
+export function appendedBytes(original: Buffer, stored: StoredNote, newBody: string): Buffer {
+  if (newBody === stored.body) return original;
+  const fenceIndex = original.length - Buffer.byteLength(stored.body) - 1;
+  if (fenceIndex >= 0 && original[fenceIndex] === 0x0a) {
+    const candidate = Buffer.concat([
+      original,
+      Buffer.from(newBody.slice(stored.body.length), "utf8"),
+    ]);
+    const reread = readStoredNote(candidate);
+    if (
+      reread !== undefined &&
+      reread.body === newBody &&
+      isDeepStrictEqual(reread.data, stored.data)
+    ) {
+      return candidate;
+    }
+  }
+  return Buffer.from(stringifyNote(stored.data, newBody));
 }
