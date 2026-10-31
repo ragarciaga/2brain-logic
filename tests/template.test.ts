@@ -41,6 +41,14 @@ describe("vault template config", () => {
     }
   });
 
+  it("gives every area a sessions README with the exact text", () => {
+    for (const area of DEFAULT_VAULT_CONFIG.areas) {
+      expect(readFileSync(join(TEMPLATE, area, "sessions", "README.md"), "utf8")).toBe(
+        `# ${area} sessions\n\nOne note per AI work session in this area.\n`,
+      );
+    }
+  });
+
   it("loads to exactly the default config", async () => {
     expect(await loadVaultConfig(TEMPLATE)).toStrictEqual(DEFAULT_VAULT_CONFIG);
   });
