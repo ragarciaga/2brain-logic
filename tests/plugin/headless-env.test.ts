@@ -67,6 +67,21 @@ describe("buildInvocation env", () => {
     expect(out.argv[out.argv.indexOf("--setting-sources") + 1]).toBe("user");
   });
 
+  it("skips an own __proto__ key", () => {
+    const env: Env = { PATH: "marker-0" };
+    Object.defineProperty(env, "__proto__", {
+      value: { TWOBRAIN_PROTO: "marker-p" },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    const out = run(env, "linux");
+    expect(Object.hasOwn(out.env, "__proto__")).toBe(false);
+    expect(Object.getPrototypeOf(out.env)).toBe(Object.prototype);
+    expect((out.env as Record<string, unknown>).TWOBRAIN_PROTO).toBeUndefined();
+    expect(out.env).toStrictEqual({ PATH: "marker-0", TWOBRAIN_CAPTURE: "1" });
+  });
+
   it("still rejects an invalid server_name without an env", () => {
     const out = buildInvocation({ ...settings, server_name: "a b" }, { A: "1" }, paths);
     expect(out).toStrictEqual({ error: "not_configured" });
@@ -113,6 +128,41 @@ describe("checkApiHelper", () => {
       expect(call(homeWith(content), {})).toBe("ok");
     },
   );
+
+  it("ignores a leading BOM", () => {
+    const dir = dirWith(`${String.fromCharCode(0xfeff)}${helper}`);
+    expect(call(root, { CLAUDE_CONFIG_DIR: dir })).toBe("api_helper_present");
+  });
+
+  it.each(STRIPPED)("flags %s set in the settings env block", (name) => {
+    const home = homeWith(JSON.stringify({ env: { [name]: "marker-1" } }));
+    expect(call(home, {})).toBe("api_helper_present");
+  });
+
+  it("flags env block case variants only on win32", () => {
+    for (const name of STRIPPED) {
+      const home = homeWith(JSON.stringify({ env: { [name.toLowerCase()]: "marker-1" } }));
+      expect(checkApiHelper({ home, env: {} }, { platform: "win32" })).toBe("api_helper_present");
+      expect(checkApiHelper({ home, env: {} }, { platform: "linux" })).toBe("ok");
+    }
+  });
+
+  it.each([
+    ['{"env":{"ANTHROPIC_API_KEY":""}}', "empty value"],
+    ['{"env":{"ANTHROPIC_API_KEY":1}}', "number value"],
+    ['{"env":{"PATH":"marker-1"}}', "unrelated key"],
+    ['{"env":"ANTHROPIC_API_KEY"}', "string env"],
+    ['{"env":["ANTHROPIC_API_KEY"]}', "array env"],
+    ['{"env":null}', "null env"],
+  ])("gives ok for env block %s (%s)", (content) => {
+    expect(call(homeWith(content), {})).toBe("ok");
+  });
+
+  it("looks up CLAUDE_CONFIG_DIR case-insensitively on win32 only", () => {
+    const env: Env = { claude_config_dir: dirWith(helper) };
+    expect(checkApiHelper({ home: root, env }, { platform: "win32" })).toBe("api_helper_present");
+    expect(checkApiHelper({ home: root, env }, { platform: "linux" })).toBe("ok");
+  });
 
   it("gives ok when the file is missing", () => {
     expect(call(root, { CLAUDE_CONFIG_DIR: dirWith(null) })).toBe("ok");
