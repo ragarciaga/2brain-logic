@@ -20,13 +20,14 @@ function defineRule(rule: RateRule): RateRule {
 }
 
 /**
- * The public endpoint rules (R7.1) with their global ceilings (design.md, Rate limiter). Past a
- * global ceiling every request on that rule gets 429 until the window ends: an attacker can block
- * new sign-ins and registrations for a window, never an existing access token.
+ * The public endpoint rules (R7.1). `register` and `signin` also have a global ceiling
+ * (design.md, Rate limiter); past it every request on that rule gets 429 until the window ends,
+ * so an attacker can block new registrations and sign-ins for a window. `token` has none: codes,
+ * tokens and secrets are 32-byte random values, and the per-key limit bounds the cost.
  */
 export const RATE_RULES = Object.freeze({
   register: defineRule({ name: "register", limit: 10, windowMs: 3_600_000, globalLimit: 30 }),
-  token: defineRule({ name: "token", limit: 60, windowMs: 60_000, globalLimit: 600 }),
+  token: defineRule({ name: "token", limit: 60, windowMs: 60_000 }),
   signin: defineRule({ name: "signin", limit: 10, windowMs: 60_000, globalLimit: 30 }),
 });
 

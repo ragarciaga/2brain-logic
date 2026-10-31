@@ -36,7 +36,7 @@ flowchart LR
 | Public env | code | `PUBLIC_BASE_URL`, `MCP_PORT`, `OWNER_PASSPHRASE_HASH`, `ALLOWED_REDIRECT_HOSTS`, `AUTH_STORE_DIR`, `TRUST_PROXY_HOPS`; errors name the variable only | src/config/env.ts | R1.2, R1.3, R3.2, R5.5, R7.2 |
 | Public app router | code | Mounts only `/mcp`, OAuth routes and `/.well-known/*`; 404 otherwise; every URL from `PUBLIC_BASE_URL` | src/mcp/app.ts | R1.1, R1.4 |
 | Startup | code | Starts the public app only when configured; one log line otherwise | src/index.ts | R1.2 |
-| Rate limiter | code | Fixed-window counters per route and client key (`rateKey`: IPv4-mapped IPv6 as IPv4, other IPv6 grouped by /64) plus a global ceiling per route (`register` 30 per hour, `token` 600 per minute, `signin` 30 per minute); `Retry-After`; client IP from socket or the configured hop | src/auth/rate-limit.ts | R7.1, R7.2, R4.5 |
+| Rate limiter | code | Fixed-window counters per route and client key (`rateKey`: IPv4-mapped IPv6 as IPv4, other IPv6 grouped by /64) plus a global ceiling on `register` (30 per hour) and `signin` (30 per minute); `Retry-After`; client IP from socket or the configured hop | src/auth/rate-limit.ts | R7.1, R7.2, R4.5 |
 | Discovery | code | RFC 9728 (both paths) and RFC 8414 documents | src/auth/oauth/metadata.ts | R2.2, R2.3 |
 | Registration | code | RFC 7591 parsing with Zod, redirect allowlist, client cap, secret generation | src/auth/oauth/register.ts | R3.1 to R3.4 |
 | Authorize and sign-in | code | Request checks, PKCE S256, resource default, sign-in page, scrypt check, attempt lockout | src/auth/oauth/authorize.ts, src/auth/owner.ts | R4.1 to R4.6 |
@@ -114,7 +114,7 @@ type ToolResult = { ok: true; [field: string]: unknown } | { ok: false; error: s
 - Tokens are opaque random 32-byte values; only SHA-256 hashes are stored; access tokens are bound to the resource URL (RFC 8707) and expire in 1 hour; refresh tokens rotate and reuse revokes the grant (R5).
 - Issuer and resource come from `PUBLIC_BASE_URL` only, so a forged `Host` cannot change advertised URLs (R1.4).
 - Client IP for rate limits never trusts the leftmost `X-Forwarded-For` (research: library B was spoofable) (R7.2).
-- Rate limits also have a global ceiling per route that counts all clients together (`register` 30 per hour, `token` 600 per minute, `signin` 30 per minute), so rotating addresses cannot multiply the per-IP limits. Past a ceiling every request on that route gets 429 until the window ends: an attacker can block new registrations and sign-ins for a window, never an existing access token (R7.1).
+- `register` and `signin` also have a global ceiling that counts all clients together (`register` 30 per hour, `signin` 30 per minute), so rotating addresses cannot multiply the per-IP limits. Past a ceiling every request on that route gets 429 until the window ends: an attacker can block new registrations and sign-ins for a window (R7.1). `token` has no global ceiling: codes, tokens and secrets are 32-byte random values, and the per-key limit of 60 per minute bounds the cost.
 - The public app has no route to the ingest API; the ingest token is never accepted on the public app (R1.1).
 - Clickjacking and caching of the sign-in page: `X-Frame-Options: DENY`, `Cache-Control: no-store`, CSRF prevented by checking `Origin` on the POST and by PKCE binding (R4.6).
 - `Origin` check on `/mcp` against DNS rebinding (R6.3).

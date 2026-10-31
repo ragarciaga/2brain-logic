@@ -70,10 +70,10 @@ afterEach(() => {
 });
 
 describe("RATE_RULES", () => {
-  it("holds the R7.1 limits and the global ceilings, each name equal to its key", () => {
+  it("holds the R7.1 limits and the register and signin global ceilings (none on token), each name equal to its key", () => {
     expect(RATE_RULES).toEqual({
       register: { name: "register", limit: 10, windowMs: 3_600_000, globalLimit: 30 },
-      token: { name: "token", limit: 60, windowMs: 60_000, globalLimit: 600 },
+      token: { name: "token", limit: 60, windowMs: 60_000 },
       signin: { name: "signin", limit: 10, windowMs: 60_000, globalLimit: 30 },
     });
   });
@@ -209,18 +209,12 @@ describe("global ceilings", () => {
     expect((await call(app, "/register", { socket: "198.51.100.200" })).status).toBe(200);
   });
 
-  it("token: several IPs reach the 600 per minute ceiling and a fresh IP is refused until the window ends", async () => {
-    let now = 0;
-    const app = limitedApp(0, () => now);
+  it("token: 10 keys at 60 requests each never refuse an eleventh key", async () => {
+    const app = limitedApp(0, () => 0);
     for (let i = 0; i < 600; i += 1) {
       const address = `198.51.100.${(i % 10) + 1}`;
-      // 10 addresses x 60 requests each: no key limit is hit, only the sum reaches 600.
       expect((await call(app, "/token", { socket: address })).status).toBe(200);
     }
-    const refused = await call(app, "/token", { socket: "198.51.100.200" });
-    expect(refused.status).toBe(429);
-    expect(refused.retryAfter).toBe("60");
-    now = 60_000;
     expect((await call(app, "/token", { socket: "198.51.100.200" })).status).toBe(200);
   });
 
