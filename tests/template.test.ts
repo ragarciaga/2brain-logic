@@ -32,6 +32,23 @@ describe("vault template config", () => {
     expect(raw).toStrictEqual(DEFAULT_VAULT_CONFIG);
   });
 
+  it("declares the session type last, in the code defaults and in the template", () => {
+    const raw = parseYamlConfig(readFileSync(join(TEMPLATE, ".2brain", "config.yaml"), "utf8"));
+    const expected = { value: "session", folder: "{area}/sessions" };
+    for (const config of [raw as typeof DEFAULT_VAULT_CONFIG, DEFAULT_VAULT_CONFIG]) {
+      expect(config.types.session).toStrictEqual(expected);
+      expect(Object.keys(config.types).at(-1)).toBe("session");
+    }
+  });
+
+  it("gives every area a sessions README with the exact text", () => {
+    for (const area of DEFAULT_VAULT_CONFIG.areas) {
+      expect(readFileSync(join(TEMPLATE, area, "sessions", "README.md"), "utf8")).toBe(
+        `# ${area} sessions\n\nOne note per AI work session in this area.\n`,
+      );
+    }
+  });
+
   it("loads to exactly the default config", async () => {
     expect(await loadVaultConfig(TEMPLATE)).toStrictEqual(DEFAULT_VAULT_CONFIG);
   });
