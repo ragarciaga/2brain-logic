@@ -193,6 +193,7 @@ describe("loadVaultConfig strictness", () => {
       "vault.archive_folder",
     ],
     ["an absolute inbox folder", "vault:\n  inbox_folder: /x\n", "vault.inbox_folder"],
+    ["a drive letter in a folder", 'vault:\n  inbox_folder: "C:x"\n', "vault.inbox_folder"],
     ["a backslash in a folder", 'vault:\n  inbox_folder: "a\\\\b"\n', "vault.inbox_folder"],
     [
       "an unknown placeholder",

@@ -3,6 +3,7 @@ import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_VAULT_CONFIG } from "../src/config/defaults.js";
 import { expandTypeFolders, loadVaultConfig } from "../src/config/vault-config.js";
+import { parseYamlConfig } from "../src/vault/frontmatter.js";
 import { NoteInput } from "../src/vault/note-schema.js";
 
 const TEMPLATE = join(import.meta.dirname, "..", "vault-template");
@@ -26,6 +27,11 @@ function templateFolders(): string[] {
 }
 
 describe("vault template config", () => {
+  it("spells out every default value, with none filled in by the schema", () => {
+    const raw = parseYamlConfig(readFileSync(join(TEMPLATE, ".2brain", "config.yaml"), "utf8"));
+    expect(raw).toStrictEqual(DEFAULT_VAULT_CONFIG);
+  });
+
   it("loads to exactly the default config", async () => {
     expect(await loadVaultConfig(TEMPLATE)).toStrictEqual(DEFAULT_VAULT_CONFIG);
   });
