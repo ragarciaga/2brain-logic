@@ -96,10 +96,25 @@ export async function push(dir: string): Promise<void> {
   await runGit(dir, ["push", "origin", "HEAD"]);
 }
 
+/** The sha HEAD points to. */
+export async function headSha(dir: string): Promise<string> {
+  return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
+/**
+ * Reset one path's index entry to HEAD; the working tree is untouched. A path that is not staged
+ * is not an error. A path tracked in HEAD never ends up as a staged deletion.
+ */
+export async function unstageFile(dir: string, relPath: string): Promise<void> {
+  await runGit(dir, ["reset", "-q", "--", relPath]);
+}
+
 export interface GitApi {
   pullRebase: typeof pullRebase;
   commitFile: typeof commitFile;
   push: typeof push;
+  headSha: typeof headSha;
+  unstageFile: typeof unstageFile;
 }
 
-export const defaultGit: GitApi = { pullRebase, commitFile, push };
+export const defaultGit: GitApi = { pullRebase, commitFile, push, headSha, unstageFile };

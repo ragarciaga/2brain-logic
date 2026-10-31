@@ -1,4 +1,5 @@
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { loadVaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
@@ -10,6 +11,7 @@ import {
   scrub,
   scrubFrontmatter,
 } from "./scrub/index.js";
+import { createSourceIndex, type SourceIndex, sourceIdKey } from "./source-index.js";
 import { validateFrontmatter } from "./validate.js";
 
 export class NoteExistsError extends Error {
@@ -83,9 +85,22 @@ const defaultScrubber: Scrubber = {
   scrubFrontmatter: (data) => scrubFrontmatter(data),
 };
 
+/** Another note already holds this `source_id`. `existingPath` is the vault path of that note. */
+export class DuplicateSourceError extends Error {
+  readonly existingPath: string;
+
+  constructor(existingPath: string) {
+    super("Another note has this source id");
+    this.name = "DuplicateSourceError";
+    this.existingPath = existingPath;
+  }
+}
+
 export interface WriteResult {
   path: string;
-  commit: string;
+  /** Null when the note was already stored with identical content (`unchanged`). */
+  commit: string | null;
+  unchanged?: true;
   /** Present only when something was redacted; sorted by rule id. */
   redactions?: Redaction[];
 }
@@ -100,6 +115,8 @@ export interface NoteWriterOptions {
   git: GitApi;
   /** Defaults to the real scrubber; tests pass a failing one. */
   scrubber?: Scrubber;
+  /** Defaults to one index per writer; tests inject small limits. */
+  sourceIndex?: SourceIndex;
 }
 
 /**
@@ -153,7 +170,11 @@ async function realpathOfDeepestAncestor(target: string): Promise<string> {
  * Create the single write path into the vault: refuse a path that matches a scrub rule
  * (`UnsafePathError`, before any git work), pull with rebase, read the vault config, validate
  * the frontmatter and path against it, scrub secrets from the frontmatter and the body, validate
- * the scrubbed frontmatter again, write a new file, commit, push. Writes are serialized because
+ * the scrubbed frontmatter again. If the target already holds a regular file with the same bytes
+ * as the scrubbed note, the result is `unchanged` (no commit, no push); other content there is
+ * `NoteExistsError`. At a free path, a `source_id` that belongs to another note is
+ * `DuplicateSourceError`. Otherwise write a new file, commit, push; if the commit fails and HEAD
+ * did not move, the file is unstaged and removed so a retry starts clean. Writes are serialized because
  * they share one working tree. The config is read again after every pull, so a change pushed from
  * another clone applies to the next write without a restart; an invalid config throws
  * `ConfigInvalidError` and an invalid note throws `InvalidFrontmatterError` or `WrongFolderError`,
@@ -167,6 +188,7 @@ export function createNoteWriter({
   author,
   git,
   scrubber = defaultScrubber,
+  sourceIndex = createSourceIndex(),
 }: NoteWriterOptions): NoteWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
@@ -205,6 +227,38 @@ export function createNoteWriter({
     // `mkdir -p` create anything outside the vault.
     const parent = dirname(target);
     if (!isInside(realRoot, await realpathOfDeepestAncestor(parent))) throw new UnsafePathError();
+
+    const bytes = stringifyNote(scrubbed.frontmatter, scrubbed.body);
+    const redactionsPart =
+      scrubbed.redactions.length > 0 ? { redactions: scrubbed.redactions } : {};
+    // The parent is inside the vault, so this never reads outside it. A final symlink is never
+    // followed (lstat), and the file is read only when its size matches.
+    let existing: Stats | undefined;
+    try {
+      existing = await lstat(target);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    }
+    if (existing !== undefined) {
+      if (!existing.isFile() || existing.size !== Buffer.byteLength(bytes)) {
+        throw new NoteExistsError();
+      }
+      if (!(await readFile(target)).equals(Buffer.from(bytes))) throw new NoteExistsError();
+      return { path: note.path, commit: null, unchanged: true, ...redactionsPart };
+    }
+
+    const head = await git.headSha(root);
+    const id = sourceIdKey(
+      Object.hasOwn(scrubbed.frontmatter, config.properties.source_id)
+        ? scrubbed.frontmatter[config.properties.source_id]
+        : undefined,
+    );
+    if (id !== undefined) {
+      const found = await sourceIndex.lookup(root, head, config.properties.source_id, id);
+      if (found !== undefined && found !== note.path) throw new DuplicateSourceError(found);
+    }
+
     try {
       await mkdir(parent, { recursive: true });
     } catch (error) {
@@ -216,13 +270,30 @@ export function createNoteWriter({
     if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
 
     try {
-      await writeFile(target, stringifyNote(scrubbed.frontmatter, scrubbed.body), { flag: "wx" });
+      await writeFile(target, bytes, { flag: "wx" });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
       throw error;
     }
 
-    const commit = await git.commitFile(root, note.path, `2brain: add ${note.path}`, author);
+    let commit: string;
+    try {
+      commit = await git.commitFile(root, note.path, `2brain: add ${note.path}`, author);
+    } catch (error) {
+      // Only when HEAD did not move: a landed commit keeps its file. Best effort, then the
+      // original error is rethrown.
+      try {
+        if ((await git.headSha(root)) === head) {
+          await git.unstageFile(root, note.path);
+          await unlink(target).catch((e: NodeJS.ErrnoException) => {
+            if (e.code !== "ENOENT") throw e;
+          });
+        }
+      } catch {
+        // swallowed on purpose
+      }
+      throw error;
+    }
     await git.push(root);
     return scrubbed.redactions.length > 0
       ? { path: note.path, commit, redactions: scrubbed.redactions }

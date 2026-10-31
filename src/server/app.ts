@@ -4,7 +4,9 @@ import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
 import { NoteInput } from "../vault/note-schema.js";
+import { SourceIndexLimitError } from "../vault/source-index.js";
 import {
+  DuplicateSourceError,
   InvalidFrontmatterError,
   NoteExistsError,
   type NoteWriter,
@@ -72,12 +74,35 @@ export function createApp({ writer, ingestToken, log = console.error }: AppOptio
       try {
         const result = await writer.write(parsed.data);
         const redactions = result.redactions;
-        if (redactions !== undefined && redactions.length > 0) {
+        const hasRedactions = redactions !== undefined && redactions.length > 0;
+        if (hasRedactions) {
           log(`redacted: ${redactions.map((r) => `${r.rule}=${r.count}`).join(", ")}`);
+        }
+        if (result.unchanged) {
+          return c.json(
+            {
+              ok: true,
+              path: result.path,
+              commit: null,
+              unchanged: true,
+              ...(hasRedactions ? { redactions } : {}),
+            },
+            200,
+          );
+        }
+        if (hasRedactions) {
           return c.json({ ok: true, path: result.path, commit: result.commit, redactions }, 201);
         }
         return c.json({ ok: true, path: result.path, commit: result.commit }, 201);
       } catch (error) {
+        if (error instanceof DuplicateSourceError) {
+          log("duplicate_source rejected");
+          return c.json({ ok: false, error: "duplicate_source", path: error.existingPath }, 409);
+        }
+        if (error instanceof SourceIndexLimitError) {
+          log("write_failed: source index limit");
+          return c.json({ ok: false, error: "write_failed" }, 500);
+        }
         if (error instanceof ScrubFailedError) {
           log("scrub_failed");
           return c.json({ ok: false, error: "scrub_failed" }, 500);

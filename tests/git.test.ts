@@ -1,7 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { commitFile, ensureClone, runGit } from "../src/git/index.js";
+import { commitFile, ensureClone, headSha, runGit, unstageFile } from "../src/git/index.js";
 import { createGitFixture, type GitFixture, git, TEST_AUTHOR } from "./helpers/git-fixture.js";
 
 let fixture: GitFixture;
@@ -30,6 +30,33 @@ describe("literal pathspecs", () => {
     expect(git(fixture.vaultDir, ["show", "--name-only", "--format=", "HEAD"])).toBe("[ab].md");
     expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("M a.md");
     expect(sha).toBe(git(fixture.vaultDir, ["rev-parse", "HEAD"]));
+  });
+
+  it("unstageFile unstages only the named new file when its name is a glob matching another", async () => {
+    writeFileSync(join(fixture.vaultDir, "c.md"), "c\n");
+    writeFileSync(join(fixture.vaultDir, "[cd].md"), "cd\n");
+    git(fixture.vaultDir, ["add", "--", "c.md", "[cd].md"]);
+    await unstageFile(fixture.vaultDir, "[cd].md");
+    expect(git(fixture.vaultDir, ["diff", "--cached", "--name-only"])).toBe("c.md");
+    expect(readFileSync(join(fixture.vaultDir, "[cd].md"), "utf8")).toBe("cd\n");
+  });
+
+  it("unstageFile on a tracked file that was deleted and re-created stages no deletion", async () => {
+    rmSync(join(fixture.vaultDir, "a.md"));
+    writeFileSync(join(fixture.vaultDir, "a.md"), "recreated\n");
+    git(fixture.vaultDir, ["add", "--", "a.md"]);
+    await unstageFile(fixture.vaultDir, "a.md");
+    expect(git(fixture.vaultDir, ["diff", "--cached", "--name-status"])).toBe("");
+    expect(git(fixture.vaultDir, ["ls-files", "--", "a.md"])).toBe("a.md");
+    expect(readFileSync(join(fixture.vaultDir, "a.md"), "utf8")).toBe("recreated\n");
+  });
+
+  it("unstageFile resolves for a path that was never staged", async () => {
+    await expect(unstageFile(fixture.vaultDir, "never.md")).resolves.toBeUndefined();
+  });
+
+  it("headSha returns the sha HEAD points to", async () => {
+    expect(await headSha(fixture.vaultDir)).toBe(git(fixture.vaultDir, ["rev-parse", "HEAD"]));
   });
 
   it("runGit keeps literal pathspecs even when the caller asks for globbing", async () => {

@@ -37,7 +37,7 @@ against it, scrubs secrets from the frontmatter and the body (each match is stor
 and never rewritten), validates the scrubbed frontmatter again, writes the file, commits as `GIT_AUTHOR_NAME <GIT_AUTHOR_EMAIL>` and pushes. Every route
 except `GET /health` needs `Authorization: Bearer <INGEST_TOKEN>`; without it the answer is 401
 `unauthorized` and nothing is written. It answers 400 for a bad body or path, 401 for a missing or
-wrong token, 409 when the path already exists (it never overwrites), 413 for a body over 1 MB, 415
+wrong token, 409 `note_exists` when the path already holds different content (it never overwrites), 409 `duplicate_source` when another note already has the same `source_id`, 413 for a body over 1 MB, 415
 unless the content type is `application/json`, 500 when git fails, 500 `scrub_failed` when the
 scrub cannot finish (nothing is written), and 503 `config_invalid` when
 the vault's `.2brain/config.yaml` is invalid (the body names only the file and the key:
@@ -46,6 +46,19 @@ the vault's `.2brain/config.yaml` is invalid (the body names only the file and t
 When the scrub redacted anything, the 201 body also carries `"redactions":[{"rule":"<id>","count":<n>}]`
 (rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line (several pairs are joined with ", " on that one line);
 without redactions the key is absent.
+
+A create is idempotent. If the path already holds a regular file whose bytes equal what this
+request would store (compared after the scrub), the answer is 200
+`{"ok":true,"path":"...","commit":null,"unchanged":true}` (with `redactions` when the scrub changed
+something), with no commit and no push. Other content at that path is 409 `note_exists`. At a free
+path, a `source_id` (the property name comes from the vault config) that another note already has
+is 409 `{"ok":false,"error":"duplicate_source","path":"<path of that note>"}` and nothing is
+written; a number and its string form count as the same id. The service finds the other note by
+reading the frontmatter of the `.md` files in the vault (not dot folders or symlinks), keeps the
+result per git HEAD, and answers 500 `write_failed` if the vault is larger than its fixed limits.
+A `source_id` that the scrub redacts becomes `[REDACTED:<rule>]`, so two different redacted ids can
+collide as `duplicate_source`. If the commit fails before HEAD moves, the new file is unstaged and
+removed so the retry starts clean.
 
 A note needs the four canonical properties (`type`, `area`, `date`, `source` by default; the vault
 config can rename them). `type` must be one of the configured type values, `area` one of the
@@ -62,8 +75,8 @@ Each write reads the vault config right after the pull, so a config change pushe
 clone applies to the next write without a restart.
 
 > **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
-> ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) and scrubs secrets on create, but a retry of
-> the same request is not idempotent yet and merge conflicts and push failures are not recovered
+> ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) and scrubs secrets on create and a retry of
+> the same request is idempotent, but merge conflicts and push failures are not recovered
 > yet. Until then, use it only with a throwaway vault.
 
 SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyChecking=no`.
