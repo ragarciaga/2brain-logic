@@ -107,7 +107,12 @@ docker compose up --build
 The service joins the external network named by `N8N_NETWORK` (default `n8n`) and publishes no
 ports, so only containers on that network can reach it. The memory limit is 512 MB. Compose
 overrides `VAULT_DIR` to `/data/vault` (a named volume) and `HOST` to `0.0.0.0` inside the
-container. The image includes git and ripgrep.
+container. The image includes git and ripgrep, and the default vault template, so
+`node dist/cli.js init-vault <dir>` works inside the container.
+
+Compose runs a healthcheck every 30 seconds: `node` inside the container sends `GET /health` to
+`127.0.0.1` on `PORT` (default 3000), with no token. The container shows as `unhealthy` after
+three failed checks, once a 15 second start period has passed.
 
 ## Develop
 
