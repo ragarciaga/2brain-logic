@@ -201,6 +201,14 @@ describe("overlap, order and boundaries (D2, D6)", () => {
     expect(scrub(text).text).toBe(text);
   });
 
+  it("does not start an IBAN in the middle of a word", () => {
+    const glued = join("AB", "12", "DE89", "3704", "0044", "0532", "0130", "00");
+    // Only the IBAN rule runs: the card rule would redact the digit tail of the glued word.
+    const result = scrub(`acct ${glued} end`, [ruleById("iban")]);
+    expect(result.text).toBe(`acct ${glued} end`);
+    expect(result.hits.size).toBe(0);
+  });
+
   it("applies a custom rule list", () => {
     const only = scrub(tokenOf("aws_access_key_id"), [ruleById("github_token")]);
     expect(only.hits.size).toBe(0);
@@ -291,11 +299,13 @@ describe("card windows (D6)", () => {
   });
 
   it("starts the next span at a window that begins exactly where the previous one ends", () => {
-    const sixteen = join("4111", "1111", "1111", "1111");
-    const other = join("5555", "5555", "5555", "4444");
-    const result = scrub(`${sixteen}${other}`, [cardRule]);
-    expect(result.hits.get("card_number")).toBe(cardOracle(`${sixteen}${other}`).count);
-    expect(result.text).not.toMatch(/\d/);
+    // 27 contiguous digits: the first span is [0,14) and no Luhn-valid window starts inside it,
+    // so the second span starts at offset 14, exactly where the first one ends.
+    const input = join("4262", "2844", "4493", "4771", "3228", "6329", "523");
+    expect(cardOracle(input).count).toBe(2);
+    const result = scrub(input, [cardRule]);
+    expect(result.text).toBe(`${MARK("card_number")}${MARK("card_number")}`);
+    expect(result.hits.get("card_number")).toBe(2);
   });
 });
 
@@ -308,6 +318,44 @@ describe("labeled values", () => {
     const result = scrub(input);
     expect(result.text).toBe(`${join("pass", 'word="')}${MARK("labeled_secret")}\nnext line\n`);
   });
+
+  const label = join("pass", "word");
+
+  it("redacts an unquoted value of exactly 6 characters and keeps one of 5", () => {
+    const six = scrub(`${label}: ${join("abc", "def")}`);
+    expect(six.text).toBe(`${label}: ${MARK("labeled_secret")}`);
+    expect([...six.hits]).toEqual([["labeled_secret", 1]]);
+    const five = `${label}: ${join("abc", "de")}`;
+    const kept = scrub(five);
+    expect(kept.text).toBe(five);
+    expect(kept.hits.size).toBe(0);
+  });
+
+  it.each(['"', "'", "`"])(
+    "redacts a %s quoted value of exactly 6 characters and keeps one of 5",
+    (quote) => {
+      const six = scrub(`${label}: ${quote}${join("abc", "def")}${quote} end`);
+      expect(six.text).toBe(`${label}: ${quote}${MARK("labeled_secret")}${quote} end`);
+      expect([...six.hits]).toEqual([["labeled_secret", 1]]);
+      const five = `${label}: ${quote}${join("abc", "de")}${quote} end`;
+      const kept = scrub(five);
+      expect(kept.text).toBe(five);
+      expect(kept.hits.size).toBe(0);
+    },
+  );
+
+  it.each(['"', "'", "`"])(
+    "redacts an unterminated %s value of exactly 6 characters and keeps one of 5",
+    (quote) => {
+      const six = scrub(`${label}=${quote}${join("abc", "def")}\nnext`);
+      expect(six.text).toBe(`${label}=${quote}${MARK("labeled_secret")}\nnext`);
+      expect([...six.hits]).toEqual([["labeled_secret", 1]]);
+      const five = `${label}=${quote}${join("abc", "de")}\nnext`;
+      const kept = scrub(five);
+      expect(kept.text).toBe(five);
+      expect(kept.hits.size).toBe(0);
+    },
+  );
 
   it("keeps the quotes around a redacted quoted value", () => {
     const input = `${join("pass", "word")}: "${join("hunter", "2xyz")}" and more`;
@@ -429,6 +477,18 @@ describe("scrubFrontmatter (R4.1)", () => {
     const result = scrubFrontmatter({ [key]: mixed });
     expect(result.data[key]).toBe(MARK("labeled_secret"));
     expect([...result.hits]).toEqual([["labeled_secret", 1]]);
+  });
+
+  it("redacts a whole labeled value from exactly 6 characters in a run, not from 5", () => {
+    const key = join("pass", "word");
+    const six = scrubFrontmatter({ [key]: join("abc", "def") });
+    expect(six.data[key]).toBe(MARK("labeled_secret"));
+    expect([...six.hits]).toEqual([["labeled_secret", 1]]);
+    for (const short of [join("abc", "de"), join("ab", " ", "cd", " e"), "a b c d e f g"]) {
+      const kept = scrubFrontmatter({ [key]: short });
+      expect(kept.data[key]).toBe(short);
+      expect(kept.hits.size).toBe(0);
+    }
   });
 
   it("keeps a labeled value that only carries a token the rules already redacted", () => {

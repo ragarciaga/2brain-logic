@@ -67,9 +67,11 @@ export function luhnValid(value: string): boolean {
 }
 
 /**
- * IBAN length per country. Transcribed from the public SWIFT IBAN Registry (ISO 13616) by
- * hand: 89 countries, which the test pins. A country missing here is a miss, never a crash; add
- * it with its registry example in tests/fixtures/scrub/iban-examples.json.
+ * IBAN length per country. A hand transcription of the SWIFT IBAN Registry (ISO 13616), not yet
+ * checked against a named registry release: the check is tracked in
+ * https://github.com/ragarciaga/2brain-logic/issues/41. The test pins the table's own count (89
+ * countries). A country missing here is a miss, never a crash; add it with its registry example
+ * in tests/fixtures/scrub/iban-examples.json.
  */
 export const IBAN_LENGTHS: Readonly<Record<string, number>> = Object.freeze({
   AD: 24,
