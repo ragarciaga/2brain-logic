@@ -1,19 +1,25 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { GitError } from "../git/index.js";
 import { NoteInput } from "../vault/note-schema.js";
 import { NoteExistsError, type NoteWriter, UnsafePathError } from "../vault/write-note.js";
 
 export interface AppOptions {
   writer: NoteWriter;
+  /** Secret every request except GET /health must present as `Authorization: Bearer <token>`. */
+  ingestToken: string;
   /** Where failures are logged. Defaults to console.error. */
   log?: (message: string) => void;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
-export function createApp({ writer, log = console.error }: AppOptions): Hono {
+export function createApp({ writer, ingestToken, log = console.error }: AppOptions): Hono {
   const app = new Hono();
+
+  // First registration: nothing below runs for a request that fails the token check.
+  app.use("*", ingestTokenAuth(ingestToken));
 
   app.get("/health", (c) => c.json({ ok: true }));
 
