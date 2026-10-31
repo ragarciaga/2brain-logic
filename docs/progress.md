@@ -3,7 +3,7 @@
 Updated: 2026-10-31
 
 ## Current objective
-Write the F1 spec (vault core) with `/rb-spec`.
+Build F1 vault core: docs/specs/01-vault-core/, tasks T1 to T17 (issues #12 to #28).
 
 ## Current state
 - Works: walking skeleton merged (PR #10, issue #2): `GET /health`, `POST /notes` writing and pushing to the vault repo, config and env loaders, mock LLM, 3 evals, Docker image and CI. Baseline green at 468942c (typecheck, lint, 99 tests, build).
@@ -20,10 +20,13 @@ Write the F1 spec (vault core) with `/rb-spec`.
 - 2026-10-31: MCP behind OAuth 2.1, see docs/adr/0007-mcp-auth.md
 - 2026-10-31: secret scrub and no deletions, see docs/adr/0008-vault-safety.md
 - 2026-10-31: SessionEnd hook in the plugin, see docs/adr/0009-session-end-hook.md
+- 2026-10-31: ingest bearer token, see docs/adr/0010-ingest-bearer-token.md
+- 2026-10-31: idempotent create, patch and archive, see docs/adr/0011-note-write-operations.md
+- 2026-10-31: vault config maps canonical names to the owner's, see docs/adr/0012-vault-config-mapping.md
 - 2026-10-31: skeleton bodies stored verbatim, 409 on an existing path, HOST defaults to 127.0.0.1, see PR #10
 
 ## Next steps
-1. `/rb-spec F1 vault core` (config schema, vault template, validated frontmatter, secret scrub, dedupe, archive, conflicts; decide #4).
+1. `/rb-build docs/specs/01-vault-core/` (ready first: T1, T2, T5).
 2. Optional: create the nightly routine (`Run /rb-cycle. [rockbuilt:unattended]`), now that `npm ci` works.
 
 ## Timing
