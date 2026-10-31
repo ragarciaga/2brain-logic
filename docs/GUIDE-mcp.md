@@ -25,9 +25,10 @@ Obsidian (move it to your archive folder).
 Choose a long passphrase: at least 12 characters. The service never stores the passphrase, only a
 scrypt hash of it.
 
-From a clone of this repository (build first):
+From a clone of this repository (install and build first):
 
 ```bash
+npm ci
 npm run build
 read -rs pass && printf '%s' "$pass" | node dist/cli.js hash-passphrase; unset pass
 ```
@@ -36,10 +37,10 @@ The command refuses to read from a terminal, so the passphrase has to arrive on 
 (the `read -s` line above does not echo what you type). The hash is the only line printed on
 standard output; errors go to standard error and never contain the passphrase.
 
-From the container, with the passphrase piped in:
+From the container, with the passphrase piped in the same way:
 
 ```bash
-printf '%s' 'your passphrase here' | docker compose run --rm -T brain node dist/cli.js hash-passphrase
+read -rs pass && printf '%s' "$pass" | docker compose run --rm -T brain node dist/cli.js hash-passphrase; unset pass
 ```
 
 Put the result in your private `.env`, wrapped in single quotes because it contains `$`:
@@ -62,9 +63,12 @@ All of these are listed in `.env.example`.
 - `AUTH_STORE_DIR`: where the OAuth state lives. Default `/data/auth`. It must not be inside
   `VAULT_DIR`.
 - `TRUST_PROXY_HOPS`: how many reverse proxies sit in front of the service (see step 3).
-- `ALLOWED_REDIRECT_HOSTS`: optional. The hosts an OAuth client may redirect back to. Empty means
-  `claude.ai`, `claude.com` and `chatgpt.com`. A client that redirects somewhere else (for
-  example a local app) needs its host added here.
+- `ALLOWED_REDIRECT_HOSTS`: optional. The https hosts an OAuth client may redirect back to. Empty or
+  unset means `claude.ai,claude.com,chatgpt.com`. Setting it replaces that list, so when you add a
+  host keep the three defaults in it, for example
+  `claude.ai,claude.com,chatgpt.com,app.example.com`. Redirects over http to the loopback hosts
+  `127.0.0.1`, `localhost` and `[::1]` (any port, for local apps) are always allowed and do not
+  need to be listed.
 
 If a variable is wrong, the service exits with code 1 and a message that names the variable, never
 its value. When it starts, the log shows `2brain mcp listening on ...`.
@@ -91,8 +95,9 @@ limit. With no proxy in front (clients connect directly), leave it at `0`.
 ## 4. Add the endpoint in a client
 
 Always paste the full endpoint, `<PUBLIC_BASE_URL>/mcp` (for example
-`https://brain.example.com/mcp`), never the bare origin. With the bare origin the sign-in fails
-with `invalid_target`.
+`https://brain.example.com/mcp`), never the bare origin. The bare origin does not work: the client
+fails to connect (the service answers 404 there), or, if it starts a sign-in with the origin as the
+resource, it gets `invalid_target`.
 
 The menu names below can change; check the client's current docs if a label does not match.
 
@@ -137,18 +142,18 @@ The sign-in page protects your passphrase:
 An access token lasts 1 hour and a refresh token 30 days; clients renew them by themselves. The
 state is stored in `auth.json` under `AUTH_STORE_DIR`. With Docker Compose that is the separate
 `auth` volume, so it survives restarts and never enters the vault repository. Back it up (find it
-with `docker volume ls`). If you lose it, clients are disconnected and you sign in again; the vault
-is not touched. Never bind mount a vault subfolder at `AUTH_STORE_DIR`.
+with `docker volume ls`). If you lose it, clients are disconnected and must register again, so you may need to remove and
+re-add the connector in each client and sign in; the vault is not touched. Never bind mount a vault subfolder at `AUTH_STORE_DIR`.
 
 ## Troubleshooting
 
-- `invalid_target`: the client used the origin, or a different URL, instead of
-  `<PUBLIC_BASE_URL>/mcp`. Re-add the connector with the exact endpoint.
+- `invalid_target`: the client asked for a resource other than `<PUBLIC_BASE_URL>/mcp` (for
+  example the bare origin). A client pointed at the origin usually just fails to connect with a 404. Re-add the connector with the exact endpoint.
 - 401 before the sign-in page: normal. The endpoint answers 401 until the client has a token, and
   that starts the sign-in.
 - 429 on sign-in: a lockout or a rate limit from step 5. Wait for the time in `Retry-After`.
 - The service exits at startup naming `auth.json`: the file is damaged or not a regular file.
-  Restore it from your backup, or remove it to start with no clients (they sign in again).
+  Restore it from your backup, or remove it to start with no clients (clients must register again).
 - Two edits of the same note collided: the service keeps both. The other version stays at its path
   and yours is saved next to it as `<name> (conflict YYYY-MM-DD).md`. The service log shows
   `conflicts_kept: <n>`. Alerts beyond the log come in a later version; compare the two files in
