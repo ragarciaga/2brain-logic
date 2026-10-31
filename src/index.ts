@@ -19,7 +19,7 @@ async function main(): Promise<void> {
     console.error(configInvalidLogLine(error));
   }
   // The one auth store of this process, opened before any port binds so a bad `auth.json` or a
-  // bad AUTH_STORE_DIR exits 1 with nothing listening. The public app takes this handle (T6);
+  // bad AUTH_STORE_DIR exits 1 with nothing listening. The public app takes this handle;
   // nothing else opens the store.
   const authStore =
     env.publicApp === undefined
@@ -38,9 +38,17 @@ async function main(): Promise<void> {
     return;
   }
   // Log the port only: `env.publicApp` carries OWNER_PASSPHRASE_HASH.
-  const { PUBLIC_BASE_URL, MCP_PORT } = env.publicApp;
-  console.log(`auth store open: ${authStore?.clientCount() ?? 0} clients`);
-  const { app: publicApp } = createPublicApp({ baseUrl: PUBLIC_BASE_URL });
+  const { PUBLIC_BASE_URL, MCP_PORT, ALLOWED_REDIRECT_HOSTS, TRUST_PROXY_HOPS } = env.publicApp;
+  if (authStore === undefined) throw new Error("the auth store is not open");
+  console.log(`auth store open: ${authStore.clientCount()} clients`);
+  const { app: publicApp } = createPublicApp({
+    baseUrl: PUBLIC_BASE_URL,
+    auth: {
+      store: authStore,
+      allowedRedirectHosts: ALLOWED_REDIRECT_HOSTS,
+      trustProxyHops: TRUST_PROXY_HOPS,
+    },
+  });
   await startServer(publicApp, { host: env.HOST, port: MCP_PORT });
   console.log(`2brain mcp listening on ${env.HOST}:${MCP_PORT}`);
 }

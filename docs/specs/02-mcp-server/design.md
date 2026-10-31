@@ -38,7 +38,7 @@ flowchart LR
 | Startup | code | Starts the public app only when configured; one log line otherwise | src/index.ts | R1.2 |
 | Rate limiter | code | Fixed-window counters per route and client key (`rateKey`: IPv4-mapped IPv6 as IPv4, other IPv6 grouped by /64) plus a global ceiling on `register` (30 per hour) and `signin` (30 per minute); `Retry-After`; client IP from socket or the configured hop | src/auth/rate-limit.ts | R7.1, R7.2, R4.5 |
 | Discovery | code | RFC 9728 (both paths) and RFC 8414 documents | src/auth/oauth/metadata.ts | R2.2, R2.3 |
-| Registration | code | RFC 7591 parsing with Zod, redirect allowlist, client cap, secret generation | src/auth/oauth/register.ts | R3.1 to R3.4 |
+| Registration | code | RFC 7591 parsing with Zod, redirect allowlist, client cap (evicts the oldest grantless client older than 24 h), secret generation | src/auth/oauth/register.ts | R3.1 to R3.4 |
 | Authorize and sign-in | code | Request checks, PKCE S256, resource default, sign-in page, scrypt check, attempt lockout | src/auth/oauth/authorize.ts, src/auth/owner.ts | R4.1 to R4.6 |
 | Token and revoke | code | Code exchange, refresh rotation with grant revocation, RFC 7009 revoke, client auth (`none`, post, basic) | src/auth/oauth/token.ts | R5.1 to R5.4 |
 | Auth store | code | Clients and grants in one JSON file, atomic write (temp file then rename), SHA-256 hashes only, expiry cleanup | src/auth/oauth/store.ts | R5.5, R5.6 |
@@ -111,6 +111,7 @@ type ToolResult = { ok: true; [field: string]: unknown } | { ok: false; error: s
 ## Security considerations
 - Only one person can authorize: the owner passphrase, scrypt (N=2^15, r=8, p=1, random 16-byte salt), compared with `timingSafeEqual`; 5 wrong attempts per IP in 15 minutes locks that IP (R4.4, R4.5).
 - Open registration cannot become a phishing path: redirect hosts are allowlisted at registration and matched exactly at authorize; the sign-in page shows the redirect host (R3.2, R4.1, R4.2).
+- Clients never expire, so a few addresses could fill all 50 slots for good. At the cap, registration removes the oldest client that has no grant (live or revoked) and is more than 24 hours old, in the same write that stores the new one; if none qualifies it answers 400 (R3.4). An evicted client never had a grant, so no session is lost.
 - Tokens are opaque random 32-byte values; only SHA-256 hashes are stored; access tokens are bound to the resource URL (RFC 8707) and expire in 1 hour; refresh tokens rotate and reuse revokes the grant (R5).
 - Issuer and resource come from `PUBLIC_BASE_URL` only, so a forged `Host` cannot change advertised URLs (R1.4).
 - Client IP for rate limits never trusts the leftmost `X-Forwarded-For` (research: library B was spoofable) (R7.2).

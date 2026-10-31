@@ -8,8 +8,8 @@ export const CLIENT_AUTH_METHODS = Object.freeze([
   "client_secret_basic",
 ] as const);
 
-const RESPONSE_TYPES = Object.freeze(["code"] as const);
-const GRANT_TYPES = Object.freeze(["authorization_code", "refresh_token"] as const);
+export const RESPONSE_TYPES = Object.freeze(["code"] as const);
+export const GRANT_TYPES = Object.freeze(["authorization_code", "refresh_token"] as const);
 const CODE_CHALLENGE_METHODS = Object.freeze(["S256"] as const);
 const BEARER_METHODS = Object.freeze(["header"] as const);
 
