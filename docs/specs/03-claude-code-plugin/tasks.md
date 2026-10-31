@@ -64,6 +64,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 
 ### Decision log
 - Round 1: the shared scanner lives in tests/plugin/helpers/plugin-scan.ts (T4 proposed tests/plugin/owner-scan.ts and T19 tests/plugin/helpers/owner-data.ts for the same thing; T3's own reviewer gave the concrete rules, so its path wins and T4 and T19 import it). Tier B: tsconfig.json is not a floor path; the package.json lint change stays in T4.
+- Implementation: a type error planted in a scratch copy of settings.mjs (`/** @type {number} */ ("x")`) made `npm run typecheck` fail with TS2352; removed afterwards. D2 env key casing from design.md, re-checked in T21.
 
 ## T4: Add the marketplace file and lint the plugin scripts
 - Purpose: a third party can add this repository as a marketplace and install `2brain`, and the plugin scripts and marketplace file are linted like the rest of the code

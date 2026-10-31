@@ -10,7 +10,9 @@
     "noEmit": true,
     "rootDir": ".",
     "isolatedModules": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "allowJs": true,
+    "checkJs": true
   },
-  "include": ["src", "tests", "evals", "*.config.ts"]
+  "include": ["src", "tests", "evals", "plugin", "*.config.ts"]
 }
