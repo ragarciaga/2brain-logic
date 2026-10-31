@@ -188,7 +188,10 @@ describe("compose healthcheck definition", () => {
 describe("healthcheck script behavior", () => {
   it("exits 0 against the real app listening on 0.0.0.0", async () => {
     const app = createApp({
-      writer: { write: async () => ({ path: "x.md", commit: "abc" }) },
+      writer: {
+        write: async () => ({ path: "x.md", commit: "abc" }),
+        patch: async () => ({ path: "x.md", commit: "abc" }),
+      },
       ingestToken: "fictional-compose-token-0123456789-abcdefghij",
     });
     server = await startServer(app, { host: "0.0.0.0", port: 0 });

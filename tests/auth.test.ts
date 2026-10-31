@@ -55,7 +55,10 @@ describe("ingestTokenAuth", () => {
 });
 
 function setup() {
-  const writer = { write: vi.fn(async () => ({ path: "x.md", commit: "abc" })) };
+  const writer = {
+    write: vi.fn(async () => ({ path: "x.md", commit: "abc" })),
+    patch: vi.fn(async () => ({ path: "x.md", commit: "abc" })),
+  };
   const app = createApp({ writer, ingestToken: TOKEN, log: () => undefined });
   return { app, writer };
 }

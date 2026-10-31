@@ -117,6 +117,14 @@ describe("buildSourceIndex", () => {
     },
   );
 
+  it("indexes an unquoted timestamp-shaped id under the text as written", async () => {
+    put("a.md", withId("2026-10-31"));
+    put("b.md", withId("2026-10-31T10:00:00Z"));
+    const index = await buildSourceIndex(root, "source_id");
+    expect(index.get("2026-10-31")).toBe("a.md");
+    expect(index.get("2026-10-31T10:00:00Z")).toBe("b.md");
+  });
+
   it("indexes a numeric id under its string form", async () => {
     put("n.md", "---\nsource_id: 42\n---\n");
     expect((await buildSourceIndex(root, "source_id")).get("42")).toBe("n.md");

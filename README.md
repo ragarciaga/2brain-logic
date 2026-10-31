@@ -2,7 +2,7 @@
 
 A self-feeding second brain. Meetings, emails, ideas and AI work sessions land as Markdown notes
 in an Obsidian vault stored in Git. This repository is the service that writes them: today a
-walking skeleton with one thin slice (`GET /health` and `POST /notes`) from HTTP to a pushed commit.
+walking skeleton with one thin slice (`GET /health`, `POST /notes` and `PATCH /notes`) from HTTP to a pushed commit.
 
 Product context: [docs/brief.md](docs/brief.md). Decisions: [docs/adr/](docs/adr/).
 
@@ -43,6 +43,22 @@ unless the content type is `application/json`, 500 when git fails, 502 `push_pen
 scrub cannot finish (nothing is written), and 503 `config_invalid` when
 the vault's `.2brain/config.yaml` is invalid (the body names only the file and the key:
 `{"ok":false,"error":"config_invalid","file":".2brain/config.yaml","keyPath":"..."}`).
+
+`PATCH /notes` sets properties of an existing note: `{"path":"inbox/hello.md","set":{"title":"New"}}`.
+It runs through the same queue, pull, config reload, validation, scrub and retrying push as a
+create. The `set` keys replace the same top-level keys of the frontmatter (a nested object replaces
+the whole value, `null` sets null, nothing is removed) and the other keys are kept; the result is
+validated like a create (400 `invalid_frontmatter`, 400 `wrong_folder`). The body is kept byte for
+byte. Only the incoming `set` values are scrubbed (stored text is never rewritten), and the 200 body
+carries `redactions` as for a create. A change rewrites the frontmatter block (comments and quoting
+are lost; unquoted dates such as `2026-10-31` stay text) and commits `2brain: update <path>`; the
+answer is 200 `{"ok":true,"path":"...","commit":"<sha>"}`. If every value in `set` already equals the
+stored one, the file is not touched and the answer is 200 `{"ok":true,"path":"...","commit":null,"unchanged":true}`
+(pushing only when the branch is ahead). A missing path, or a directory there, is 404 `note_not_found`; a
+symlink, or a parent directory that leaves the vault, is 400 `unsafe_path`; a stored note whose
+frontmatter cannot be read is 400 `invalid_frontmatter` with empty lists; giving `source_id` the
+value of another note is 409 `duplicate_source`. A body with anything but `path` and `set` (`append`
+included) is 400 `invalid_body`. The other statuses are those of `POST /notes`.
 
 When the scrub redacted anything, the 201 body also carries `"redactions":[{"rule":"<id>","count":<n>}]`
 (rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line (several pairs are joined with ", " on that one line);

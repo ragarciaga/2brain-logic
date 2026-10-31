@@ -24,7 +24,10 @@ afterEach(async () => {
 });
 
 const app = createApp({
-  writer: { write: async () => ({ path: "x.md", commit: "abc" }) },
+  writer: {
+    write: async () => ({ path: "x.md", commit: "abc" }),
+    patch: async () => ({ path: "x.md", commit: "abc" }),
+  },
   ingestToken: TOKEN,
 });
 

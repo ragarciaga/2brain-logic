@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
 import { createApp } from "../src/server/app.js";
-import type { NoteInput } from "../src/vault/note-schema.js";
+import type { NoteInput, NotePatch } from "../src/vault/note-schema.js";
+import { NoteNotFoundError } from "../src/vault/operations.js";
 import { SourceIndexLimitError } from "../src/vault/source-index.js";
 import {
   DuplicateSourceError,
@@ -18,9 +19,10 @@ import {
 const TOKEN = "fictional-app-token-0123456789-abcdefghijk";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
 
-function setup(write?: NoteWriter["write"]) {
+function setup(write?: NoteWriter["write"], patch?: NoteWriter["patch"]) {
   const writer = {
     write: vi.fn(write ?? (async (note: NoteInput) => ({ path: note.path, commit: "abc123" }))),
+    patch: vi.fn(patch ?? (async (input: NotePatch) => ({ path: input.path, commit: "def456" }))),
   };
   const logs: string[] = [];
   const app = createApp({ writer, ingestToken: TOKEN, log: (message) => logs.push(message) });
@@ -466,5 +468,193 @@ describe("POST /notes", () => {
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain("SECRETMARKER");
     expect(logs.join("\n")).not.toContain("SECRETMARKER");
+  });
+});
+
+const validPatch = { path: "Inbox/idea.md", set: { status: "done" } };
+
+function patchRequest(
+  app: ReturnType<typeof setup>["app"],
+  body: string,
+  headers?: Record<string, string>,
+) {
+  return app.request("/notes", {
+    method: "PATCH",
+    body,
+    headers: { ...AUTH, ...(headers ?? { "content-type": "application/json" }) },
+  });
+}
+
+describe("PATCH /notes", () => {
+  it("returns 200 with path and commit and passes the parsed input to patch", async () => {
+    const { app, writer } = setup();
+    const response = await patchRequest(app, JSON.stringify(validPatch));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, path: "Inbox/idea.md", commit: "def456" });
+    expect(writer.patch).toHaveBeenCalledWith(validPatch);
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 with unchanged: true and a null commit", async () => {
+    const { app } = setup(undefined, async (input) => ({
+      path: input.path,
+      commit: null,
+      unchanged: true,
+    }));
+    const response = await patchRequest(app, JSON.stringify(validPatch));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      path: "Inbox/idea.md",
+      commit: null,
+      unchanged: true,
+    });
+  });
+
+  it("passes redactions through with status 200 and logs rule and count only", async () => {
+    const { app, logs } = setup(undefined, async (input) => ({
+      path: input.path,
+      commit: "def456",
+      redactions: [{ rule: "github_token", count: 2 }],
+    }));
+    const response = await patchRequest(app, JSON.stringify(validPatch));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      path: "Inbox/idea.md",
+      commit: "def456",
+      redactions: [{ rule: "github_token", count: 2 }],
+    });
+    expect(logs).toEqual(["redacted: github_token=2"]);
+  });
+
+  const failures: Array<[string, Error, number, Record<string, unknown>]> = [
+    ["note_not_found", new NoteNotFoundError(), 404, { error: "note_not_found" }],
+    [
+      "push_pending",
+      new PushPendingError("Inbox/idea.md", "c0ffee", 128),
+      502,
+      { error: "push_pending", path: "Inbox/idea.md", commit: "c0ffee" },
+    ],
+    [
+      "config_invalid",
+      new ConfigInvalidError(CONFIG_FILE, "types", "x"),
+      503,
+      { error: "config_invalid", file: CONFIG_FILE, keyPath: "types" },
+    ],
+    ["scrub_failed", new ScrubFailedError(), 500, { error: "scrub_failed" }],
+    ["unsafe_path", new UnsafePathError(), 400, { error: "unsafe_path" }],
+    [
+      "invalid_frontmatter",
+      new InvalidFrontmatterError(["title"], ["date"]),
+      400,
+      { error: "invalid_frontmatter", missing: ["title"], invalid: ["date"] },
+    ],
+    [
+      "wrong_folder",
+      new WrongFolderError("people"),
+      400,
+      { error: "wrong_folder", expected: "people" },
+    ],
+    [
+      "duplicate_source",
+      new DuplicateSourceError("inbox/other.md"),
+      409,
+      { error: "duplicate_source", path: "inbox/other.md" },
+    ],
+    ["write_failed", new GitError("commit", 1), 500, { error: "write_failed" }],
+  ];
+
+  it.each(failures)(
+    "maps %s from patch to its status and body",
+    async (_name, error, status, body) => {
+      const { app } = setup(undefined, async () => {
+        throw error;
+      });
+      const response = await patchRequest(app, JSON.stringify(validPatch));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ ok: false, ...body });
+    },
+  );
+
+  it("logs only the code for note_not_found", async () => {
+    const { app, logs } = setup(undefined, async () => {
+      throw new NoteNotFoundError();
+    });
+    await patchRequest(app, JSON.stringify(validPatch));
+    expect(logs).toEqual(["note_not_found"]);
+  });
+
+  const invalid: Array<[string, string]> = [
+    ["append", JSON.stringify({ ...validPatch, append: "more" })],
+    ["a missing set", JSON.stringify({ path: "a.md" })],
+    ["an empty set", JSON.stringify({ path: "a.md", set: {} })],
+    ["a set of only __proto__", '{"path":"a.md","set":{"__proto__":{}}}'],
+    ["a set that is an array", JSON.stringify({ path: "a.md", set: ["x"] })],
+    ["a leading ..", JSON.stringify({ path: "../x.md", set: { a: 1 } })],
+    ["a backslash", JSON.stringify({ path: "a\\b.md", set: { a: 1 } })],
+    ["a leading colon", JSON.stringify({ path: ":x.md", set: { a: 1 } })],
+    ["the .2brain folder", JSON.stringify({ path: ".2brain/x.md", set: { a: 1 } })],
+    ["a frontmatter key from the create shape", JSON.stringify({ ...validPatch, frontmatter: {} })],
+  ];
+
+  it.each(invalid)("returns 400 invalid_body and never calls patch for %s", async (_name, raw) => {
+    const { app, writer } = setup();
+    const response = await patchRequest(app, raw);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ ok: false, error: "invalid_body" });
+    expect(writer.patch).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 invalid_json for text that is not JSON", async () => {
+    const { app, writer } = setup();
+    const response = await patchRequest(app, "nope");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ ok: false, error: "invalid_json" });
+    expect(writer.patch).not.toHaveBeenCalled();
+  });
+
+  it("returns 415 for text/plain", async () => {
+    const { app, writer } = setup();
+    const response = await patchRequest(app, JSON.stringify(validPatch), {
+      "content-type": "text/plain",
+    });
+    expect(response.status).toBe(415);
+    expect(writer.patch).not.toHaveBeenCalled();
+  });
+
+  it("returns 415 when the request has no content-type header", async () => {
+    const { app, writer } = setup();
+    const request = new Request("http://localhost/notes", {
+      method: "PATCH",
+      body: new TextEncoder().encode(JSON.stringify(validPatch)),
+      headers: AUTH,
+    });
+    request.headers.delete("content-type");
+    expect(request.headers.get("content-type")).toBeNull();
+    const response = await app.request(request);
+    expect(response.status).toBe(415);
+    expect(writer.patch).not.toHaveBeenCalled();
+  });
+
+  it("returns 413 for a body over 1 MiB", async () => {
+    const { app, writer } = setup();
+    const response = await patchRequest(
+      app,
+      JSON.stringify({ path: "a.md", set: { big: "x".repeat(1024 * 1024) } }),
+    );
+    expect(response.status).toBe(413);
+    expect(writer.patch).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 without a token and never calls patch", async () => {
+    const { app, writer } = setup();
+    const response = await app.request("/notes", {
+      method: "PATCH",
+      body: JSON.stringify(validPatch),
+      headers: { "content-type": "application/json" },
+    });
+    expect(response.status).toBe(401);
+    expect(writer.patch).not.toHaveBeenCalled();
   });
 });

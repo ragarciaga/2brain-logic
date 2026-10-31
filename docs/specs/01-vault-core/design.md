@@ -32,13 +32,13 @@ flowchart LR
 | Bearer token check | code | Constant-time compare of `Authorization: Bearer`, skip `/health`, never log the value | src/auth/ingest-token.ts | R1.1, R1.2, R1.4 |
 | Env loader | code | `INGEST_TOKEN` required, at least 32 characters, errors name the variable only | src/config/env.ts | R1.3 |
 | Request schema and path rules | code | Zod bodies for the three operations; path rules extended with leading `:` and Windows-unsafe names | src/vault/note-schema.ts | R8.5, R6, R7 |
-| Write queue | code | Existing promise-chain mutex, now wrapping every operation | src/vault/vault.ts | R5, R6, R7, R8 |
+| Write queue | code | Existing promise-chain mutex, now wrapping every operation | src/vault/write-note.ts | R5, R6, R7, R8 |
 | Pull with conflict handler | code | `pull --rebase`; on failure abort, rebuild local changes on top of the remote, conflict copies, commit | src/git/sync.ts | R8.1, R8.2 |
 | Vault config | code | Strict Zod schema, defaults, mapping of canonical names, re-read after each pull | src/config/vault-config.ts, src/config/defaults.ts | R2.1 to R2.4, R9.1 |
 | Frontmatter validator | code | Required properties, allowed type, area and date, type folder | src/vault/validate.ts | R3.1 to R3.4, R6.1 |
 | Secret scrubber | code | Ordered rule list, replacement, counts | src/vault/scrub/rules.ts, src/vault/scrub/index.ts | R4.1 to R4.4 |
 | Source index | code | `source_id` to path map, rebuilt when HEAD changes, reads only the frontmatter block | src/vault/source-index.ts | R5.2 |
-| Operations | code | create (idempotent), patch (set, append, immutable body), archive (move) | src/vault/operations.ts | R5, R6, R7 |
+| Operations | code | create (idempotent), patch (set, append, immutable body), archive (move). The flows (`write`, `patch`) are in src/vault/write-note.ts on shared step helpers; the pure note logic (read a stored note, merge, unchanged test) is in src/vault/operations.ts | src/vault/write-note.ts, src/vault/operations.ts | R5, R6, R7 |
 | Push with retry | code | 3 retries, injectable waits (1, 2, 4 s); `push_pending` | src/git/sync.ts | R8.3, R8.4 |
 | Routes | code | `POST /notes`, `PATCH /notes`, `POST /notes/archive`, error mapping | src/server/app.ts | R1, R3 to R8 |
 | init-vault CLI | code | Copy the template without overwriting, report skipped files | src/cli.ts, vault-template/ | R9.2 |
@@ -102,7 +102,7 @@ type Err = { ok: false; error: string; [detail: string]: unknown };
 | `GET /health` | none | 200 `{ ok: true }` | none | R1.2, R10.1 |
 | `scrub(text)` | string | `{ text, hits: Map<rule, count> }` | throws ScrubError | R4 |
 | `loadVaultConfig(dir)` | vault dir | VaultConfig | ConfigInvalidError(file, keyPath) | R2 |
-| `syncBeforeWrite(dir)` | vault dir | `{ conflicts: number }` | GitError | R8.1, R8.2 |
+| `syncBeforeWrite(dir)` | vault dir | `{ conflicts: number; recovered: boolean }` | GitError | R8.1, R8.2 |
 | `pushWithRetry(dir, { push, sleep, waits })` | vault dir | `{ pushed, commit, exitCode? }` | none (returns pushed false) | R8.3, R8.4 |
 | `init-vault <dir>` | target dir | copied and skipped lists on stdout | exit 1 when the target is a file | R9.2 |
 
