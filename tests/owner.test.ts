@@ -130,6 +130,24 @@ describe("verifyPassphrase", () => {
     expect(await verifyPassphrase(`${PASSPHRASE} `, hash)).toBe(false);
   });
 
+  it.each([
+    ["undefined", undefined],
+    ["a number", 123456789012],
+    ["an array", [PASSPHRASE]],
+    ["an object", { toString: () => PASSPHRASE }],
+    ["an object with its own normalize() that returns the secret", { normalize: () => PASSPHRASE }],
+  ])(
+    "is false for %s as the passphrase, before normalizing and without calling scrypt",
+    async (_label, value) => {
+      const hash = await hashPassphrase(PASSPHRASE);
+      scryptSpy.mockClear();
+      equalSpy.mockClear();
+      expect(await verifyPassphrase(value as unknown as string, hash)).toBe(false);
+      expect(scryptSpy).not.toHaveBeenCalled();
+      expect(equalSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("derives 32 bytes with explicit maxmem and compares once with timingSafeEqual", async () => {
     const hash = await hashPassphrase(PASSPHRASE);
     scryptSpy.mockClear();

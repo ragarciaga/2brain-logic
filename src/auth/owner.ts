@@ -80,12 +80,16 @@ export async function hashPassphrase(passphrase: string): Promise<string> {
 }
 
 /**
- * True when the passphrase matches the stored hash. False for a wrong passphrase and for a value
- * that is not a well-formed hash (no scrypt runs). A well-formed hash that needs more than
- * `MAX_SCRYPT_MEMORY` throws a fixed error before scrypt runs. Neither the passphrase nor the hash
- * appears in an error.
+ * True when the passphrase matches the stored hash. False for a wrong passphrase, for a passphrase
+ * that is not a string at runtime (checked before normalizing, so an object with its own
+ * `normalize()` never verifies) and for a value that is not a well-formed hash (no scrypt runs). A
+ * well-formed hash that needs more than `MAX_SCRYPT_MEMORY` throws a fixed error before scrypt
+ * runs. Neither the passphrase nor the hash appears in an error.
  */
 export async function verifyPassphrase(passphrase: string, stored: string): Promise<boolean> {
+  if (typeof passphrase !== "string") {
+    return false;
+  }
   const params = parsePassphraseHashParams(stored);
   if (params === undefined) {
     return false;

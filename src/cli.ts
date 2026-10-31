@@ -191,12 +191,20 @@ function isEntryPoint(): boolean {
   }
 }
 
-/** Collect standard input, stopping once it is longer than `MAX_STDIN_BYTES`. */
-async function readProcessStdin(): Promise<Uint8Array> {
+/** The part of a readable stream the CLI uses: chunks, and whether it is a terminal. */
+export type StdinSource = AsyncIterable<string | Uint8Array> & { isTTY?: boolean };
+
+/**
+ * Collect standard input, stopping once it is longer than `MAX_STDIN_BYTES`: the result is then at
+ * most `MAX_STDIN_BYTES` plus one chunk, and the source is not read to its end.
+ */
+export async function readProcessStdin(
+  source: AsyncIterable<string | Uint8Array> = process.stdin,
+): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of process.stdin) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+  for await (const chunk of source) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
     chunks.push(buffer);
     total += buffer.length;
     if (total > MAX_STDIN_BYTES) break;
@@ -204,11 +212,16 @@ async function readProcessStdin(): Promise<Uint8Array> {
   return Buffer.concat(chunks);
 }
 
-if (isEntryPoint()) {
-  process.exitCode = await main(process.argv.slice(2), {
+/** The `CliIo` of the real process, built on the given standard input (`process.stdin`). */
+export function processIo(stdin: StdinSource): CliIo {
+  return {
     stdout: (line) => console.log(line),
     stderr: (line) => console.error(line),
-    stdinIsTTY: process.stdin.isTTY === true,
-    readStdin: readProcessStdin,
-  });
+    stdinIsTTY: stdin.isTTY === true,
+    readStdin: () => readProcessStdin(stdin),
+  };
+}
+
+if (isEntryPoint()) {
+  process.exitCode = await main(process.argv.slice(2), processIo(process.stdin));
 }

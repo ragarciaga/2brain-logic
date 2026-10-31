@@ -13,10 +13,30 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyPassphrase } from "../src/auth/owner.js";
-import { type CliIo, main, TEMPLATE_DIR } from "../src/cli.js";
+import {
+  type CliIo,
+  MAX_STDIN_BYTES,
+  main,
+  processIo,
+  readProcessStdin,
+  TEMPLATE_DIR,
+} from "../src/cli.js";
 import { isPassphraseHashFormat, loadEnv } from "../src/config/env.js";
+
+// Real hashing unless a test turns the switch on: only the CLI's failure path needs a rejection.
+const hashSwitch = vi.hoisted(() => ({ fail: false }));
+vi.mock("../src/auth/owner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/auth/owner.js")>();
+  return {
+    ...actual,
+    hashPassphrase: (passphrase: string) =>
+      hashSwitch.fail
+        ? Promise.reject(new Error(`scrypt exploded on ${passphrase}`))
+        : actual.hashPassphrase(passphrase),
+  };
+});
 
 /** Every regular file under root: POSIX relative path to its bytes (hex). */
 function tree(root: string): Record<string, string> {
@@ -362,6 +382,107 @@ describe("hash-passphrase", () => {
     expect(err).toStrictEqual([
       "hash-passphrase: standard input is a terminal; pipe the passphrase in (for example with read -s)",
     ]);
+  });
+});
+
+describe("hash-passphrase when hashing fails", () => {
+  afterEach(() => {
+    hashSwitch.fail = false;
+  });
+
+  it("exits 1 with one fixed line, no stack, no stdout and no input in it", async () => {
+    hashSwitch.fail = true;
+    const { io, out, err } = fakeIo(bytes("twelve chars\n"));
+    expect(await main(["hash-passphrase"], io)).toBe(1);
+    expect(out).toStrictEqual([]);
+    expect(err).toStrictEqual(["hash-passphrase: could not hash the passphrase"]);
+  });
+});
+
+describe("readProcessStdin", () => {
+  /** Yields `count` chunks of `size` bytes and records how many were pulled and whether it ended. */
+  function source(count: number, size: number) {
+    const state = { pulled: 0, finished: false };
+    async function* generate(): AsyncGenerator<Uint8Array> {
+      for (let i = 0; i < count; i += 1) {
+        state.pulled += 1;
+        yield new Uint8Array(size).fill(0x61);
+      }
+      state.finished = true;
+    }
+    return { state, stream: generate() };
+  }
+
+  it("stops once the input is over the cap and does not drain the source", async () => {
+    const { state, stream } = source(100, 400);
+    const result = await readProcessStdin(stream);
+    expect(result.length).toBeGreaterThan(MAX_STDIN_BYTES);
+    expect(result.length).toBeLessThanOrEqual(MAX_STDIN_BYTES + 400);
+    expect(state.pulled).toBe(3);
+    expect(state.finished).toBe(false);
+  });
+
+  it("reads a source up to the cap to its end", async () => {
+    const { state, stream } = source(4, MAX_STDIN_BYTES / 4);
+    const result = await readProcessStdin(stream);
+    expect(result.length).toBe(MAX_STDIN_BYTES);
+    expect(state.pulled).toBe(4);
+    expect(state.finished).toBe(true);
+  });
+
+  it("accepts string chunks", async () => {
+    async function* strings(): AsyncGenerator<string> {
+      yield "twelve ";
+      yield "chars";
+    }
+    expect(Buffer.from(await readProcessStdin(strings())).toString("utf8")).toBe("twelve chars");
+  });
+});
+
+describe("processIo", () => {
+  /** A stand-in for process.stdin that counts how often it is iterated. */
+  function fakeStdin(isTTY: boolean | undefined, text: string) {
+    const state = { iterated: 0 };
+    return {
+      state,
+      stdin: {
+        isTTY,
+        async *[Symbol.asyncIterator]() {
+          state.iterated += 1;
+          yield new TextEncoder().encode(text);
+        },
+      },
+    };
+  }
+
+  it("refuses a terminal on standard input and never reads it", async () => {
+    const { state, stdin } = fakeStdin(true, "twelve chars\n");
+    const out: string[] = [];
+    const err: string[] = [];
+    const spyOut = vi.spyOn(console, "log").mockImplementation((l: string) => void out.push(l));
+    const spyErr = vi.spyOn(console, "error").mockImplementation((l: string) => void err.push(l));
+    try {
+      expect(await main(["hash-passphrase"], processIo(stdin))).toBe(1);
+    } finally {
+      spyOut.mockRestore();
+      spyErr.mockRestore();
+    }
+    expect(state.iterated).toBe(0);
+    expect(out).toStrictEqual([]);
+    expect(err).toStrictEqual([
+      "hash-passphrase: standard input is a terminal; pipe the passphrase in (for example with read -s)",
+    ]);
+  });
+
+  it.each([
+    ["false", false],
+    ["undefined (a pipe or a file)", undefined],
+  ])("reads standard input when isTTY is %s", async (_label, isTTY) => {
+    const { state, stdin } = fakeStdin(isTTY, "twelve chars\n");
+    const io = processIo(stdin);
+    expect(io.stdinIsTTY).toBe(false);
+    expect(new TextDecoder().decode(await io.readStdin())).toBe("twelve chars\n");
+    expect(state.iterated).toBe(1);
   });
 });
 
