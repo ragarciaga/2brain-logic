@@ -6,9 +6,10 @@ Updated: 2026-10-31
 Build F1 vault core: docs/specs/01-vault-core/, tasks T1 to T17 (issues #12 to #28).
 
 ## Current state
-- Works: walking skeleton merged (PR #10, issue #2): `GET /health`, `POST /notes` writing and pushing to the vault repo, config and env loaders, mock LLM, 3 evals, Docker image and CI. Baseline green at 468942c (typecheck, lint, 99 tests, build).
+- Works: walking skeleton (PR #10) plus F1 tasks merged: strict vault config and template (T1), INGEST_TOKEN required (T2), bearer token on every route except `GET /health` (T3), Windows-safe paths and literal pathspecs (T4), frontmatter validator (T6), config re-read after each pull with 503 `config_invalid` (T7), frontmatter validated on create with 400 (T8), `init-vault` (T16), template in the image and compose healthcheck (T17).
+- In review: T5 secret scrubber (kickback 2: audit and security findings, Revision 4).
 - Broken: nothing.
-- Pending: follow-ups #4 to #9 (ingest auth, failed push, rebase conflicts, healthcheck, known_hosts, ingest hardening). `/notes` has no auth or secret scrub until F1: do not connect real n8n flows.
+- Pending: `POST /notes` does not scrub secrets (T9) yet: do not connect real n8n flows. IBAN length table unverified against a named SWIFT release (#41, rb:needs-local).
 
 ## Key decisions
 - 2026-10-31: TypeScript on Node.js 24 with Hono and the MCP SDK, see docs/adr/0001-stack.md
@@ -26,14 +27,26 @@ Build F1 vault core: docs/specs/01-vault-core/, tasks T1 to T17 (issues #12 to #
 - 2026-10-31: skeleton bodies stored verbatim, 409 on an existing path, HOST defaults to 127.0.0.1, see PR #10
 
 ## Next steps
-1. `/rb-build docs/specs/01-vault-core/` (ready first: T1, T2, T5).
-2. Optional: create the nightly routine (`Run /rb-cycle. [rockbuilt:unattended]`), now that `npm ci` works.
+1. Finish F1: T8, then T9, then T10 and T11, T12, T13, T14, T15 (each depends on the previous).
+2. Owner: check #41 against the SWIFT registry on your machine.
+3. Then F2 (MCP server with OAuth).
 
 ## Timing
 <!-- rb:timing:start -->
 | Task | plan | implement | check | verify | audit | fix | security | pr | ci | merge | Total |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | i2 | 9.4 | 11.4 | 0.2 | 7.5 | 6.6 | 2.1 | 9.3 | 0.9 | 1.2 | 0.4 | 49.0 |
+| T1 | 4.4 | 4.1 |  | 1.2 | 2.3 | 0.8 | 2.0 |  |  |  | 14.8 |
+| T2 | 4.4 | 1.4 |  | 3.3 | 1.8 | 0.7 | 2.0 |  |  |  | 13.6 |
+| T6 | 2.8 | 2.0 |  | 2.0 | 2.4 |  | 2.1 |  |  |  | 11.3 |
+| T16 | 3.3 | 2.4 |  | 3.0 | 1.9 | 1.2 |  |  |  |  | 11.8 |
+| T3 | 3.7 | 4.7 |  | 2.4 | 3.0 |  | 3.5 |  |  |  | 17.3 |
+| T4 | 3.2 | 3.7 |  | 2.8 | 1.7 |  | 0.8 |  |  |  | 12.2 |
+| T7 | 3.7 | 3.2 |  | 3.7 | 2.4 |  |  |  |  |  | 13.0 |
+| T17 | 2.7 | 2.1 |  | 2.1 | 12.8 |  | 1.3 |  |  |  | 21.0 |
+| T5 | 10.1 | 32.6 |  |  |  |  | 14.9 |  |  |  | 57.6 |
+| T8 |  |  |  |  |  |  |  |  |  |  | 0.0 |
 
 Minutes per phase.
+Open (started, not ended): T5/verify, T8/plan.
 <!-- rb:timing:end -->
