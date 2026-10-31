@@ -31,5 +31,6 @@ export const DEFAULT_VAULT_CONFIG: VaultConfig = {
     idea: { value: "idea", folder: "inbox" },
     daily: { value: "daily", folder: "daily" },
     review: { value: "review", folder: "reviews" },
+    session: { value: "session", folder: "{area}/sessions" },
   },
 };
