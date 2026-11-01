@@ -178,7 +178,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: tests/meetings-fixtures.integration.test.ts, tests/meetings-imports.test.ts, tests/fixtures/meetings/fireflies-recorded.json, tests/fixtures/meetings/fireflies-recorded.expected.md, tests/fixtures/meetings/gemini-recorded.json, tests/fixtures/meetings/gemini-recorded.expected.md
 - Verify: `npm test -- tests/meetings-fixtures.integration.test.ts tests/meetings-imports.test.ts`; `npm run typecheck`; `npm run lint`; fixtures follow the Fireflies GraphQL `transcript` and Google Meet REST API shapes with fictional people and `example.com` only; case "fireflies byte exact" and "gemini byte exact": ingesting each fixture through `createApp` against a bare fixture remote writes a file equal to its `.expected.md` byte for byte, the Gemini note taking each speaker from its participant's display name; case "zero LLM calls": with `vi.mock` of src/llm/index.js returning `createMockProvider([])` (src/llm/mock.ts throws when it has no response left and records each call), ingesting both fixtures through `createApp` stores both meetings, and the mock's `calls` is empty; the import-graph test walks the static imports of every file under src/meetings, src/sources/fireflies, src/sources/gemini and src/vault/write-meeting.ts transitively and finds no path under src/llm and no `@anthropic-ai/sdk`
 - Issue: #208
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -227,7 +227,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: n8n/templates/meetings-fireflies.json, n8n/templates/meetings-gemini.json, tests/n8n-poll-state.test.ts, tests/n8n-templates.test.ts
 - Verify: `npm test -- tests/n8n-poll-state.test.ts tests/n8n-templates.test.ts`; `npm run typecheck`; `npm run lint`; `Poll state` runs as the last node on every path of the Fireflies template (checked over the connection graph); cases: "already stored counts as posted" (a 200 `already_stored` answer moves the id into `posted`); "201 counts as posted"; "4xx drop" (a 400 or 409 answer removes the id from `pending` and routes to a `Stop and Error` node); "502 and 503 stay pending" (after the post retries the id stays in `pending`); for both templates the post node retries only on 502 and 503, 3 times, with a wait of at least 60 seconds between tries, and a 4xx answer is not retried
 - Issue: #212
-- Status: todo
+- Status: done
 
 ### Decision log
 - 2026-11-01: post retries are 3 retries (4 posts) 60 s apart; a 4xx answer removes the id from `pending` and also records it in `posted`, so a refused id is not fetched again for 48 h; the Fireflies round is serial and any stop is emitted when the round ends.
