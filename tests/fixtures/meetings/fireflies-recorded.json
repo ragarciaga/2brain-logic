@@ -1,0 +1,76 @@
+{
+  "source": "fireflies",
+  "transcript": {
+    "id": "01JEXAMPLEFF0001",
+    "title": "Product planning",
+    "date": 1793109731000,
+    "duration": 47.4,
+    "transcript_url": "https://app.example.com/view/01JEXAMPLEFF0001",
+    "organizer_email": "ana@example.com",
+    "participants": ["ana@example.com", "carol@example.com"],
+    "meeting_attendees": [
+      { "displayName": "ana ruiz", "email": "ana@example.com", "name": "ana ruiz" },
+      { "displayName": "Bo Chen", "email": "bo@example.com", "name": "Bo Chen" }
+    ],
+    "sentences": [
+      { "speaker_name": "Ana Ruiz", "text": "Welcome everyone, let us start.", "start_time": 0.8 },
+      {
+        "speaker_name": "Ana Ruiz",
+        "text": "First item is the launch checklist.",
+        "start_time": 4.6
+      },
+      {
+        "speaker_name": "Bo Chen",
+        "text": "The checklist is  ready,  I only need a review.",
+        "start_time": 9.9
+      },
+      { "speaker_name": "Speaker 2", "text": "Can I get access to the board?", "start_time": 15.2 },
+      { "speaker_name": null, "text": "Someone joined the call.", "start_time": 61.7 },
+      { "speaker_name": "Ana Ruiz", "text": "Yes, I will share it today.", "start_time": 75.5 },
+      { "speaker_name": "Bo Chen", "text": "Then we can close the review.", "start_time": 3599.9 },
+      { "speaker_name": "Ana Ruiz", "text": "Great, thanks all.", "start_time": 3601.2 }
+    ]
+  },
+  "calendar_events": [
+    {
+      "kind": "calendar#event",
+      "id": "evtff0001",
+      "status": "confirmed",
+      "summary": "Product planning",
+      "title": "Product planning",
+      "calendar_id": "primary",
+      "htmlLink": "https://calendar.example.com/event?eid=evtff0001",
+      "start": { "dateTime": "2026-10-27T09:00:00-05:00", "timeZone": "America/Bogota" },
+      "end": { "dateTime": "2026-10-27T10:00:00-05:00", "timeZone": "America/Bogota" },
+      "organizer": { "email": "ana@example.com" },
+      "attendees": [
+        { "email": "ana@example.com", "displayName": "Ana Ruiz", "responseStatus": "accepted" },
+        { "email": "bo@example.com", "displayName": "Bo Chen", "responseStatus": "accepted" }
+      ]
+    },
+    {
+      "kind": "calendar#event",
+      "id": "evtff0000",
+      "status": "cancelled",
+      "summary": "Old planning slot",
+      "title": "Old planning slot",
+      "calendar_id": "primary",
+      "htmlLink": "https://calendar.example.com/event?eid=evtff0000",
+      "start": { "dateTime": "2026-10-27T08:00:00-05:00", "timeZone": "America/Bogota" },
+      "end": { "dateTime": "2026-10-27T11:00:00-05:00", "timeZone": "America/Bogota" },
+      "organizer": { "email": "ana@example.com" }
+    },
+    {
+      "kind": "calendar#event",
+      "id": "evtff0002",
+      "status": "confirmed",
+      "summary": "Team day",
+      "title": "Team day",
+      "calendar_id": "primary",
+      "htmlLink": "https://calendar.example.com/event?eid=evtff0002",
+      "start": { "date": "2026-10-27" },
+      "end": { "date": "2026-10-28" },
+      "organizer": { "email": "ana@example.com" }
+    }
+  ]
+}
