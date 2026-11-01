@@ -34,7 +34,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: src/config/vault-config.ts, src/config/defaults.ts, vault-template/.2brain/config.yaml, tests/vault-config.test.ts, tests/template.test.ts, tests/meetings-config.test.ts
 - Verify: `npm test -- tests/vault-config.test.ts tests/template.test.ts tests/meetings-config.test.ts`; `npm run typecheck`; `npm run lint`; `VaultConfig` gains `meetings` with exactly the keys and defaults of design.md "Data model" (timezone UTC, min_minutes 5, untitled_label `Untitled meeting`, unknown_speaker_label `Speaker`, default_area null, area_rules [], sources fireflies and gemini with value and label, the eight properties); DEFAULT_VAULT_CONFIG and vault-template/.2brain/config.yaml spell out the same section and the existing case "loads to exactly the default config" passes; a config file without `meetings` loads to the defaults (case "no meetings section uses defaults"); `loadVaultConfig` throws `ConfigInvalidError` naming `.2brain/config.yaml` and the key path for each of: unknown key under `meetings`, a rule area or `default_area` not in `areas`, a rule with both or neither of `domain` and `calendar`, timezone `Mars/Base` (rejected through `Intl.DateTimeFormat`), `min_minutes` -1 and 121, two meeting properties with the same name, a meeting property equal to a canonical owner name or to `analysis`; exported `requireMeetingSetup(config)` throws `ConfigInvalidError` with key path `types.meeting` when the meeting type is missing or has no folder, and `sources` when the allow-list is non-empty and lacks a meeting source value, while `loadVaultConfig` of the same file succeeds (case "meeting checks do not block other writes"); `version` stays 1
 - Issue: #196
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -46,7 +46,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: src/meetings/types.ts, src/meetings/schema.ts, src/sources/fireflies/map.ts, src/sources/gemini/map.ts, tests/meetings-schema.test.ts, tests/meetings-map.test.ts
 - Verify: `npm test -- tests/meetings-schema.test.ts tests/meetings-map.test.ts`; `npm run typecheck`; `npm run lint`; src/meetings/types.ts exports `CalendarEvent`, `FirefliesBody`, `GeminiBody`, `MeetingInput` and `MeetingOk` as in design.md "Interfaces and contracts"; `parseMeetingBody` ignores unknown fields and rejects with Zod issues (paths and messages only) each of: missing `transcript.id`, wrong type of `transcript.date`, `source: "zoom"`, end not after start, a recording longer than 12 hours, 50,001 segments, 501 participants, 51 calendar events; case "issues carry no value": a planted marker string in every rejected field is absent from `JSON.stringify(issues)`; a Gemini body whose `transcript.state` is not the finished state yields a `TranscriptNotReadyError` (exported) and no MeetingInput; `sourceUrl` is set only when the URL parses with protocol `https:` (`http:`, `javascript:` and a relative URL give undefined); `mapFireflies` turns epoch ms `date` and float minutes `duration` into `start` and `end`, `sentences` into segments with `offsetSeconds` from `start_time`, `meeting_attendees` and `participants` into `people`, `organizer_email` into `organizerEmail`; `mapGemini` takes each entry's speaker from the display name of its participant (signed-in, anonymous or phone user) and uses the configured unknown speaker label for an entry whose participant is missing from the list (case "unknown participant"); case "labels as delivered": `Speaker 1` and ` Ana Ruiz ` arrive as `Speaker 1` and `Ana Ruiz` (NFC, trimmed, nothing else changed); no file under src/meetings or src/sources imports src/llm or @anthropic-ai/sdk
 - Issue: #197
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -58,7 +58,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: src/meetings/normalize.ts, tests/meetings-normalize.test.ts
 - Verify: `npm test -- tests/meetings-normalize.test.ts`; `npm run typecheck`; `npm run lint`; `normalizeSegments(segments, unknownLabel)` returns `{ body, turns }`; table cases: consecutive segments of one speaker merge into one turn `**<speaker>** [HH:MM:SS]` with the text on the next line and the first segment's offset (offset 3725 s renders `[01:02:05]`); turns are separated by one blank line; an empty speaker label becomes `unknownLabel`; text is NFC (a decomposed `é` input equals the composed output), CRLF and CR become LF, runs of spaces and tabs between words become one space; segments empty after that are dropped and do not split a turn; segments are ordered by start time with equal times keeping delivered order; a transcript with no text gives `turns: 0`; case "determinism": normalizing the same input twice gives byte-identical `body`, and a shuffled copy with distinct start times gives the same body
 - Issue: #198
-- Status: todo
+- Status: done
 
 ### Decision log
 
