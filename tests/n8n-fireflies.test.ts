@@ -172,8 +172,12 @@ describe("meetings-fireflies template", () => {
     for (const trigger of ["Poll schedule", "Fireflies webhook"]) {
       expect(pathsAvoiding(t, trigger, POST, CALENDAR)).toEqual([]);
     }
-    expect(nodesByType(t, "n8n-nodes-base.stopAndError")).toHaveLength(1);
+    expect(nodesByType(t, "n8n-nodes-base.stopAndError").map((n) => n.name)).toEqual([
+      "Source or calendar failed",
+      "Ingest refused",
+    ]);
     expect(reachable(t, "Source or calendar failed").size).toBe(0);
+    expect(reachable(t, "Ingest refused").size).toBe(0);
   });
 
   it("the helper catches an error edge to the post", () => {

@@ -439,7 +439,15 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ source: \"gemini\", conference: $('Split records').item.json, transcript: $('Loop transcripts').item.json, participants: $('Participants').all().flatMap(p => p.json.participants ?? []), entries: $('Transcript entries').all().flatMap(p => p.json.transcriptEntries ?? []), calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: $('Settings').first().json.calendar_id })) }) }}",
-        "options": {}
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
       },
       "name": "Post meeting",
       "type": "n8n-nodes-base.httpRequest",
@@ -463,6 +471,138 @@
       "typeVersion": 1,
       "position": [
         2640,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "post-try",
+              "name": "post_try",
+              "value": "={{ $json.post_try ?? 1 }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Post try",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2530,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "retry-post",
+              "leftValue": "={{ [502, 503].includes($json.statusCode) && $('Post try').item.json.post_try < 4 ? 1 : 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Retry post",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "next-post-try",
+              "name": "post_try",
+              "value": "={{ $('Post try').item.json.post_try + 1 }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Next post try",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3080,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 60,
+        "unit": "seconds"
+      },
+      "name": "Post wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2860,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "refused",
+              "leftValue": "={{ $json.statusCode >= 400 && $json.statusCode < 500 ? 1 : 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Refused",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "2brain ingest refused a transcript with a 4xx answer; the Post meeting output shows which one"
+      },
+      "name": "Ingest refused",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2420,
         220
       ]
     }
@@ -583,7 +723,13 @@
     },
     "Loop transcripts": {
       "main": [
-        [],
+        [
+          {
+            "node": "Refused",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Participants",
@@ -615,7 +761,7 @@
       "main": [
         [
           {
-            "node": "Calendar events",
+            "node": "Post try",
             "type": "main",
             "index": 0
           }
@@ -651,11 +797,74 @@
       "main": [
         [
           {
+            "node": "Retry post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post try": {
+      "main": [
+        [
+          {
+            "node": "Calendar events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry post": {
+      "main": [
+        [
+          {
+            "node": "Next post try",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Loop transcripts",
             "type": "main",
             "index": 0
           }
         ]
+      ]
+    },
+    "Next post try": {
+      "main": [
+        [
+          {
+            "node": "Post wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post wait": {
+      "main": [
+        [
+          {
+            "node": "Post try",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refused": {
+      "main": [
+        [
+          {
+            "node": "Ingest refused",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },
