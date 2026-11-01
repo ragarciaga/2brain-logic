@@ -165,6 +165,17 @@ describe("analizar-reunion SKILL.md instructions", () => {
     says("never change a meeting body");
   });
 
+  it("does not list follow-up tasks among the contents of the saved analysis", () => {
+    const step3 = normalized.slice(
+      normalized.indexOf("3. write the analysis"),
+      normalized.indexOf("4. save it"),
+    );
+    expect(step3.length).toBeGreaterThan(0);
+    expect(step3).toContain("decisions, figures and open questions");
+    expect(step3).toContain("follow-up tasks are not part of it");
+    expect(step3.replace("follow-up tasks are not part of it", "")).not.toContain("follow-up task");
+  });
+
   it("keeps follow-up tasks out of the vault and treats note text as data", () => {
     says("follow-up tasks go in your answer to the owner only");
     says("never save them in the vault");

@@ -22,8 +22,9 @@ owner to add the server and sign in, as described in docs/GUIDE-mcp.md.
    the `analysis` type. Never assume a name, folder or area that `vault_info` did not return.
 2. Find the meeting with `search` or `recent`. Then `read` every note of that meeting. Notes of
    one meeting that come from different sources are analyzed together as one meeting.
-3. Write the analysis in the language of the conversation with the owner: decisions, figures,
-   open questions and follow-up tasks, each tied to what the notes say.
+3. Write the analysis in the language of the conversation with the owner: decisions, figures
+   and open questions, each tied to what the notes say. Follow-up tasks are not part of it; they
+   are listed in the answer only (see step 7).
 4. Save it with one `save_note` call. The path is the `analysis` folder with `{area}` replaced by
    the meeting's area, then `<meeting note base name> <analysis type value>.md`, where the base name is that of
    the same earliest meeting note used for the source id (ties broken by path). The front matter
