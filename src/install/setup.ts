@@ -1,4 +1,5 @@
-import { chmod, lchown, lstat, mkdir, open, readdir, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { type FileHandle, lchown, lstat, mkdir, open, stat, unlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { CliIo } from "../cli.js";
@@ -38,6 +39,9 @@ const SERVICE_ID = 1000;
 const PUB_KEY_MAX_BYTES = 4096;
 const PUB_KEY_RE = /^ssh-ed25519 [A-Za-z0-9+/=]+(?: [\x20-\x7e]*)?$/;
 const KEY_PATH_MAX = 120;
+const CHOWN_NAMES = ["deploy_key", "deploy_key.pub", "known_hosts"];
+const FILE_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+const DIR_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY;
 
 export const SETUP_USAGE =
   "usage: node dist/cli.js setup [--project-dir <dir>] [--vault-dir <dir>] | node dist/cli.js setup --non-interactive --remote <git-ssh-url> --author-name <name> --author-email <email> [--public-base-url <url> (--passphrase-stdin | --keep-passphrase)] [--host-fingerprint <SHA256:...>]";
@@ -63,6 +67,8 @@ export interface SetupTerminal {
 export interface SetupDeps {
   proc: SetupProc;
   lchown: (path: string, uid: number, gid: number) => Promise<void>;
+  /** Changes the owner of an already opened and checked file or directory (never follows a path). */
+  fchown: (handle: FileHandle, path: string, uid: number, gid: number) => Promise<void>;
   openTerminal: () => SetupTerminal;
   keygenRunner: Runner;
   captureRunner: CaptureRunner;
@@ -117,6 +123,7 @@ export const defaultSetupDeps: SetupDeps = {
     setgroups: (groups) => (process.setgroups as (g: number[]) => void)(groups),
   },
   lchown,
+  fchown: (handle, _path, uid, gid) => handle.chown(uid, gid),
   openTerminal: openProcessTerminal,
   keygenRunner: execFileRunner,
   captureRunner: execFileCaptureRunner,
@@ -351,7 +358,13 @@ export async function runSetup(
       else if (!info.isDirectory()) {
         return emit("keygen_failed", "secrets is not a directory", 1);
       }
-      await chmod(secretsDir, 0o700);
+      const dirHandle = await open(secretsDir, DIR_FLAGS);
+      try {
+        if (!(await dirHandle.stat()).isDirectory()) throw new Error("not a directory");
+        await dirHandle.chmod(0o700);
+      } finally {
+        await dirHandle.close();
+      }
     } catch (error) {
       if (error instanceof Finish) throw error;
       return emit("project_not_writable", FIX_OWNERSHIP, 1);
@@ -365,17 +378,40 @@ export async function runSetup(
     }
     try {
       if (isRoot) {
-        await deps.lchown(secretsDir, SERVICE_ID, SERVICE_ID);
-        for (const name of await readdir(secretsDir)) {
-          if (!name.startsWith("deploy_key") && name !== "known_hosts") continue;
+        const dirHandle = await open(secretsDir, DIR_FLAGS);
+        try {
+          if (!(await dirHandle.stat()).isDirectory()) throw new Error("not a directory");
+          await deps.fchown(dirHandle, secretsDir, SERVICE_ID, SERVICE_ID);
+        } finally {
+          await dirHandle.close();
+        }
+        // Only the three expected names; each is opened without following a link and must be a
+        // regular file with one link, so a planted hard link to another file is never handed over.
+        for (const name of CHOWN_NAMES) {
           const file = join(secretsDir, name);
-          if ((await lstat(file)).isFile()) await deps.lchown(file, SERVICE_ID, SERVICE_ID);
+          let handle: FileHandle;
+          try {
+            handle = await open(file, FILE_FLAGS);
+          } catch (error) {
+            if (errCode(error) === "ENOENT") continue;
+            return emit("keygen_failed", `secrets/${name} is not a plain file`, 1);
+          }
+          try {
+            const info = await handle.stat();
+            if (!info.isFile() || info.nlink !== 1) {
+              return emit("keygen_failed", `secrets/${name} is not a plain file`, 1);
+            }
+            await deps.fchown(handle, file, SERVICE_ID, SERVICE_ID);
+          } finally {
+            await handle.close();
+          }
         }
         deps.proc.setgroups?.([]);
         deps.proc.setgid(SERVICE_ID);
         deps.proc.setuid(SERVICE_ID);
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof Finish) throw error;
       return emit("project_not_writable", FIX_OWNERSHIP, 1);
     }
 

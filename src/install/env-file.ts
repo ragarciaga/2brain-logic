@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, lstat, open, rename, unlink } from "node:fs/promises";
+import { lstat, open, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { parseEnv } from "node:util";
 
@@ -274,8 +274,17 @@ export async function writeEnvFile(
     if (next === existing) {
       if (process.platform !== "win32") {
         try {
-          const info = await lstat(target);
-          if (info.isFile() && (info.mode & 0o077) !== 0) await chmod(target, 0o600);
+          // Through a handle that does not follow a link, so the mode change reaches the file read.
+          const handle = await open(
+            target,
+            constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+          );
+          try {
+            const info = await handle.stat();
+            if (info.isFile() && (info.mode & 0o077) !== 0) await handle.chmod(0o600);
+          } finally {
+            await handle.close();
+          }
         } catch (error) {
           if (errorCode(error) !== "ENOENT") throw error;
         }

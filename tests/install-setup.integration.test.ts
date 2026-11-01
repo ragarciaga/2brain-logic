@@ -53,6 +53,7 @@ function deps(): SetupDeps {
     ...defaultSetupDeps,
     proc: { getuid: () => 1000, setgid: () => {}, setuid: () => {}, setgroups: () => {} },
     lchown: async () => {},
+    fchown: async () => {},
     keygenRunner: async (_cmd, args) => {
       const file = args[args.indexOf("-f") + 1] as string;
       await writeFile(file, "fake-private-material\n");

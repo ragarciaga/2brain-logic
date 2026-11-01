@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -184,6 +184,9 @@ function harness(
   const deps: SetupDeps = {
     proc: proc.proc,
     lchown: async (path, uid, gid) => {
+      seen.lchown.push(`${path}:${uid}:${gid}:as${proc.state.uid}`);
+    },
+    fchown: async (_handle, path, uid, gid) => {
       seen.lchown.push(`${path}:${uid}:${gid}:as${proc.state.uid}`);
     },
     openTerminal: openTerminal as unknown as SetupDeps["openTerminal"],
@@ -464,6 +467,37 @@ describe("file ownership and the privilege drop (D2)", () => {
     expect(h.seen.lchown.some((l) => l.includes("other.txt"))).toBe(false);
     expect(h.seen.lchown.some((l) => l.includes("deploy_key.link"))).toBe(false);
     expect(h.seen.keygen).toEqual([]);
+  });
+
+  it("as root: a hard-linked key file is refused, not chowned, and the run stops", async () => {
+    const secrets = join(project, "secrets");
+    await mkdir(secrets);
+    await writeFile(join(root, "elsewhere"), "other file\n");
+    await link(join(root, "elsewhere"), join(secrets, "deploy_key"));
+    const h = harness({ uid: 0 });
+    expect(await runSetup(nonInteractiveArgs(), h.io, h.deps)).toBe(1);
+    expect(h.err).toEqual(["setup: keygen_failed: secrets/deploy_key is not a plain file"]);
+    expect(h.seen.lchown.some((l) => l.includes("deploy_key"))).toBe(false);
+    expect(h.proc.state.calls).toEqual([]);
+    expect(h.seen.keygen).toEqual([]);
+    expect(existsSync(join(secrets, ".setup.lock"))).toBe(false);
+  });
+
+  it("as root: a symlinked expected name is refused and an unexpected hard link is not touched", async () => {
+    const secrets = join(project, "secrets");
+    await mkdir(secrets);
+    await writeFile(join(root, "elsewhere"), "other file\n");
+    await link(join(root, "elsewhere"), join(secrets, "deploy_key.x"));
+    await writeFile(join(root, "lone"), "lone file\n");
+    await symlink(join(root, "lone"), join(secrets, "known_hosts"));
+    const a = harness({ uid: 0 });
+    expect(await runSetup(nonInteractiveArgs(), a.io, a.deps)).toBe(1);
+    expect(a.err[0]).toMatch(/^setup: keygen_failed: secrets\/known_hosts is not a plain file$/);
+    expect(a.seen.lchown.some((l) => l.includes("known_hosts"))).toBe(false);
+    await rm(join(secrets, "known_hosts"));
+    const b = harness({ uid: 0 });
+    expect(await runSetup(nonInteractiveArgs(), b.io, b.deps)).toBe(0);
+    expect(b.seen.lchown.some((l) => l.includes("deploy_key.x"))).toBe(false);
   });
 
   it("not root: no chown and no drop", async () => {

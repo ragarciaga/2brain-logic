@@ -536,12 +536,12 @@ describe("R7.3: nothing in the service deletes a vault file", () => {
     },
     {
       file: "install/env-file.ts",
-      line: 'import { chmod, lstat, open, rename, unlink } from "node:fs/promises";',
+      line: 'import { lstat, open, rename, unlink } from "node:fs/promises";',
       reason: "import for the temp file cleanup below",
     },
     {
       file: "install/setup.ts",
-      line: 'import { chmod, lchown, lstat, mkdir, open, readdir, stat, unlink } from "node:fs/promises";',
+      line: 'import { type FileHandle, lchown, lstat, mkdir, open, stat, unlink } from "node:fs/promises";',
       reason: "import for the lock cleanup below",
     },
     {
