@@ -126,7 +126,8 @@ export function decide(state, { sessionId, lineage, userPrompts, minUserPrompts 
   return {
     action: "capture",
     part,
-    sourceId: `claude-code:${key}:${part}`,
+    // part 1 keeps the plain source id, also after a nothing_to_save recorded parts: 0
+    sourceId: part === 1 ? `claude-code:${key}` : `claude-code:${key}:${part}`,
     idForName: key,
     fromPrompt: entry.prompts,
   };

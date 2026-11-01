@@ -164,6 +164,19 @@ describe("decide", () => {
     expect(d).toMatchObject({ part: 3, sourceId: "claude-code:aaa:3" });
   });
 
+  it("keeps the plain source id for part 1 after an entry with zero parts", () => {
+    const state = stateWith({ aaa: entry({ parts: 0, prompts: 3, lineage: "L" }) });
+    const expected = {
+      action: "capture",
+      part: 1,
+      sourceId: "claude-code:aaa",
+      idForName: "aaa",
+      fromPrompt: 3,
+    };
+    expect(dec(state, { userPrompts: 6 })).toStrictEqual(expected);
+    expect(dec(state, { sessionId: "bbb", lineage: "L", userPrompts: 6 })).toStrictEqual(expected);
+  });
+
   it("prefers the session id entry over a lineage match", () => {
     const state = stateWith({
       aaa: entry({ lineage: "L", prompts: 1, parts: 1 }),

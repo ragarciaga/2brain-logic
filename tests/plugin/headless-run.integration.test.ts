@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -143,6 +143,32 @@ describe("runCapture", () => {
     const empty = mkdtempSync(join(root, "empty-"));
     const out = await runCapture(
       { settings, env: { PATH: empty }, paths, input: "i" },
+      { home: emptyHome },
+    );
+    expect(out).toStrictEqual({ ok: false, code: "claude_not_found" });
+  });
+
+  it("returns claude_not_found when env has no PATH key", async () => {
+    const out = await runCapture({ settings, env: {}, paths, input: "i" }, { home: emptyHome });
+    expect(out).toStrictEqual({ ok: false, code: "claude_not_found" });
+  });
+
+  it("returns claude_not_found for a claude file without any execute bit", async () => {
+    const bin = mkdtempSync(join(root, "noexec-"));
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o644 });
+    chmodSync(join(bin, "claude"), 0o644);
+    const out = await runCapture(
+      { settings, env: { PATH: bin }, paths, input: "i" },
+      { home: emptyHome },
+    );
+    expect(out).toStrictEqual({ ok: false, code: "claude_not_found" });
+  });
+
+  it("returns claude_not_found when claude is a directory", async () => {
+    const bin = mkdtempSync(join(root, "dirbin-"));
+    mkdirSync(join(bin, "claude"));
+    const out = await runCapture(
+      { settings, env: { PATH: bin }, paths, input: "i" },
       { home: emptyHome },
     );
     expect(out).toStrictEqual({ ok: false, code: "claude_not_found" });

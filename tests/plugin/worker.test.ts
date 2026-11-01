@@ -82,7 +82,25 @@ function setup(content: string, opts: FsOpts = {}) {
   return { stat, readFile, sleep, readAt };
 }
 
-type Outcome = { ok: true } | { ok: false; code: string; exit?: number | null };
+type Result = {
+  status: string;
+  session_note: string | null;
+  recipes: string[];
+  people_updated: string[];
+  already_saved: boolean;
+  detail: string;
+};
+type Outcome = { ok: true; result: Result } | { ok: false; code: string; exit?: number | null };
+
+const result = (over: Partial<Result> = {}): Result => ({
+  status: "saved",
+  session_note: "work/sessions/n.md",
+  recipes: [],
+  people_updated: [],
+  already_saved: false,
+  detail: "ok",
+  ...over,
+});
 
 function run(
   s: ReturnType<typeof setup>,
@@ -102,7 +120,13 @@ function run(
   });
 }
 
-const ok = () => vi.fn(async (_a: { input: string }): Promise<Outcome> => ({ ok: true }));
+const ok = () =>
+  vi.fn(
+    async (_a: { input: string }): Promise<Outcome> => ({
+      ok: true,
+      result: result({ status: "nothing_to_save", session_note: null }),
+    }),
+  );
 const logText = () => {
   try {
     return readFileSync(join(dir, "logs", "capture.log"), "utf8");
@@ -134,12 +158,18 @@ describe("sweep and order", () => {
     enqueue("first-1");
     clock = NOW;
     const s = setup(transcript(3));
-    const runner = ok();
+    // a failed result records no state, so the shared lineage does not make the second job a duplicate
+    const runner = vi.fn(
+      async (_a: { input: string }): Promise<Outcome> => ({
+        ok: true,
+        result: result({ status: "failed", session_note: null }),
+      }),
+    );
     await run(s, runner);
     expect(runner).toHaveBeenCalledTimes(2);
     expect(logText()).toMatch(/old-one gave_up/);
     expect(logText()).toMatch(/tired-1 gave_up/);
-    const order = [...logText().matchAll(/ (first-1|second-1) capture_ok/g)].map((m) => m[1]);
+    const order = [...logText().matchAll(/ (first-1|second-1) failed/g)].map((m) => m[1]);
     expect(order).toStrictEqual(["first-1", "second-1"]);
     expect(readdirSync(join(dir, "failed")).length).toBe(2);
   });
@@ -348,7 +378,11 @@ describe("runner outcomes", () => {
     ],
     ["claude_not_found", { ok: false, code: "claude_not_found" } as Outcome, "claude_not_found"],
     ["timeout", { ok: false, code: "timeout" } as Outcome, "timeout"],
-    ["a result", { ok: true } as Outcome, "capture_ok"],
+    [
+      "a failed result",
+      { ok: true, result: result({ status: "failed", session_note: null }) } as Outcome,
+      "failed",
+    ],
   ])("%s keeps the job with one more attempt", async (_n, o, line) => {
     enqueue();
     await run(setup(transcript(3)), outcome(o));
@@ -361,6 +395,42 @@ describe("runner outcomes", () => {
     await run(setup(transcript(3)), outcome({ ok: false, code: "not_configured" }));
     expect(logText()).toContain("sess-1 not_configured");
     expect(attempts()).toStrictEqual([0]);
+  });
+
+  it("an invalid detail logs invalid_detail, keeps the job and hides the text", async () => {
+    enqueue();
+    await run(setup(transcript(3)), outcome({ ok: true, result: result({ detail: "Bad Text" }) }));
+    expect(logText()).toContain("sess-1 invalid_detail");
+    expect(logText()).not.toContain("Bad Text");
+    expect(attempts()).toStrictEqual([1]);
+    expect(() => readFileSync(join(dir, "state.json"))).toThrow();
+  });
+
+  it.each(["../x.md", "a/../b.md", "/abs.md", "C:/x.md", "a\\b.md", "a//b.md", "n.txt"])(
+    "never logs the session note %s",
+    async (note) => {
+      enqueue();
+      await run(
+        setup(transcript(3)),
+        outcome({ ok: true, result: result({ session_note: note }) }),
+      );
+      const line =
+        logText()
+          .split("\n")
+          .find((l) => l.includes("sess-1")) ?? "";
+      expect(line).toContain("sess-1 saved");
+      expect(line).not.toContain(note);
+      expect(queued()).toStrictEqual([]);
+    },
+  );
+
+  it("logs a valid people path after the session note", async () => {
+    enqueue();
+    await run(
+      setup(transcript(3)),
+      outcome({ ok: true, result: result({ people_updated: ["work/people/ana.md"] }) }),
+    );
+    expect(logText()).toContain("saved notes=work/sessions/n.md,work/people/ana.md recipes=0");
   });
 
   it("never logs transcript text", async () => {
@@ -378,7 +448,10 @@ describe("runner outcomes", () => {
     const runner = vi
       .fn()
       .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({ ok: true });
+      .mockResolvedValueOnce({
+        ok: true,
+        result: result({ status: "failed", session_note: null }),
+      });
     await run(setup(transcript(3)), runner as never);
     expect(runner).toHaveBeenCalledTimes(2);
     expect(attempts()).toStrictEqual([0, 1]);

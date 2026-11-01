@@ -16,10 +16,26 @@ import { createLog } from "./lib/log.mjs";
 import { readProgress } from "./lib/progress.mjs";
 import { createQueue } from "./lib/queue.mjs";
 import { readSettings } from "./lib/settings.mjs";
-import { decide, readState } from "./lib/state.mjs";
+import { decide, readState, recordCapture } from "./lib/state.mjs";
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const DETAIL = /^[a-z0-9_ =.,:-]{0,120}$/;
+const CONTROL = /\p{Cc}/u;
+
+/**
+ * True for a vault-relative note path that is safe to show: 1 to 300 characters, no control
+ * character or backslash, not absolute, ends with .md, no empty, "." or ".." segment.
+ * @param {unknown} v
+ * @returns {v is string}
+ */
+function isNotePath(v) {
+  if (typeof v !== "string" || v.length < 1 || v.length > 300) return false;
+  if (CONTROL.test(v) || v.includes("\\")) return false;
+  if (v.startsWith("/") || /^[A-Za-z]:/.test(v)) return false;
+  if (!v.endsWith(".md")) return false;
+  return v.split("/").every((s) => s !== "" && s !== "." && s !== "..");
+}
 /**
  * Reads the transcript through a descriptor: no blocking open, no followed symlink, and the open
  * file must be a regular file.
@@ -132,8 +148,55 @@ export async function runWorker(deps) {
     }
   };
 
+  /**
+   * Acts on a validated result. The detail and the paths of the model are only shown in the log,
+   * never passed to the file system, the state or the queue.
+   * @param {ReturnType<typeof queue.list>[number]} job
+   * @param {string} sessionId
+   * @param {import("./lib/headless.mjs").CaptureResult} result
+   * @param {{ part: number }} decision
+   * @param {number} prompts
+   * @param {string | null} lineage
+   */
+  const handleResult = (job, sessionId, result, decision, prompts, lineage) => {
+    if (typeof result.detail !== "string" || !DETAIL.test(result.detail)) {
+      safeLog(sessionId, "invalid_detail");
+      queue.recordAttempt(job);
+      return;
+    }
+    const notes = [result.session_note, ...result.people_updated].filter(isNotePath);
+    const recipes = result.recipes.filter(isNotePath).length;
+    const record = (/** @type {number} */ part) => {
+      recordCapture(dataDir, { sessionId, lineage, userPrompts: prompts, part }, now());
+      queue.remove(job);
+    };
+    if (result.status === "saved") {
+      record(decision.part);
+      if (result.already_saved) safeLog(sessionId, "already_saved", { notes });
+      else safeLog(sessionId, "saved", { notes, recipes });
+    } else if (result.status === "nothing_to_save") {
+      record(decision.part - 1);
+      safeLog(sessionId, "nothing_to_save");
+    } else if (
+      result.status === "failed" ||
+      result.status === "mcp_unavailable" ||
+      result.status === "session_type_missing"
+    ) {
+      safeLog(sessionId, result.status);
+      queue.recordAttempt(job);
+    } else {
+      safeLog(sessionId, "headless_failed");
+      queue.recordAttempt(job);
+    }
+  };
+
   queue.sweep();
-  for (const job of queue.list()) {
+  const jobs = queue.list();
+  let lastTrigger = -1;
+  jobs.forEach((j, i) => {
+    if (j.data.event.reason !== "logout") lastTrigger = i;
+  });
+  for (const [i, job] of jobs.entries()) {
     const event = job.data.event;
     const sessionId = event.session_id;
     try {
@@ -142,6 +205,8 @@ export async function runWorker(deps) {
         queue.remove(job);
         continue;
       }
+      // a logout job waits until a newer job of another kind is queued
+      if (event.reason === "logout" && i > lastTrigger) continue;
       const area = resolveArea(
         {},
         { area: typeof job.data.area === "string" ? job.data.area : "" },
@@ -181,6 +246,8 @@ export async function runWorker(deps) {
         queue.remove(job);
         continue;
       }
+      const prompts = digest.userPrompts;
+      const lineage = digest.lineage;
       if (decision.fromPrompt > 0) digest = buildDigest(lines, { fromPrompt: decision.fromPrompt });
       const cwd = event.cwd;
       const progress = readProgress(cwd);
@@ -213,9 +280,7 @@ export async function runWorker(deps) {
         input,
       });
       if (outcome.ok) {
-        // T16 handles the result; until then a result counts as an attempt.
-        safeLog(sessionId, "capture_ok");
-        queue.recordAttempt(job);
+        handleResult(job, sessionId, outcome.result, decision, prompts, lineage);
       } else if (outcome.code === "api_helper_present") {
         safeLog(sessionId, outcome.code);
         queue.remove(job);
