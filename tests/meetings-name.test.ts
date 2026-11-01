@@ -138,6 +138,16 @@ describe("fallbacks", () => {
     expect(r.path).not.toContain("ghp_");
     expect(r.path).not.toContain("clone");
   });
+  it("a secret split by an invisible format character gives the untitled name", () => {
+    const secret = scrubTitle(6);
+    const split = `${secret.slice(0, 12)}${String.fromCodePoint(0x200b)}${secret.slice(12)}`;
+    // Neither the raw text nor the cleaned one (the character becomes a space) is a hit.
+    expect(scrub(split).hits.size).toBe(0);
+    expect(scrub(cleanTitle(split)).hits.size).toBe(0);
+    const r = meetingPath({ id: "e", title: split } as never, START, "work", cfg());
+    expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
+    expect(r.path).not.toContain("ghp_");
+  });
   it("a title that only matches the scrubber after cleaning gives the untitled name", () => {
     const card = ["4111", "1111", "1111", "1111"].join("/");
     const bearer = `Bearer\n${"abcdEFGH"}${"1234ijkl"}MNOP5678`;

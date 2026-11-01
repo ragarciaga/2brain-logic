@@ -31,7 +31,7 @@ import {
 } from "./scrub-note.js";
 import { createSourceIndex, type SourceIndex, sourceIdKey } from "./source-index.js";
 import { type FrontmatterVerdict, validateFrontmatter } from "./validate.js";
-import { writeMeetingInSlot } from "./write-meeting.js";
+import { type MeetingLink, writeMeetingInSlot } from "./write-meeting.js";
 
 export { type Redaction, type Scrubber, ScrubFailedError, scrubNote, toRedactions };
 
@@ -245,8 +245,10 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
  * properties of an existing one (`patch`), for moving one to the archive folder (`archive`), and for a meeting
  * recording (`writeMeeting`, in src/vault/write-meeting.ts: it skips short or empty recordings with
  * one log line, answers `already_stored` for a known source id, and otherwise stores the note at
- * a new path: scrub once, validate the scrubbed result once, create, commit `2brain: add meeting
- * <path>`, push). All
+ * a new path: look for the other version of the meeting and, on a match, name the note next to it
+ * and link both in one commit `2brain: add meeting <path> (version of <other path>)`; a taken path
+ * gets ` HH-MM`, and a path still taken is `NoteExistsError`; scrub once, validate the scrubbed
+ * result once, create, commit `2brain: add meeting <path>`, push). All
  * run on one queue (they share one working tree) and share the same steps: refuse a path that matches a scrub rule (`UnsafePathError`, before any git
  * work), pull with rebase (on a rebase conflict the sync in src/git/sync.ts keeps both versions:
  * the remote one at its path, the local one as `<name> (conflict YYYY-MM-DD).md`, scrubbed like
@@ -474,9 +476,29 @@ export function createNoteWriter({
    * Create a meeting note: the create branch of `writeOne` without adoption. Anything already at
    * the path is `NoteExistsError`. Returns the commit; a push that does not land is
    * `PushPendingError`.
+   *
+   * With `link`, a tracked note (the other version) is rewritten to `link.bytes` in the same
+   * commit: it must be a regular file (a symlink is `UnsafePathError`) whose bytes still equal
+   * `link.original` (else `NoteExistsError`). Both paths are staged and committed together with
+   * `message`. If that fails and HEAD did not move, both are unstaged, the new file is removed and
+   * the other note gets `link.original` back.
    */
-  async function createMeetingNote(path: string, bytes: string, message: string): Promise<string> {
+  async function createMeetingNote(
+    path: string,
+    bytes: string,
+    message: string,
+    link?: MeetingLink,
+  ): Promise<string> {
     const { target, parent, realRoot } = await resolveParent(path);
+    let linkTarget: string | undefined;
+    if (link !== undefined) {
+      const resolved = await resolveParent(link.path);
+      linkTarget = resolved.target;
+      const info = await lstat(linkTarget);
+      if (info.isSymbolicLink()) throw new UnsafePathError();
+      if (!info.isFile()) throw new NoteExistsError();
+      if (!(await readFile(linkTarget)).equals(link.original)) throw new NoteExistsError();
+    }
     let taken = true;
     try {
       await lstat(target);
@@ -503,17 +525,33 @@ export function createNoteWriter({
     }
     let commit: string;
     try {
-      commit = await git.commitFile(root, path, message, author);
+      if (link !== undefined && linkTarget !== undefined) {
+        await writeFile(linkTarget, link.bytes);
+        await git.addPaths(root, [path, link.path]);
+        commit = await git.commitPaths(root, [path, link.path], message, author);
+      } else {
+        commit = await git.commitFile(root, path, message, author);
+      }
     } catch (error) {
-      try {
-        if ((await git.headSha(root)) === head) {
-          await git.unstageFile(root, path);
+      // Only when HEAD did not move. Best effort, each step on its own, then the original error
+      // is rethrown.
+      const moved = await git.headSha(root).then(
+        (now) => now !== head,
+        () => true,
+      );
+      if (!moved) {
+        await git.unstageFile(root, path).catch(() => undefined);
+        try {
           await unlink(target).catch((e: NodeJS.ErrnoException) => {
             if (e.code !== "ENOENT") throw e;
           });
+        } catch {
+          // swallowed on purpose
         }
-      } catch {
-        // swallowed on purpose
+        if (link !== undefined && linkTarget !== undefined) {
+          await git.unstageFile(root, link.path).catch(() => undefined);
+          await writeFile(linkTarget, link.original).catch(() => undefined);
+        }
       }
       throw error;
     }
