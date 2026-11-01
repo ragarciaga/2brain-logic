@@ -182,7 +182,8 @@ type Header Auth:
 
 Replace `<INGEST_TOKEN>` with the value of `INGEST_TOKEN` from your `.env` file; setup never prints
 it. The ingest URL in your workflows is `http://brain:3000`, which works when n8n is on the same
-Docker network.
+Docker network. To connect Fireflies and Google Meet recordings, follow
+[GUIDE-meetings.md](GUIDE-meetings.md).
 
 ## Updates
 
