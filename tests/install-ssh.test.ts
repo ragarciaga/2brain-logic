@@ -1,11 +1,13 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -142,6 +144,25 @@ describe("pinGithubHostKey", () => {
     expect(readFileSync(join(dir, "known_hosts"), "utf8")).toBe(
       `github.com ssh-ed25519 ${githubKey}\n`,
     );
+  });
+
+  it.skipIf(process.platform === "win32")("does not write through a symlinked known_hosts", () => {
+    const target = join(dir, "target");
+    writeFileSync(target, "target-bytes");
+    symlinkSync(target, join(dir, "known_hosts"));
+    expect(() => pinGithubHostKey(dir, github, githubScan)).toThrow();
+    expect(readFileSync(target, "utf8")).toBe("target-bytes");
+  });
+
+  it("refuses a known_hosts that is a directory and leaves no temp file", () => {
+    mkdirSync(join(dir, "known_hosts"));
+    expect(() => pinGithubHostKey(dir, github, githubScan)).toThrow();
+    expect(readdirSync(dir)).toEqual(["known_hosts"]);
+  });
+
+  it("leaves no temp file after a successful write", () => {
+    pinGithubHostKey(dir, github, githubScan);
+    expect(readdirSync(dir)).toEqual(["known_hosts"]);
   });
 
   it("refuses any other host", () => {

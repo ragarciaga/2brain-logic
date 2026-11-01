@@ -502,6 +502,33 @@ describe("R7.3: nothing in the service deletes a vault file", () => {
       line: "if (ownsTemp) await unlink(temp).catch(() => undefined);",
       reason: "OAuth store temp file cleanup outside the vault",
     },
+    {
+      file: "install/ssh.ts",
+      line: "rmSync,",
+      reason: "import for the installer temp cleanup below",
+    },
+    {
+      file: "install/ssh.ts",
+      line: "unlinkSync,",
+      reason: "import for the installer rollback below",
+    },
+    {
+      file: "install/ssh.ts",
+      line: "rmSync(tmp, { force: true });",
+      reason: "installer known_hosts temp file in the project secrets dir, never a vault file",
+    },
+    {
+      file: "install/ssh.ts",
+      line: "rmSync(tmpDir, { recursive: true, force: true });",
+      reason:
+        "installer removes only the .keygen- temp dir it just created in secrets/, never a vault file",
+    },
+    {
+      file: "install/ssh.ts",
+      line: "unlinkSync(finalPub);",
+      reason:
+        "installer rolls back the deploy_key.pub it just renamed when the private key rename fails, never a vault file",
+    },
   ];
 
   it("finds exactly the allowlisted delete primitives in src/**", () => {
