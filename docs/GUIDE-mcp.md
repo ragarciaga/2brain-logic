@@ -114,11 +114,16 @@ The menu names below can change; check the client's current docs if a label does
 ### Claude Code
 
 ```bash
-claude mcp add --transport http brain https://brain.example.com/mcp
+claude mcp add --scope user --transport http brain <PUBLIC_BASE_URL>/mcp
 ```
 
+User scope makes the server available in every project, and the headless capture session of the
+2brain plugin needs that: it runs outside your project, so a server added only for one project would
+not be visible to it. See [docs/GUIDE-plugin.md](GUIDE-plugin.md).
+
 Then start Claude Code, run `/mcp`, pick the server and follow the sign-in in the browser with your
-passphrase. Check it works by asking for a `search`.
+passphrase. From a terminal, `claude mcp login brain` does the same sign-in. Check it works by
+asking for a `search`.
 
 ### Codex or ChatGPT
 
