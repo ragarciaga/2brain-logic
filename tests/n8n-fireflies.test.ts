@@ -21,12 +21,13 @@ function str(value: unknown): string {
 }
 
 /** Evaluates an n8n `={{ ... }}` expression with a fake `$` and `$json`. */
-function evalExpr(expr: string, json: unknown, nodes: Record<string, unknown>): unknown {
+function evalExpr(expr: string, json: unknown, nodes: Record<string, unknown>, index = 0): unknown {
   const m = /^=\{\{\s*([\s\S]*?)\s*\}\}$/.exec(expr);
   if (!m) throw new Error("not an expression");
   const dollar = (name: string) => ({
     isExecuted: name in nodes,
-    first: () => ({ json: nodes[name] }),
+    first: () => ({ json: Array.isArray(nodes[name]) ? nodes[name][0] : nodes[name] }),
+    item: { json: Array.isArray(nodes[name]) ? nodes[name][index] : nodes[name] },
   });
   return new Function("$", "$json", `return (${m[1]});`)(dollar, json);
 }
@@ -86,9 +87,23 @@ describe("meetings-fireflies template", () => {
   });
 
   it("webhook passes only Transcription completed", () => {
-    const cond = JSON.stringify(nodeByName(t, "Completed only").parameters);
-    expect(cond).toContain('"rightValue":"Transcription completed"');
-    expect(cond).toContain("$json.body.eventType");
+    const params = nodeByName(t, "Completed only").parameters as {
+      conditions: {
+        combinator: string;
+        conditions: { leftValue: string; rightValue: string; operator: unknown }[];
+      };
+    };
+    expect(params.conditions.combinator).toBe("and");
+    expect(params.conditions.conditions).toHaveLength(1);
+    const [c] = params.conditions.conditions;
+    expect(c.leftValue).toBe("={{ $json.body.eventType }}");
+    expect(c.rightValue).toBe("Transcription completed");
+    expect(c.operator).toEqual({ type: "string", operation: "equals" });
+    const passes = (eventType?: string) =>
+      evalExpr(c.leftValue, { body: { eventType } }, {}) === c.rightValue;
+    expect(passes("Transcription completed")).toBe(true);
+    expect(passes("Transcription started")).toBe(false);
+    expect(passes(undefined)).toBe(false);
     expect(t.connections["Completed only"].main).toHaveLength(1);
     expect(reachable(t, "Completed only", 0).has(FETCH)).toBe(true);
     expect(reachable(t, "Completed only", 1).size).toBe(0);
@@ -182,6 +197,25 @@ describe("meetings-fireflies template", () => {
     );
     expect(poll.calendar_events[0].calendar_id).toBe("primary");
     expect(JSON.parse(evalExpr(body, {}, nodes) as string).calendar_events).toEqual([]);
+  });
+
+  it("each item uses its own paired transcript", () => {
+    const fetched = [
+      { data: { transcript: { id: "a", date: 3_600_000, duration: 10 } } },
+      { data: { transcript: { id: "b", date: 7_200_000, duration: 20 } } },
+    ];
+    const nodes = { [FETCH]: fetched, Settings: { calendar_id: "primary" } };
+    const p = nodeByName(t, CALENDAR).parameters as {
+      queryParameters: { parameters: { name: string; value: string }[] };
+    };
+    const q = Object.fromEntries(p.queryParameters.parameters.map((x) => [x.name, x.value]));
+    expect(evalExpr(q.timeMin, {}, nodes, 1)).toBe(new Date(7_200_000 - 1_800_000).toISOString());
+    expect(evalExpr(q.timeMax, {}, nodes, 1)).toBe(
+      new Date(7_200_000 + 1_200_000 + 1_800_000).toISOString(),
+    );
+    const body = nodeByName(t, POST).parameters?.jsonBody as string;
+    const out = JSON.parse(evalExpr(body, { items: [] }, nodes, 1) as string);
+    expect(out.transcript.id).toBe("b");
   });
 
   it("calendar window and URL", () => {

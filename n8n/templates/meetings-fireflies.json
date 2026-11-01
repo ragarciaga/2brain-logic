@@ -184,11 +184,11 @@
             },
             {
               "name": "timeMin",
-              "value": "={{ new Date($('Fetch transcript').first().json.data.transcript.date - 30 * 60000).toISOString() }}"
+              "value": "={{ new Date($('Fetch transcript').item.json.data.transcript.date - 30 * 60000).toISOString() }}"
             },
             {
               "name": "timeMax",
-              "value": "={{ new Date($('Fetch transcript').first().json.data.transcript.date + $('Fetch transcript').first().json.data.transcript.duration * 60000 + 30 * 60000).toISOString() }}"
+              "value": "={{ new Date($('Fetch transcript').item.json.data.transcript.date + $('Fetch transcript').item.json.data.transcript.duration * 60000 + 30 * 60000).toISOString() }}"
             }
           ]
         },
@@ -219,7 +219,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ source: \"fireflies\", transcript: $('Fetch transcript').first().json.data.transcript, calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: ($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary') })) }) }}",
+        "jsonBody": "={{ JSON.stringify({ source: \"fireflies\", transcript: $('Fetch transcript').item.json.data.transcript, calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: ($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary') })) }) }}",
         "options": {}
       },
       "name": "Post meeting",
