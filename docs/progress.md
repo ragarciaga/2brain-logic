@@ -3,7 +3,7 @@
 Updated: 2026-11-01
 
 ## Current objective
-F4 installer (docs/specs/04-installer/): `setup` and `doctor` run in the service container, one install guide from a fresh host to a note saved from claude.ai. F1, F2 and F3 are merged; F3 manual checks T21 to T26 (#109 to #114) wait for the owner.
+F5 meetings without LLM (docs/specs/05-meetings/): Fireflies and Gemini transcripts from n8n stored deterministically, both versions of a meeting linked, zero LLM calls. Backlog: 20 tasks, issues #196 to #215 (T19, T20 manual). F1 to F4 are merged; F4 manual checks T23 (#168) and T24 (#169) and F3 manual checks (#109 to #114) wait for the owner.
 
 ## Current state
 - Works: walking skeleton (PR #10) plus F1 tasks merged: strict vault config and template (T1), INGEST_TOKEN required (T2), bearer token on every route except `GET /health` (T3), Windows-safe paths and literal pathspecs (T4), frontmatter validator (T6), config re-read after each pull with 503 `config_invalid` (T7), frontmatter validated on create with 400 (T8), `init-vault` (T16), template in the image and compose healthcheck (T17).
@@ -11,6 +11,10 @@ F4 installer (docs/specs/04-installer/): `setup` and `doctor` run in the service
 - Done: T5 scrubber (#69) and T9 scrub on create (#72); paths with a secret are refused. Idempotent create and source id dedupe done (T10, #74). Rebase conflicts keep both versions (T11, #77). Push retry and pending-commit delivery done (T12, #79). IBAN length table unverified against a named SWIFT release (#41, rb:needs-local).
 
 ## Key decisions
+- 2026-11-01: the two versions of a meeting are two linked notes, see docs/adr/0018-meeting-versions-as-linked-notes.md
+- 2026-11-01: meeting ingest contract (service maps the source API shapes), see docs/adr/0019-meeting-ingest-contract.md
+- 2026-11-01: optional `meetings` section in the vault config, see docs/adr/0020-meetings-config-section.md
+- 2026-11-01: Fireflies stays on the owner's current plan (USD 0); n8n polls when webhooks are not available
 - 2026-10-31: TypeScript on Node.js 24 with Hono and the MCP SDK, see docs/adr/0001-stack.md
 - 2026-10-31: workflow, not agent, see docs/adr/0002-workflow-vs-agent.md
 - 2026-10-31: thin n8n, logic in the service, see docs/adr/0003-thin-n8n.md
