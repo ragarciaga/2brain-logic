@@ -79,6 +79,14 @@ describe("createLocalChecks", () => {
       });
     });
 
+    it("fails when .env is a directory", async () => {
+      mkdirSync(path.join(dir, ".env"));
+      expect(await checks().run("env_file")).toEqual({
+        status: "fail",
+        fix: "no .env in the project directory: run docker compose run --rm setup",
+      });
+    });
+
     it.skipIf(!posix).each([0o640, 0o604])("fails at mode %o", async (mode) => {
       put(".env", mode);
       expect(await checks().run("env_file")).toEqual({ status: "fail", fix: "chmod 600 .env" });
@@ -144,6 +152,13 @@ describe("createLocalChecks", () => {
 
     it("defaults to n8n", async () => {
       const out = await checks({ lookup: reject }).run("network");
+      expect((out as { fix: string }).fix).toContain("docker network create n8n,");
+    });
+
+    it("falls back to n8n for a blank N8N_NETWORK", async () => {
+      const out = await checks({ env: { ...OK_ENV, N8N_NETWORK: "  " }, lookup: reject }).run(
+        "network",
+      );
       expect((out as { fix: string }).fix).toContain("docker network create n8n,");
     });
 

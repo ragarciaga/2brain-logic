@@ -209,4 +209,17 @@ describe("runner hardening", () => {
       expect(stubs.get(id)?.calls.count).toBe(0);
     }
   });
+
+  it("redacts a bare user of 8 characters but not one of 7", () => {
+    const remote = (user: string) => ["ssh", "://", user, "@host.example.com/x.git"].join("");
+    expect(redactSecrets("denied for deployus", { VAULT_REMOTE: remote("deployus") })).toBe(
+      "denied for <redacted>",
+    );
+    expect(redactSecrets("denied for deploys", { VAULT_REMOTE: remote("deploys") })).toBe(
+      "denied for deploys",
+    );
+    expect(redactSecrets("denied for deploy", { VAULT_REMOTE: remote("deploy") })).toBe(
+      "denied for deploy",
+    );
+  });
 });
