@@ -333,9 +333,10 @@ describe("rollback resets the index", () => {
     await expectBothAtHead(GM_PATH);
   });
 
-  it("headSha failing twice in the rollback still resets the index (worktree may stay dirty)", async () => {
+  it("headSha failing twice in the rollback resets the index and keeps the worktree as is", async () => {
     await post(makeApp(), firefliesBody());
     const before = headNow();
+    const firstBytes = file(FF_PATH);
     let armed = false;
     const app = makeApp({
       git: {
@@ -353,6 +354,9 @@ describe("rollback resets the index", () => {
     expect(second.status).toBe(500);
     expect(staged()).toBe("");
     expect(headNow()).toBe(before);
+    // HEAD unknown: nothing is removed or reverted, so a landed commit is never undone.
+    expect(existsSync(join(fixture.vaultDir, GM_PATH))).toBe(true);
+    expect(file(FF_PATH)).not.toBe(firstBytes);
   });
 
   it("headSha failing once in the rollback still restores the worktree and the next request links", async () => {
