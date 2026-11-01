@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHECK_IDS } from "../src/install/doctor.js";
+import { SETUP_USAGE } from "../src/install/setup.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const read = (name: string): string => readFileSync(resolve(ROOT, name), "utf8");
@@ -176,7 +177,7 @@ describe("docs/INSTALL.md", () => {
     }
     for (const id of CHECK_IDS) {
       it(`names doctor check ${id}`, () => {
-        expect(trouble).toContain(`fail ${id}`);
+        expect(trouble).toContain(`fail  ${id}`);
       });
     }
 
@@ -232,6 +233,17 @@ describe("docs/INSTALL.md", () => {
       );
       expect([...names].filter((n) => !headings.has(n))).toEqual([]);
     });
+  });
+
+  it("shows the exact usage text and a command that prints it", () => {
+    const runSetup = section(guide, "Run setup");
+    expect(runSetup).toContain(`setup: missing_answers: ${SETUP_USAGE}`);
+    expect(runSetup).toContain("docker compose run --rm setup --non-interactive --help");
+  });
+
+  it("says which prompts need a public base URL", () => {
+    const runSetup = section(guide, "Run setup").replace(/\s+/g, " ");
+    expect(runSetup.match(/Asked only when you gave a public base URL/g)?.length).toBe(3);
   });
 
   it("has no em dash", () => {

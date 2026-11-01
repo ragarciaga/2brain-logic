@@ -50,9 +50,12 @@ Setup asks, in this order:
 2. The author name for commits.
 3. The author email for commits.
 4. The public base URL, for example `https://brain.example.com`. Leave it empty to keep MCP off.
-5. How many reverse proxies sit in front of the service (normally `1`).
-6. Whether to keep the current passphrase (asked only when one is already stored).
-7. The owner passphrase and a repeat. Nothing is echoed. Use at least 12 characters.
+5. How many reverse proxies sit in front of the service (normally `1`). Asked only when you gave
+   a public base URL.
+6. Whether to keep the current passphrase. Asked only when you gave a public base URL and a
+   passphrase is already stored.
+7. The owner passphrase and a repeat. Nothing is echoed. Use at least 12 characters. Asked only
+   when you gave a public base URL and are not keeping the stored passphrase.
 8. The Docker network name.
 9. A host fingerprint confirmation (only for hosts other than github.com).
 10. A pause until you have added the deploy key (next section).
@@ -61,8 +64,19 @@ Setup writes `.env` (readable only by you) and a `secrets/` directory, generates
 and stores only a hash of your passphrase. It never prints the token. It is safe to run again: it
 keeps your answers and key, and changes nothing when nothing changed.
 
-For scripted installs, add flags after the service name. Run
-`docker compose run --rm setup --non-interactive` without the other flags to see the usage line.
+For scripted installs, add flags after the service name. To see the flags, give an option setup
+does not know:
+
+```bash
+docker compose run --rm setup --non-interactive --help
+```
+
+It prints one line in this form (without the first two words if you run `node dist/cli.js setup`
+directly) and exits with code 2:
+
+```text
+setup: missing_answers: usage: node dist/cli.js setup [--project-dir <dir>] [--vault-dir <dir>] | node dist/cli.js setup --non-interactive --remote <git-ssh-url> --author-name <name> --author-email <email> [--public-base-url <url> (--passphrase-stdin | --keep-passphrase)] [--host-fingerprint <SHA256:...>]
+```
 
 ## Add the deploy key
 
@@ -182,8 +196,9 @@ Your `.env`, `secrets/` and vault are kept.
 
 ## Troubleshooting
 
-Setup prints one line per result in the form `setup: <code>: <fix>`. Doctor prints `fail <id>` with
-a `fix:` line. Find the code or id below.
+Setup prints one line per result in the form `setup: <code>: <fix>`. Doctor prints `fail`, then
+the check id after two spaces, then a `fix:` line. Below, each doctor check is listed as
+`fail  <id>` with the same two spaces. Find the code or id below.
 
 ### Setup codes
 
@@ -222,28 +237,28 @@ a `fix:` line. Find the code or id below.
 
 ### Doctor checks
 
-- `fail env`: a variable in `.env` is missing or invalid. The fix line names it. Correct `.env` or
+- `fail  env`: a variable in `.env` is missing or invalid. The fix line names it. Correct `.env` or
   re-run setup.
-- `fail env_file`: `.env` is missing or readable by others. Run `chmod 600 .env`.
-- `fail secrets`: a file in `secrets/` is missing or too open. Re-run setup, or `chmod 600` the
+- `fail  env_file`: `.env` is missing or readable by others. Run `chmod 600 .env`.
+- `fail  secrets`: a file in `secrets/` is missing or too open. Re-run setup, or `chmod 600` the
   files.
-- `fail network`: the name `brain` does not resolve. Create the network with
+- `fail  network`: the name `brain` does not resolve. Create the network with
   `docker network create n8n` (or your `N8N_NETWORK`) and run `docker compose up -d`.
-- `fail remote_reachable`: the vault repository could not be reached. Check the deploy key and the
+- `fail  remote_reachable`: the vault repository could not be reached. Check the deploy key and the
   host key in `secrets/known_hosts`.
-- `fail remote_pushable`: the deploy key has no write access. Enable write access on the deploy
+- `fail  remote_pushable`: the deploy key has no write access. Enable write access on the deploy
   key. This check uses `git push --dry-run`, which cannot see branch protection or pre-receive
   hooks, so those refusals appear later as `push_refused` on the first real push.
-- `fail vault_config`: there is no vault clone, or its config is invalid. Fix the file named, or
+- `fail  vault_config`: there is no vault clone, or its config is invalid. Fix the file named, or
   re-run setup.
-- `fail ingest_health`: the service does not answer on its internal port. Run `docker compose ps`
+- `fail  ingest_health`: the service does not answer on its internal port. Run `docker compose ps`
   and `docker compose logs brain`.
-- `fail mcp_internal`: the MCP listener does not answer or reports another address. Check
+- `fail  mcp_internal`: the MCP listener does not answer or reports another address. Check
   `PUBLIC_BASE_URL` and the logs.
-- `fail proxy_metadata`: the public address did not serve the sign-in metadata over HTTPS. Check
+- `fail  proxy_metadata`: the public address did not serve the sign-in metadata over HTTPS. Check
   the certificate and the proxy rules in the Proxy section. If your host cannot reach its own
   public address from inside a container, run the same request from another machine.
-- `fail proxy_mcp`: the public `/mcp` did not answer 401 without a token. Forward all six paths
+- `fail  proxy_mcp`: the public `/mcp` did not answer 401 without a token. Forward all six paths
   listed in the Proxy section to `brain:3001`.
 
 ### Other problems
