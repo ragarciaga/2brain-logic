@@ -5,6 +5,7 @@ import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { posix, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { gitSshCommand } from "../src/install/ssh.js";
 import { createApp } from "../src/server/app.js";
 import { startServer } from "../src/server/start.js";
 import { parseYamlConfig } from "../src/vault/frontmatter.js";
@@ -335,8 +336,13 @@ describe("compose isolation and memory", () => {
     expect(brainService().mem_limit).toBe("512m");
   });
 
-  it("publishes no ports", () => {
-    expect(Object.hasOwn(brainService(), "ports")).toBe(false);
+  it("publishes no ports in any service", () => {
+    const services = composeFile().services;
+    const names = isRecord(services) ? Object.keys(services) : [];
+    expect(names).toEqual(expect.arrayContaining(["brain", "setup", "doctor"]));
+    for (const name of names) {
+      expect(Object.hasOwn(service(name), "ports")).toBe(false);
+    }
   });
 
   it("joins only the n8n network", () => {
@@ -383,9 +389,13 @@ describe("compose tools services (setup and doctor)", () => {
   it("joins doctor to the n8n network with the .env file and the image user", () => {
     const doctor = service("doctor");
     expect(doctor.networks).toEqual(["n8n"]);
-    expect(doctor.env_file).toBe(".env");
+    expect(doctor.env_file).toEqual([{ path: ".env", required: false }]);
     expect(Object.hasOwn(doctor, "user")).toBe(false);
     expect(Object.hasOwn(doctor, "ports")).toBe(false);
+  });
+
+  it("makes the .env file optional for brain", () => {
+    expect(brainService().env_file).toEqual([{ path: ".env", required: false }]);
   });
 
   it("gives brain the secrets mount read-only next to vault and auth", () => {
@@ -420,6 +430,49 @@ describe("compose tools services (setup and doctor)", () => {
       for (const entry of Array.isArray(volumes) ? volumes : []) {
         expect(JSON.stringify(entry)).not.toContain("docker.sock");
       }
+    }
+  });
+});
+
+describe("compose git ssh command", () => {
+  const gitSshOf = (name: string): unknown => {
+    const environment = service(name).environment;
+    return isRecord(environment) ? environment.GIT_SSH_COMMAND : undefined;
+  };
+  const flags = (dir: string): string[] => [
+    `-i ${dir}/deploy_key`,
+    "IdentitiesOnly=yes",
+    `UserKnownHostsFile=${dir}/known_hosts`,
+    "StrictHostKeyChecking=yes",
+    "BatchMode=yes",
+    "ConnectTimeout=10",
+    "ServerAliveInterval=5",
+    "ServerAliveCountMax=2",
+  ];
+
+  it("defines x-git-ssh as the command for /run/2brain", () => {
+    expect(composeFile()["x-git-ssh"]).toBe(gitSshCommand("/run/2brain"));
+  });
+
+  it("gives brain and doctor the x-git-ssh command", () => {
+    expect(gitSshOf("brain")).toBe(gitSshCommand("/run/2brain"));
+    expect(gitSshOf("doctor")).toBe(gitSshCommand("/run/2brain"));
+  });
+
+  it("gives setup the command for /project/secrets", () => {
+    expect(gitSshOf("setup")).toBe(gitSshCommand("/project/secrets"));
+  });
+
+  it("carries every key, host and timeout flag in all three services", () => {
+    const dirs: Record<string, string> = {
+      brain: "/run/2brain",
+      doctor: "/run/2brain",
+      setup: "/project/secrets",
+    };
+    for (const [name, dir] of Object.entries(dirs)) {
+      const value = String(gitSshOf(name));
+      for (const flag of flags(dir)) expect(value).toContain(flag);
+      expect(value).not.toContain("$");
     }
   });
 });

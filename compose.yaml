@@ -1,11 +1,16 @@
+x-git-ssh: &git-ssh "ssh -i /run/2brain/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/run/2brain/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
+
 services:
   brain:
     build: .
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       VAULT_DIR: /data/vault
       HOST: 0.0.0.0
       AUTH_STORE_DIR: /data/auth
+      GIT_SSH_COMMAND: *git-ssh
     mem_limit: 512m
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
@@ -28,6 +33,7 @@ services:
     entrypoint: ["node", "dist/cli.js", "setup"]
     environment:
       VAULT_DIR: /data/vault
+      GIT_SSH_COMMAND: "ssh -i /project/secrets/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/project/secrets/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
     volumes:
       - .:/project
       - vault:/data/vault
@@ -36,10 +42,13 @@ services:
     build: .
     profiles:
       - tools
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     entrypoint: ["node", "dist/cli.js", "doctor"]
     environment:
       VAULT_DIR: /data/vault
+      GIT_SSH_COMMAND: *git-ssh
     volumes:
       - .:/project:ro
       - ./secrets:/run/2brain:ro
