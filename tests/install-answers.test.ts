@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AnswerField,
   type AnswerResult,
+  isEnvWritableName,
   parseSshRemote,
   renderAnswerError,
   validateAuthorEmail,
@@ -145,6 +146,57 @@ describe("validatePassphrase", () => {
   });
 });
 
+describe("validateAuthorName extra rules", () => {
+  it("refuses a whitespace-only name", () => {
+    for (const bad of [" ", "   ", "\u00a0", "\u3000"]) {
+      const error = failure(validateAuthorName(bad));
+      expect(error).toEqual({ field: "author name", rule: "must not be empty" });
+    }
+  });
+  it("refuses bidi and zero-width characters", () => {
+    for (const bad of [
+      "a\u202eb",
+      "a\u202ab",
+      "a\u2066b",
+      "a\u2069b",
+      "a\u061cb",
+      "a\u200bb",
+      "a\u200fb",
+      "a\ufeffb",
+    ]) {
+      const error = failure(validateAuthorName(bad));
+      expect(error.field).toBe("author name");
+      expect(error.rule).toBe("must not contain direction-control or zero-width characters");
+    }
+    expect(validateAuthorName("Ana Pérez").ok).toBe(true);
+  });
+});
+
+describe("isEnvWritableName", () => {
+  it("accepts plain names and each quote form", () => {
+    for (const ok of ["Ana Perez", "O'Brien", 'Ana "Nick" Perez', "Ana $Perez", "dom\\ana"]) {
+      expect(isEnvWritableName(ok)).toBe(true);
+      expect(validateAuthorName(ok).ok).toBe(true);
+    }
+  });
+  it("refuses a name that fits no .env form", () => {
+    for (const bad of [
+      "O'Brien $x",
+      `O'Brien "x"`,
+      "O'Brien\\x",
+      "Ana Perez\\",
+      "a b\\c",
+      "a\nb",
+      "a\rb",
+    ]) {
+      expect(isEnvWritableName(bad)).toBe(false);
+      const error = failure(validateAuthorName(bad));
+      expect(error.field).toBe("author name");
+      expect(leaks(renderAnswerError(error), bad)).toBe(false);
+    }
+  });
+});
+
 describe("parseSshRemote", () => {
   it("accepts the scp form", () => {
     expect(parseSshRemote("git@github.com:owner/vault.git")).toEqual({
@@ -186,6 +238,19 @@ describe("parseSshRemote", () => {
       "git@[::1]:x",
       "ssh://git@[::1]/x",
       "ssh://git@host:+22/x",
+    ]) {
+      expect(parseSshRemote(bad)).toEqual(refusal);
+    }
+  });
+  it("refuses control, bidi and zero-width characters anywhere", () => {
+    for (const bad of [
+      "ssh://git@host/x\u0001y",
+      "git@host:x\u0085y",
+      "git@host:x\u202ey",
+      "ssh://git@host/x\u200by",
+      "git@host:x\u2066y",
+      "git@host:x\ufeffy",
+      "git@host:caf\u00e9",
     ]) {
       expect(parseSshRemote(bad)).toEqual(refusal);
     }
