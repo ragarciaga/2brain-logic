@@ -179,6 +179,23 @@ describe("writeMeeting queue and config", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
+  it("the skips run before the source lookup", async () => {
+    pushFiles(fixture, { "work/meetings/a.md": storedMeeting("fireflies:01EXAMPLEID") });
+    const lookup = vi.fn(createSourceIndex().lookup);
+    const writer = makeWriter({ sourceIndex: { lookup } });
+    expect(await writer.writeMeeting(meetingInput(2))).toEqual({
+      ok: true,
+      commit: null,
+      skipped: "too_short",
+    });
+    expect(
+      await writer.writeMeeting(
+        meetingInput(46, { segments: [{ speaker: "Ana Example", offsetSeconds: 0, text: " " }] }),
+      ),
+    ).toEqual({ ok: true, commit: null, skipped: "empty_transcript" });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it("the meeting setup is checked before the skips", async () => {
     pushFiles(fixture, { ".2brain/config.yaml": "types:\n  scrap:\n    value: scrap-note\n" });
     const error = await makeWriter()

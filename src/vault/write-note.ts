@@ -290,7 +290,7 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
 
 /**
  * Create the single write path into the vault, for creating a note (`write`), for setting
- * properties of an existing one (`patch`) for moving one to the archive folder (`archive`) and for a meeting
+ * properties of an existing one (`patch`), for moving one to the archive folder (`archive`), and for a meeting
  * recording (`writeMeeting`, in src/vault/write-meeting.ts: it skips short or empty recordings with
  * one log line, and answers `already_stored` for a known source id). All
  * run on one queue (they share one working tree) and share the same steps: refuse a path that matches a scrub rule (`UnsafePathError`, before any git
