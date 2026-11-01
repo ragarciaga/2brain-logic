@@ -280,6 +280,9 @@ export async function commitPaths(
 /** Upper bound for a command that talks to a remote during setup and doctor. */
 export const REMOTE_TIMEOUT_MS = 15_000;
 
+/** Upper bound for a setup push: a re-run may push more than a seed commit. */
+export const PUSH_TIMEOUT_MS = 60_000;
+
 /** Upper bound for the setup clone: a large vault can take far longer than a ls-remote. */
 export const CLONE_TIMEOUT_MS = 120_000;
 
@@ -339,16 +342,25 @@ function assertBranchName(branch: string): void {
 }
 
 /**
- * Push HEAD to `branch` on origin. A name that is empty, starts with `-` or contains `:` or `..`
+ * Push HEAD to `branch` on origin, bounded by `timeoutMs`: a timed-out push fails with
+ * `GitError("push", null)`. A name that is empty, starts with `-` or contains `:` or `..`
  * is rejected with a plain `Error` before git runs.
  */
 export async function pushBranch(
   dir: string,
   branch: string,
   env: Record<string, string> = {},
+  timeoutMs: number = PUSH_TIMEOUT_MS,
 ): Promise<void> {
   assertBranchName(branch);
-  await runGit(dir, ["push", "origin", `HEAD:refs/heads/${branch}`], env);
+  await runGit(dir, ["push", "origin", `HEAD:refs/heads/${branch}`], env, { timeoutMs });
+}
+
+/** Number of local commits on HEAD that `origin/<branch>` does not have. Local only, no network. */
+export async function commitsAhead(dir: string, branch: string): Promise<number> {
+  assertBranchName(branch);
+  const out = await runGit(dir, ["rev-list", "--count", `refs/remotes/origin/${branch}..HEAD`]);
+  return Number(out);
 }
 
 /** The URL of the `origin` remote. */

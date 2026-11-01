@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,11 +6,13 @@ import {
   CLONE_TIMEOUT_MS,
   classifyRemoteError,
   cloneInto,
+  commitsAhead,
   currentBranch,
   GitError,
   hasCommits,
   lsRemote,
   originUrl,
+  PUSH_TIMEOUT_MS,
   pushBranch,
   pushDryRun,
 } from "../src/git/index.js";
@@ -43,17 +45,48 @@ describe("installer git functions", () => {
   it("cloneInto fails with GitError and a null exit code when the transport hangs", async () => {
     // A fake ssh that sleeps: the clone cannot finish before the timeout kills it.
     const dir = mkdtempSync(join(tmpdir(), "2brain-fakessh-"));
-    const script = join(dir, "hang.sh");
-    writeFileSync(script, "#!/bin/sh\nexec sleep 3\n");
-    const err = await cloneInto(
-      "ssh://git@example.com/vault.git",
-      join(fixture.root, "slow"),
-      { GIT_SSH_COMMAND: `sh ${script}` },
-      200,
-    ).catch((e) => e);
-    expect(err).toBeInstanceOf(GitError);
-    expect(err.exitCode).toBeNull();
-    expect(classifyRemoteError(err)).toBe("remote_unreachable");
+    try {
+      const script = join(dir, "hang.sh");
+      writeFileSync(script, "#!/bin/sh\nexec sleep 3\n");
+      const err = await cloneInto(
+        "ssh://git@example.com/vault.git",
+        join(fixture.root, "slow"),
+        { GIT_SSH_COMMAND: `sh ${script}` },
+        200,
+      ).catch((e) => e);
+      expect(err).toBeInstanceOf(GitError);
+      expect(err.exitCode).toBeNull();
+      expect(classifyRemoteError(err)).toBe("remote_unreachable");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("PUSH_TIMEOUT_MS is 60 seconds", () => {
+    expect(PUSH_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("pushBranch fails with a null exit code when the transport hangs", async () => {
+    commitLocal();
+    git(clone, ["remote", "set-url", "origin", "ssh://git@example.com/vault.git"]);
+    const dir = mkdtempSync(join(tmpdir(), "2brain-fakessh-"));
+    try {
+      const script = join(dir, "hang.sh");
+      writeFileSync(script, "#!/bin/sh\nexec sleep 3\n");
+      const err = await pushBranch(clone, "main", { GIT_SSH_COMMAND: `sh ${script}` }, 200).catch(
+        (e) => e,
+      );
+      expect(err).toBeInstanceOf(GitError);
+      expect(err.exitCode).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("commitsAhead is 0 on a fresh clone and 1 after a local commit", async () => {
+    expect(await commitsAhead(clone, "main")).toBe(0);
+    commitLocal();
+    expect(await commitsAhead(clone, "main")).toBe(1);
   });
 
   it("hasCommits is false on an empty clone and true after a commit", async () => {
