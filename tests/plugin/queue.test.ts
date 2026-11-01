@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createQueue } from "../../plugin/scripts/lib/queue.mjs";
+import { createLock, createQueue } from "../../plugin/scripts/lib/queue.mjs";
 
 const DAY = 86400000;
 const NOW = Date.parse("2026-10-31T12:00:00.000Z");
@@ -269,5 +269,147 @@ describe("entries that are not regular files", () => {
     lutimesSync(link, (NOW - 40 * DAY) / 1000, (NOW - 40 * DAY) / 1000);
     q.sweep();
     expect(readdirSync(join(dir, "failed"))).toEqual(["old-link.json"]);
+  });
+});
+
+describe("createLock", () => {
+  const MIN = 60000;
+  const lockPath = () => join(dir, "capture.lock");
+  const plant = (body: string, ageMs = 0) => {
+    writeFileSync(lockPath(), body);
+    const t = (NOW - ageMs) / 1000;
+    utimesSync(lockPath(), t, t);
+  };
+  const planted = (pid: number, ageMs: number) =>
+    plant(JSON.stringify({ pid, startedAt: new Date(NOW - ageMs).toISOString() }), ageMs);
+  const lock = (
+    pid: number,
+    isAlive: (pid: number) => boolean = () => true,
+    fs?: Parameters<typeof createLock>[0]["fs"],
+  ) => createLock({ dataDir: dir, now: () => clock, pid, isAlive, fs });
+
+  it("creates the file exclusively with pid and startedAt, and a second acquire fails", () => {
+    const a = lock(1001);
+    expect(a.acquire()).toBe(true);
+    expect(JSON.parse(readFileSync(lockPath(), "utf8"))).toStrictEqual({
+      pid: 1001,
+      startedAt: new Date(NOW).toISOString(),
+    });
+    if (posix) expect(statSync(lockPath()).mode & 0o777).toBe(0o600);
+    expect(lock(1002).acquire()).toBe(false);
+    expect(JSON.parse(readFileSync(lockPath(), "utf8")).pid).toBe(1001);
+  });
+
+  it("creates with the wx flag", () => {
+    const calls: unknown[] = [];
+    const real = writeFileSync;
+    const b = lock(1002, () => true, {
+      writeFileSync: ((path: string, data: string, opts: unknown) => {
+        calls.push(opts);
+        return real(path, data, opts as never);
+      }) as never,
+    });
+    expect(b.acquire()).toBe(true);
+    expect(calls[0]).toMatchObject({ flag: "wx" });
+  });
+
+  it("takes over a 16-minute lock and respects a 14-minute one", () => {
+    planted(1001, 14 * MIN);
+    expect(lock(1002).acquire()).toBe(false);
+    planted(1001, 16 * MIN);
+    expect(lock(1002).acquire()).toBe(true);
+    expect(JSON.parse(readFileSync(lockPath(), "utf8")).pid).toBe(1002);
+    expect(existsSync(`${lockPath()}.takeover`)).toBe(false);
+  });
+
+  it("takes over a lock whose pid is dead at any age", () => {
+    planted(1001, MIN);
+    expect(lock(1002, (pid) => pid !== 1001).acquire()).toBe(true);
+  });
+
+  it("treats a lock with our own pid as stale", () => {
+    planted(1002, MIN);
+    expect(lock(1002).acquire()).toBe(true);
+  });
+
+  it("holds unparseable content while its mtime is fresh and takes it over when old", () => {
+    plant("not json", 14 * MIN);
+    expect(lock(1002).acquire()).toBe(false);
+    plant("not json", 16 * MIN);
+    expect(lock(1002).acquire()).toBe(true);
+    plant('{"pid":"x"}', MIN);
+    expect(lock(1003).acquire()).toBe(false);
+  });
+
+  it("lets only one of two workers that find the same stale lock acquire it", () => {
+    planted(1001, 16 * MIN);
+    let b: ReturnType<typeof createLock> | undefined;
+    let bResult: boolean | undefined;
+    let reads = 0;
+    const realRead = readFileSync;
+    const a = lock(1002, () => true, {
+      readFileSync: ((path: string, enc: string) => {
+        const text = realRead(path, enc as never);
+        if (++reads === 1) bResult = b?.acquire();
+        return text;
+      }) as never,
+    });
+    b = lock(1003);
+    const aResult = a.acquire();
+    expect([aResult, bResult].filter(Boolean)).toHaveLength(1);
+    expect(bResult).toBe(true);
+    expect(aResult).toBe(false);
+    expect(JSON.parse(readFileSync(lockPath(), "utf8")).pid).toBe(1003);
+  });
+
+  it("removes a takeover mutex over 15 minutes old and refuses a fresh one", () => {
+    planted(1001, 16 * MIN);
+    writeFileSync(`${lockPath()}.takeover`, "x");
+    expect(lock(1002).acquire()).toBe(false);
+    const t = (NOW - 16 * MIN) / 1000;
+    utimesSync(`${lockPath()}.takeover`, t, t);
+    expect(lock(1002).acquire()).toBe(true);
+  });
+
+  it("refresh keeps a 20-minute drain from looking stale", () => {
+    const a = lock(1001);
+    expect(a.acquire()).toBe(true);
+    clock += 10 * MIN;
+    expect(a.refresh()).toBe(true);
+    clock += 10 * MIN;
+    expect(lock(1002).acquire()).toBe(false);
+  });
+
+  it("without a refresh the same drain is stale", () => {
+    expect(lock(1001).acquire()).toBe(true);
+    clock += 20 * MIN;
+    expect(lock(1002).acquire()).toBe(true);
+  });
+
+  it("refresh returns false after a takeover or a release", () => {
+    const a = lock(1001);
+    expect(a.acquire()).toBe(true);
+    clock += 16 * MIN;
+    expect(lock(1002).acquire()).toBe(true);
+    expect(a.refresh()).toBe(false);
+    const b = lock(1002);
+    b.release();
+    expect(b.refresh()).toBe(false);
+  });
+
+  it("release removes our lock, leaves a foreign one and never throws", () => {
+    const a = lock(1001);
+    expect(a.acquire()).toBe(true);
+    a.release();
+    expect(existsSync(lockPath())).toBe(false);
+    a.release();
+    planted(1002, MIN);
+    a.release();
+    expect(existsSync(lockPath())).toBe(true);
+  });
+
+  it("returns false when the data directory does not exist", () => {
+    const missing = createLock({ dataDir: join(dir, "nope"), now: () => clock, pid: 1 });
+    expect(missing.acquire()).toBe(false);
   });
 });

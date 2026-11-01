@@ -274,6 +274,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 
 ### Decision log
 - Round 1: the worker half of R6.6 and R8.3 (from the T13 review) is asserted here; R6.6 and R8.3 are not added to Covers (T13 covers them, and 5 criteria would pass the limit). tests/plugin/fixtures/fake-claude.mjs was left out of Files: T13 already defines the start and end time records this task needs.
+- Implementation: a `capture.lock` whose pid is dead (or is our own) is stale at any age, in addition to the 15-minute rule (R6.7 only states the age); `config_invalid` is not told apart from an outage here (follow-up: capture.md step 1).
 
 ## T19: Write the generic `analizar-reunion` skill
 - Purpose: the owner can ask Claude Code to analyze a stored meeting and save the analysis next to it, with no owner data in the skill
