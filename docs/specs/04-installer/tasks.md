@@ -26,7 +26,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/git/index.ts, tests/git.test.ts, tests/git-install.integration.test.ts
 - Verify: `npm test -- tests/git.test.ts tests/git-install.integration.test.ts`; `npm run typecheck`; `npm run lint`; `RunOptions` gains `timeoutMs` (passed to `execFile` `timeout`; a timeout still ends as `GitError(sub, null)`); `GitError` gains an optional third constructor argument and a readonly boolean `permissionDenied`, set by `runGit` only when the exit code is 128 and the child's stderr matches `Permission denied`; the stderr text is never stored, so existing `new GitError("push", 128)` call sites in tests still compile and behave the same; src/git/index.ts exports `cloneInto`, `lsRemote`, `pushDryRun`, `pushBranch` and `originUrl`, each calling `runGit` with an argument array, `lsRemote` and `pushDryRun` with `timeoutMs: 15000`; exported `classifyRemoteError(err)` returns `remote_auth_failed` when `err.permissionDenied` is true, else `remote_unreachable` for any other `GitError` (non-zero exit or timeout); unit cases "maps exit 128 permission denied to remote_auth_failed" (a real failing `runGit` against a stub `git` or a fixture hook that writes `Permission denied` to stderr), "maps timeout to remote_unreachable", "GitError message holds only subcommand and exit code" (a planted stderr marker is absent from `message`, `stack`, `String(err)` and `JSON.stringify(err)`); integration against a bare fixture repo: `cloneInto` clones it, `originUrl` returns its path, `lsRemote` lists `main`, `pushDryRun` succeeds and leaves the bare repo's refs unchanged, `pushBranch` pushes a new commit, and `lsRemote` on a missing path gives `remote_unreachable`; existing tests (tests/git.test.ts, tests/notes.integration.test.ts GitError cases) still pass
 - Issue: #146
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -38,7 +38,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/answers.ts, src/config/env.ts, tests/install-answers.test.ts, tests/env.test.ts
 - Verify: `npm test -- tests/install-answers.test.ts tests/env.test.ts`; `npm run typecheck`; `npm run lint`; src/config/env.ts exports `isAllowedBaseUrl` with no behavior change (tests/env.test.ts unchanged and green, including "errors name variables, never values"); answers.ts validates email, https origin through `isAllowedBaseUrl`, whole-number hop count (0 to 10), Docker network name (`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`), passphrase of 12 characters or more and both entries equal, each failure an `{ field, rule }` whose rendered message contains neither the input value nor any substring of 4 or more characters of it; `parseSshRemote` accepts `git@github.com:owner/vault.git` (host `github.com`, port 22) and `ssh://git@git.example.com:2222/owner/vault.git` (port 2222), and refuses with `remote_not_ssh` `https://github.com/owner/vault.git`, `https://user:tok@github.com/x.git`, `ssh://user:secret@host/x.git`, `file:///tmp/x`, a bare path and an empty string, the error carrying no part of the input; named cases "refuses https remote", "refuses credential in ssh url", "message omits the value" for every field
 - Issue: #147
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -50,7 +50,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/env-file.ts, tests/install-env-file.test.ts
 - Verify: `npm test -- tests/install-env-file.test.ts`; `npm run typecheck`; `npm run lint`; `mergeEnv(existingText, answers)` and `renderEnv` are pure (the token generator is injected); a render from fixture answers holds exactly the managed keys `VAULT_REMOTE`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `INGEST_TOKEN`, `PUBLIC_BASE_URL`, `OWNER_PASSPHRASE_HASH`, `TRUST_PROXY_HOPS`, `N8N_NETWORK`, and parsing it with `node:util` `parseEnv`, adding `VAULT_DIR=/data/vault` (supplied by compose, not managed), then calling `loadEnv` from src/config/env.ts succeeds (case "rendered env passes startup rules", with and without a base URL); `TRUST_PROXY_HOPS` defaults to `1` with a base URL and `0` without, `N8N_NETWORK` to `n8n`; with no `INGEST_TOKEN` the generated one matches `^[A-Za-z0-9_-]{43}$` and two runs differ; an existing token is kept; case "keeps existing values": an existing file with `GIT_AUTHOR_NAME`, `VAULT_REMOTE` and `OWNER_PASSPHRASE_HASH` and answers that omit those fields keeps them byte for byte, while a new answer replaces only its own key; `OWNER_PASSPHRASE_HASH` is rendered in single quotes and round-trips through `parseEnv`; case "keeps unmanaged lines": comments, blank lines and an unknown `FOO=bar` keep their bytes and order; a managed key missing from an existing file is appended under `# Written by 2brain setup`; rendering the same input twice gives identical text
 - Issue: #148
-- Status: todo
+- Status: done
 
 ### Decision log
 
