@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   classifyRemoteError,
   cloneInto,
+  GitError,
   lsRemote,
   originUrl,
   pushBranch,
@@ -56,6 +57,16 @@ describe("installer git functions", () => {
     commitLocal();
     await pushBranch(clone, "other");
     expect(git(fixture.remote, ["rev-parse", "other"])).toBe(git(clone, ["rev-parse", "HEAD"]));
+  });
+
+  it.each(["a:b", "-x", "a..b", ""])("pushBranch rejects unsafe branch name %j", async (name) => {
+    commitLocal();
+    const before = git(fixture.remote, ["show-ref"]);
+    const err = await pushBranch(clone, name).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(GitError);
+    expect(err.message).toBe("invalid branch name");
+    expect(git(fixture.remote, ["show-ref"])).toBe(before);
   });
 
   it("lsRemote on a missing repository maps to remote_unreachable", async () => {

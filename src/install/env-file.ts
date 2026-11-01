@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { open, readFile, rename, unlink } from "node:fs/promises";
+import path from "node:path";
 import { parseEnv } from "node:util";
 
 /** The keys the installer owns in `.env`, in the order they are appended. */
@@ -62,7 +64,7 @@ export function mergeEnv(
   answers: EnvAnswers,
   makeToken: () => string = generateIngestToken,
 ): Record<ManagedKey, string> {
-  const existing = parseEnv(existingText);
+  const existing = parseEnv(yamlToAssignments(existingText));
   const pick = (key: ManagedKey): string | undefined => answerFor(answers, key) ?? existing[key];
 
   const publicBaseUrl = pick("PUBLIC_BASE_URL") ?? "";
@@ -88,6 +90,9 @@ function unwritable(key: string): Error {
 function formatValue(key: ManagedKey, value: string): string {
   if (value === "") return "";
   if (/[\n\r]/.test(value)) throw unwritable(key);
+  // A backslash is an escape in double quotes and in some dotenv readers, so it is refused
+  // unless the value is bare (and a bare value cannot contain one).
+  if (value.includes("\\")) throw unwritable(key);
   if (key === "OWNER_PASSPHRASE_HASH") {
     if (value.includes("'")) throw unwritable(key);
     return `'${value}'`;
@@ -96,14 +101,30 @@ function formatValue(key: ManagedKey, value: string): string {
   if (!value.includes("'")) return `'${value}'`;
   // Double quotes interpolate `$` and process escapes in Compose, so they are
   // used only for a value that has none of those.
-  if (/[$"\\]/.test(value)) throw unwritable(key);
+  if (/[$"]/.test(value)) throw unwritable(key);
   return `"${value}"`;
 }
 
-const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
+const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[=:]/;
+const YAML_ASSIGNMENT = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*))\s*:\s*/;
 
 function isManaged(key: string): key is ManagedKey {
   return (MANAGED_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * Pure: rewrite `KEY: value` lines of managed keys as `KEY=value`, so `parseEnv` reads the
+ * value after the colon the same way it reads one after an equals sign.
+ */
+function yamlToAssignments(text: string): string {
+  return text
+    .split(/(?<=\n)/)
+    .map((line) => {
+      const match = YAML_ASSIGNMENT.exec(line);
+      if (match === null || !isManaged(match[2] as string)) return line;
+      return `${match[1]}=${line.slice(match[0].length)}`;
+    })
+    .join("");
 }
 
 /**
@@ -122,6 +143,7 @@ export function renderEnv(existingText: string, values: Record<ManagedKey, strin
 
   for (const [key, i] of lastIndex) {
     const line = lines[i] as string;
+    // A `KEY: value` line does not parse here, so it is always rewritten as `KEY=value`.
     if (parseEnv(line)[key] === values[key]) continue;
     const ending = /\r?\n$/.exec(line)?.[0] ?? "";
     lines[i] = `${key}=${formatValue(key, values[key])}${ending}`;
@@ -134,4 +156,91 @@ export function renderEnv(existingText: string, values: Record<ManagedKey, strin
   out += `${ENV_MARKER}\n`;
   for (const key of missing) out += `${key}=${formatValue(key, values[key])}\n`;
   return out;
+}
+
+/** The file operations `writeEnvFile` uses, replaceable in tests. */
+export interface EnvFileIo {
+  writeTemp(file: string, data: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+}
+
+async function defaultWriteTemp(file: string, data: string): Promise<void> {
+  const handle = await open(file, "wx", 0o600);
+  try {
+    // The open mode is masked by the umask and ignored for an existing file.
+    if (process.platform !== "win32") await handle.chmod(0o600);
+    await handle.writeFile(data, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncDirectory(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    const handle = await open(dir, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // The rename has happened; a failed directory flush only weakens durability.
+  }
+}
+
+export type WriteEnvResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; code: "project_not_writable" };
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null
+    ? (error as { code?: string }).code
+    : undefined;
+}
+
+/**
+ * Merge `answers` into `<projectDir>/.env`. Nothing is written when the result equals the
+ * current bytes. Otherwise the text goes to a 0600 temp file in the same directory and is
+ * renamed over `.env`; the temp file never outlives the call. The result carries no value.
+ */
+export async function writeEnvFile(
+  projectDir: string,
+  answers: EnvAnswers,
+  options: { makeToken?: () => string; io?: Partial<EnvFileIo> } = {},
+): Promise<WriteEnvResult> {
+  const io: EnvFileIo = { writeTemp: defaultWriteTemp, rename, ...options.io };
+  const target = path.join(projectDir, ".env");
+  const temp = path.join(projectDir, `.env.tmp-${randomBytes(8).toString("hex")}`);
+  let ownsTemp = true;
+  try {
+    let existing = "";
+    try {
+      existing = await readFile(target, "utf8");
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    const next = renderEnv(existing, mergeEnv(existing, answers, options.makeToken));
+    if (next === existing) return { ok: true, changed: false };
+    ownsTemp = true;
+    try {
+      await io.writeTemp(temp, next);
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") ownsTemp = false;
+      throw error;
+    }
+    await io.rename(temp, target);
+    ownsTemp = false;
+    await syncDirectory(projectDir);
+    return { ok: true, changed: true };
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+      return { ok: false, code: "project_not_writable" };
+    }
+    throw error;
+  } finally {
+    if (ownsTemp) await unlink(temp).catch(() => {});
+  }
 }
