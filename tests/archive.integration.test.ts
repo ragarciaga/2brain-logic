@@ -472,6 +472,11 @@ describe("R7.3: nothing in the service deletes a vault file", () => {
       reason: "after a failed commit, removes only the file the same create call just wrote",
     },
     {
+      file: "vault/write-note.ts",
+      line: "await unlink(target).catch((e: NodeJS.ErrnoException) => {",
+      reason: "same rollback in the meeting create: removes only the file that call just wrote",
+    },
+    {
       file: "git/sync.ts",
       line: 'import { access, lstat, mkdir, realpath, unlink, writeFile } from "node:fs/promises";',
       reason: "import for the cleanup below",

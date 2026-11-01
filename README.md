@@ -1,7 +1,7 @@
 # 2brain-logic
 
 A self-feeding second brain. Meetings, emails, ideas and AI work sessions land as Markdown notes
-in an Obsidian vault stored in Git. This repository is the service that writes them: it has the ingest routes (`GET /health`, `POST /notes`, `PATCH /notes` and `POST /notes/archive`), the `setup` and `doctor` commands, and the Claude Code plugin. It also serves an optional public MCP endpoint (`<PUBLIC_BASE_URL>/mcp`) behind OAuth, so AI clients can search and write the vault; see [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
+in an Obsidian vault stored in Git. This repository is the service that writes them: it has the ingest routes (`GET /health`, `POST /notes`, `PATCH /notes`, `POST /notes/archive` and `POST /meetings`), the `setup` and `doctor` commands, and the Claude Code plugin. It also serves an optional public MCP endpoint (`<PUBLIC_BASE_URL>/mcp`) behind OAuth, so AI clients can search and write the vault; see [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
 
 Product context: [docs/brief.md](docs/brief.md). Decisions: [docs/adr/](docs/adr/).
 

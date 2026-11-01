@@ -91,11 +91,10 @@ describe("writeMeeting skips", () => {
   });
 
   it("one segment with text is not empty", async () => {
-    const result = await makeWriter()
-      .writeMeeting(meetingInput(46))
-      .catch((e: Error) => e);
-    expect(result).toBeInstanceOf(Error);
-    expect((result as Error).message).toBe("meeting store not implemented");
+    const result = await makeWriter().writeMeeting(meetingInput(46));
+    expect(result).toMatchObject({ ok: true, path: expect.stringMatching(/\.md$/u) });
+    expect(result).not.toHaveProperty("skipped");
+    expect(typeof (result as { commit: unknown }).commit).toBe("string");
   });
 
   it("each skip logs exactly one line with the source and reason and no input text", async () => {

@@ -1,0 +1,21 @@
+{
+  "source": "fireflies",
+  "transcript": {
+    "id": "01FFEXAMPLE",
+    "title": "Weekly sync",
+    "date": 1793372400000,
+    "duration": 46,
+    "transcript_url": "https://app.example.com/view/01FFEXAMPLE",
+    "organizer_email": "ana@example.com",
+    "meeting_attendees": [
+      { "displayName": "ana ruiz", "email": "ana@example.com" },
+      { "displayName": "Bo Chen", "email": "bo@example.com" },
+      { "email": "carol@example.com" }
+    ],
+    "sentences": [
+      { "speaker_name": "Ana Ruiz", "text": "Let us review the plan.", "start_time": 1 },
+      { "speaker_name": "Bo Chen", "text": "I agree with the plan.", "start_time": 9 }
+    ]
+  },
+  "calendar_events": []
+}

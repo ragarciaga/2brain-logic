@@ -1,0 +1,28 @@
+{
+  "source": "gemini",
+  "conference": {
+    "name": "conferenceRecords/c1",
+    "startTime": "2026-10-30T15:00:00Z",
+    "endTime": "2026-10-30T15:46:00Z"
+  },
+  "transcript": {
+    "name": "conferenceRecords/c1/transcripts/t1",
+    "state": "FILE_GENERATED"
+  },
+  "participants": [
+    { "name": "p1", "signedinUser": { "displayName": "Ana Ruiz" } },
+    { "name": "p2", "anonymousUser": { "displayName": "Bo Chen" } }
+  ],
+  "entries": [
+    { "participant": "p1", "text": "Good morning everyone.", "startTime": "2026-10-30T15:00:05Z" },
+    { "participant": "p2", "text": "Good morning.", "startTime": "2026-10-30T15:00:12Z" }
+  ],
+  "calendar_events": [
+    {
+      "id": "evt1",
+      "title": "Planning review",
+      "start": { "dateTime": "2026-10-30T15:00:00Z" },
+      "end": { "dateTime": "2026-10-30T16:00:00Z" }
+    }
+  ]
+}
