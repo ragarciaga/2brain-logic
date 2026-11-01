@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultGit, ensureClone, type GitApi } from "../src/git/index.js";
@@ -286,6 +294,124 @@ describe("R8.3: a failed commit", () => {
   });
 });
 
+describe("rollback resets the index", () => {
+  const staged = () => git(fixture.vaultDir, ["diff", "--cached", "--name-only"]);
+  const status = () => git(fixture.vaultDir, ["status", "--porcelain"]);
+  const headNow = () => git(fixture.vaultDir, ["rev-parse", "HEAD"]);
+
+  /** `unstageFile` that throws on its first call for `failPath`. */
+  function unstageFailingOnce(failPath: string): Partial<GitApi> {
+    let failed = false;
+    return {
+      commitPaths: () => Promise.reject(new Error("boom")),
+      unstageFile: (dir, rel) => {
+        if (!failed && rel === failPath) {
+          failed = true;
+          return Promise.reject(new Error("reset failed"));
+        }
+        return defaultGit.unstageFile(dir, rel);
+      },
+    };
+  }
+
+  async function expectBothAtHead(failPath: string): Promise<void> {
+    await post(makeApp(), firefliesBody());
+    const second = await post(makeApp({ git: unstageFailingOnce(failPath) }), geminiBody());
+    expect(second.status).toBe(500);
+    expect(second.json.error).toBe("write_failed");
+    expect(staged()).toBe("");
+    expect(status()).toBe("");
+    expect(file(FF_PATH)).toBe(gitRaw(fixture.vaultDir, ["show", `HEAD:${FF_PATH}`]));
+    expect(existsSync(join(fixture.vaultDir, GM_PATH))).toBe(false);
+  }
+
+  it("unstageFile failing once for the other note still leaves both at HEAD", async () => {
+    await expectBothAtHead(FF_PATH);
+  });
+
+  it("unstageFile failing once for the new note still leaves both at HEAD", async () => {
+    await expectBothAtHead(GM_PATH);
+  });
+
+  it("headSha failing in the rollback still resets the index", async () => {
+    await post(makeApp(), firefliesBody());
+    const before = headNow();
+    let armed = false;
+    const app = makeApp({
+      git: {
+        commitPaths: () => {
+          armed = true;
+          return Promise.reject(new Error("boom"));
+        },
+        headSha: (dir) => {
+          if (armed) return Promise.reject(new Error("head failed"));
+          return defaultGit.headSha(dir);
+        },
+      },
+    });
+    const second = await post(app, geminiBody());
+    expect(second.status).toBe(500);
+    expect(staged()).toBe("");
+    expect(headNow()).toBe(before);
+  });
+
+  it("a landed commit keeps both paths", async () => {
+    await post(makeApp(), firefliesBody());
+    const app = makeApp({
+      git: {
+        commitPaths: async (...args) => {
+          await defaultGit.commitPaths(...args);
+          throw new Error("boom after commit");
+        },
+      },
+    });
+    const second = await post(app, geminiBody());
+    expect(second.status).toBe(500);
+    expect(status()).toBe("");
+    expect(file(GM_PATH)).toBe(gitRaw(fixture.vaultDir, ["show", `HEAD:${GM_PATH}`]));
+    expect(file(FF_PATH)).toBe(gitRaw(fixture.vaultDir, ["show", `HEAD:${FF_PATH}`]));
+    expect(parseNote(file(FF_PATH)).data.versions).toBeDefined();
+  });
+});
+
+describe("D5: an untracked leftover of the other source", () => {
+  it("an untracked other-source note is not linked", async () => {
+    await post(makeApp(), firefliesBody());
+    const saved = file(FF_PATH);
+    const other = fixture.cloneElsewhere("remover");
+    git(other, ["rm", "-q", FF_PATH]);
+    git(other, ["commit", "-q", "-m", "remove the first note"]);
+    git(other, ["push", "-q", "origin", "main"]);
+    // The leftover appears after the real pull, so the pull is not blocked by it.
+    const app = makeApp({
+      git: {
+        pullRebase: async (...args) => {
+          await defaultGit.pullRebase(...args);
+          // The pull removed the folder with the note; the leftover brings it back.
+          mkdirSync(join(fixture.vaultDir, FOLDER), { recursive: true });
+          writeFileSync(join(fixture.vaultDir, FF_PATH), saved);
+        },
+      },
+    });
+    const second = await post(app, geminiBody());
+    expect(second.status).toBe(201);
+    expect(second.json.linked).toBeUndefined();
+    expect(second.json.path).toBe(`${FOLDER}/2026-10-30 · Planning review 15-00.md`);
+    expect(file(FF_PATH)).toBe(saved);
+    expect(git(fixture.vaultDir, ["ls-files", "--", FF_PATH])).toBe("");
+    expect(
+      git(fixture.remote, [
+        "-c",
+        "core.quotepath=false",
+        "show",
+        "--name-only",
+        "--format=",
+        "main",
+      ]),
+    ).toBe(second.json.path);
+  });
+});
+
 describe("R4.6: two meetings that want one path", () => {
   it("adds the local time, then answers 409 and writes nothing", async () => {
     const app = makeApp();
@@ -402,6 +528,57 @@ describe("the other note is rewritten safely", () => {
     expect(readFileSync(outside, "utf8")).toBe(copy);
     expect(existsSync(join(fixture.vaultDir, GM_PATH))).toBe(false);
     expect(remoteHead()).toBe(head);
+  });
+
+  it("a symlink swapped in inside createMeetingNote is refused", async () => {
+    await post(makeApp(), firefliesBody());
+    const outside = join(fixture.root, "outside-copy.md");
+    const copy = file(FF_PATH);
+    writeFileSync(outside, copy);
+    const head = remoteHead();
+    // The scrubber arms the swap; the next headSha call is the one in createMeetingNote, after
+    // the lstat of the other note.
+    let armed = false;
+    const app = makeApp({
+      scrubber: hooked(() => {
+        armed = true;
+      }),
+      git: {
+        headSha: async (dir) => {
+          if (armed) {
+            armed = false;
+            unlinkSync(join(fixture.vaultDir, FF_PATH));
+            symlinkSync(outside, join(fixture.vaultDir, FF_PATH));
+          }
+          return defaultGit.headSha(dir);
+        },
+      },
+    });
+    const second = await post(app, geminiBody());
+    expect(second.status).toBe(400);
+    expect(second.json.error).toBe("unsafe_path");
+    expect(readFileSync(outside, "utf8")).toBe(copy);
+    expect(existsSync(join(fixture.vaultDir, GM_PATH))).toBe(false);
+    expect(remoteHead()).toBe(head);
+    expect(lstatSync(join(fixture.vaultDir, FF_PATH)).isSymbolicLink()).toBe(true);
+  });
+
+  it("the rollback restore does not follow a symlink", async () => {
+    await post(makeApp(), firefliesBody());
+    const outside = join(fixture.root, "outside-file.md");
+    writeFileSync(outside, "outside\n");
+    const app = makeApp({
+      git: {
+        commitPaths: () => {
+          unlinkSync(join(fixture.vaultDir, FF_PATH));
+          symlinkSync(outside, join(fixture.vaultDir, FF_PATH));
+          return Promise.reject(new Error("boom"));
+        },
+      },
+    });
+    const second = await post(app, geminiBody());
+    expect(second.status).toBe(500);
+    expect(readFileSync(outside, "utf8")).toBe("outside\n");
   });
 
   it("a note edited after the scan is refused (409) and keeps the edit", async () => {

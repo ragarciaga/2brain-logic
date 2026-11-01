@@ -171,6 +171,41 @@ describe("meeting push failures", () => {
     expect(readFileSync(file, "utf8")).toBe(bytes);
     expect(status()).toBe("?? personal/meetings/x.md");
   });
+
+  it("D3: a plain meeting whose commit fails after add, with unstageFile failing once, leaves a clean index", async () => {
+    let unstageCalls = 0;
+    const writer = createNoteWriter({
+      vaultDir: fixture.vaultDir,
+      author: TEST_AUTHOR,
+      git: {
+        ...defaultGit,
+        commitFile: async (dir, path) => {
+          await defaultGit.addPaths(dir, [path]);
+          throw new Error("commit failed");
+        },
+        unstageFile: (dir, path) => {
+          unstageCalls += 1;
+          if (unstageCalls === 1) return Promise.reject(new Error("reset failed"));
+          return defaultGit.unstageFile(dir, path);
+        },
+      },
+      log: () => undefined,
+      sleep: () => Promise.resolve(),
+    });
+    const app = createApp({
+      writer,
+      meetings: writer,
+      ingestToken: TOKEN,
+      log: () => undefined,
+    });
+    const headBefore = head();
+    const response = await post(app, fixtureBody());
+    expect(response.status).toBe(500);
+    expect(unstageCalls).toBe(2);
+    expect(git(fixture.vaultDir, ["diff", "--cached", "--name-only"])).toBe("");
+    expect(status()).toBe("");
+    expect(head()).toBe(headBefore);
+  });
 });
 
 describe("meeting config", () => {

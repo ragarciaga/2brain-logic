@@ -1,5 +1,5 @@
-import type { Stats } from "node:fs";
-import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
@@ -34,6 +34,31 @@ import { type FrontmatterVerdict, validateFrontmatter } from "./validate.js";
 import { type MeetingLink, writeMeetingInSlot } from "./write-meeting.js";
 
 export { type Redaction, type Scrubber, ScrubFailedError, scrubNote, toRedactions };
+
+/**
+ * Overwrite an existing file without following a symlink and without creating it: no `O_CREAT`,
+ * `O_NOFOLLOW` makes a symlink swapped in after the check fail with ELOOP (`UnsafePathError`).
+ */
+async function overwriteNoFollow(target: string, data: string | Buffer): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(
+      target,
+      constants.O_WRONLY |
+        constants.O_TRUNC |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new UnsafePathError();
+    throw error;
+  }
+  try {
+    await handle.writeFile(data);
+  } finally {
+    await handle.close();
+  }
+}
 
 export class NoteExistsError extends Error {
   constructor() {
@@ -490,9 +515,21 @@ export function createNoteWriter({
    * With `link`, a tracked note (the other version) is rewritten to `link.bytes` in the same
    * commit: it must be a regular file (a symlink is `UnsafePathError`) whose bytes still equal
    * `link.original` (else `NoteExistsError`). Both paths are staged and committed together with
-   * `message`. If that fails and HEAD did not move, both are unstaged, the new file is removed and
-   * the other note gets `link.original` back.
+   * `message`. If that fails, both index entries are reset to HEAD (one retry each) whatever HEAD
+   * did; if HEAD did not move, the new file is removed and the other note gets `link.original`
+   * back. The other note is written without following a symlink swapped in after the check.
    */
+  async function resetIndexEntry(rel: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await git.unstageFile(root, rel);
+        return;
+      } catch {
+        // retried once, then swallowed: the original error matters more
+      }
+    }
+  }
+
   async function createMeetingNote(
     path: string,
     bytes: string,
@@ -536,21 +573,23 @@ export function createNoteWriter({
     let commit: string;
     try {
       if (link !== undefined && linkTarget !== undefined) {
-        await writeFile(linkTarget, link.bytes);
+        await overwriteNoFollow(linkTarget, link.bytes);
         await git.addPaths(root, [path, link.path]);
         commit = await git.commitPaths(root, [path, link.path], message, author);
       } else {
         commit = await git.commitFile(root, path, message, author);
       }
     } catch (error) {
-      // Only when HEAD did not move. Best effort, each step on its own, then the original error
-      // is rethrown.
+      // The index is reset first and whatever HEAD did: a reset of a path whose commit landed is
+      // a no-op, and a staged leftover would ride along with the next commit. Best effort, each
+      // step on its own, then the original error is rethrown.
+      await resetIndexEntry(path);
+      if (link !== undefined) await resetIndexEntry(link.path);
       const moved = await git.headSha(root).then(
         (now) => now !== head,
         () => true,
       );
       if (!moved) {
-        await git.unstageFile(root, path).catch(() => undefined);
         try {
           await unlink(target).catch((e: NodeJS.ErrnoException) => {
             if (e.code !== "ENOENT") throw e;
@@ -559,8 +598,7 @@ export function createNoteWriter({
           // swallowed on purpose
         }
         if (link !== undefined && linkTarget !== undefined) {
-          await git.unstageFile(root, link.path).catch(() => undefined);
-          await writeFile(linkTarget, link.original).catch(() => undefined);
+          await overwriteNoFollow(linkTarget, link.original).catch(() => undefined);
         }
       }
       throw error;
