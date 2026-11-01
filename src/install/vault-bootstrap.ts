@@ -8,12 +8,14 @@ import {
   classifyRemoteError,
   cloneInto,
   commitPaths,
+  commitsAhead,
   currentBranch,
   type GitAuthor,
   GitError,
   hasCommits,
   lsRemote,
   originUrl,
+  PUSH_TIMEOUT_MS,
   pushBranch,
 } from "../git/index.js";
 
@@ -44,6 +46,7 @@ export interface BootstrapDeps {
   addPaths: typeof addPaths;
   commitPaths: typeof commitPaths;
   pushBranch: typeof pushBranch;
+  commitsAhead: typeof commitsAhead;
   initVault: typeof initVault;
   originUrl: typeof originUrl;
   hasCommits: typeof hasCommits;
@@ -57,6 +60,7 @@ export const defaultBootstrapDeps: BootstrapDeps = {
   addPaths,
   commitPaths,
   pushBranch,
+  commitsAhead,
   initVault,
   originUrl,
   hasCommits,
@@ -136,13 +140,47 @@ async function seedTemplate(
   // Only the copied paths are committed: anything else already staged stays out.
   await deps.commitPaths(opts.vaultDir, copied, SEED_MESSAGE, opts.author);
   try {
-    await deps.pushBranch(opts.vaultDir, branch, env);
+    await deps.pushBranch(opts.vaultDir, branch, env, PUSH_TIMEOUT_MS);
   } catch (error) {
-    // The commit stays local; T12 handles the re-run push.
-    if (error instanceof GitError) return { code: "push_refused", fix: FIX_AUTH, seeded: false };
-    throw error;
+    // The commit stays local; a re-run pushes it (pushPending).
+    return pushFailure(error);
   }
   return { code: "done", fix: "", seeded: true };
+}
+
+/** Map a failed push: a timeout is unreachable, any other git failure is a refusal. */
+function pushFailure(error: unknown): BootstrapResult {
+  if (!(error instanceof GitError)) throw error;
+  if (error.exitCode === null) {
+    return { code: "remote_unreachable", fix: FIX_UNREACHABLE, seeded: false };
+  }
+  return { code: "push_refused", fix: FIX_AUTH, seeded: false };
+}
+
+/** Push local commits that origin lacks (a refused seed push, re-run). No new commit is made. */
+async function pushPending(
+  opts: BootstrapOptions,
+  deps: BootstrapDeps,
+  branches: string[],
+): Promise<BootstrapResult> {
+  const env = opts.gitEnv ?? {};
+  const done: BootstrapResult = { code: "done", fix: "", seeded: false };
+  let branch = "main";
+  if (branches.length > 0) {
+    try {
+      branch = await deps.currentBranch(opts.vaultDir);
+      if (!branches.includes(branch)) return done;
+      if ((await deps.commitsAhead(opts.vaultDir, branch)) <= 0) return done;
+    } catch {
+      return done;
+    }
+  }
+  try {
+    await deps.pushBranch(opts.vaultDir, branch, env, PUSH_TIMEOUT_MS);
+  } catch (error) {
+    return pushFailure(error);
+  }
+  return done;
 }
 
 /**
@@ -152,7 +190,9 @@ async function seedTemplate(
  * - Empty remote and no local commits: one commit with the vault template, pushed to `main`.
  * - Otherwise, no `.2brain/config.yaml`: copy the missing template files, commit them and push to
  *   the current branch (a detached HEAD, or a local-only history on an empty remote, is a mismatch).
- * - Valid config: nothing to do. Invalid config: `config_invalid` with the file and key path.
+ * - Valid config: nothing to do, except pushing local commits origin lacks (a refused seed, re-run;
+ *   on an empty remote to `main`), without a new commit. A push failure is `push_refused`, or
+ *   `remote_unreachable` when it timed out; the local commit is kept. Invalid config: `config_invalid` with the file and key path.
  * Results carry fixed fix lines only: no git output, no remote URL, no parser detail.
  */
 export async function bootstrapVault(
@@ -195,7 +235,7 @@ export async function bootstrapVault(
         seeded: false,
       };
     }
-    return { code: "done", fix: "", seeded: false };
+    return pushPending(opts, deps, branches);
   }
   // No config: only a vault with a remote history can be filled in.
   if (branches.length === 0) return mismatch();
