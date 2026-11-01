@@ -1,11 +1,13 @@
 import {
   existsSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -234,5 +236,38 @@ describe("sweep", () => {
     clock = NOW + 31 * DAY;
     q.sweep();
     expect(readdirSync(join(dir, "failed"))).toEqual([]);
+  });
+});
+
+describe("entries that are not regular files", () => {
+  it("list and sweep skip a directory and a symlink named like a job", () => {
+    write("queue", "1-keep.json", jobBody(0, 0));
+    mkdirSync(join(dir, "queue", "2-dir.json"));
+    writeFileSync(join(dir, "target.txt"), jobBody(3, 0));
+    if (posix) symlinkSync(join(dir, "target.txt"), join(dir, "queue", "3-link.json"));
+    expect(q.list().map((j) => j.name)).toEqual(["1-keep.json"]);
+    q.sweep();
+    expect(queueFiles()).toEqual(
+      posix ? ["1-keep.json", "2-dir.json", "3-link.json"] : ["1-keep.json", "2-dir.json"],
+    );
+    expect(log).not.toHaveBeenCalled();
+    expect(existsSync(join(dir, "failed", "2-dir.json"))).toBe(false);
+  });
+
+  it("keeps a subdirectory of failed/ older than 30 days without throwing", () => {
+    mkdirSync(join(dir, "failed", "sub"), { recursive: true });
+    utimesSync(join(dir, "failed", "sub"), (NOW - 40 * DAY) / 1000, (NOW - 40 * DAY) / 1000);
+    expect(() => q.sweep()).not.toThrow();
+    expect(readdirSync(join(dir, "failed"))).toEqual(["sub"]);
+  });
+
+  it.skipIf(!posix)("keeps an old symlink in failed/ instead of deleting it", () => {
+    writeFileSync(join(dir, "target.txt"), "x");
+    mkdirSync(join(dir, "failed"), { recursive: true });
+    const link = join(dir, "failed", "old-link.json");
+    symlinkSync(join(dir, "target.txt"), link);
+    lutimesSync(link, (NOW - 40 * DAY) / 1000, (NOW - 40 * DAY) / 1000);
+    q.sweep();
+    expect(readdirSync(join(dir, "failed"))).toEqual(["old-link.json"]);
   });
 });
