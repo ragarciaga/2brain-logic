@@ -238,3 +238,46 @@ describe("preScrub", () => {
     expect(scanOwnerData(src)).toStrictEqual([]);
   });
 });
+
+describe("assignments behind a non-secret label", () => {
+  it.each([
+    ["USER: API_KEY=v", `USER: API_KEY=${R}`],
+    ["Note: API_KEY=v", `Note: API_KEY=${R}`],
+    ["RESULT: password=v", `RESULT: password=${R}`],
+    ["USER:API_KEY=v", `USER:API_KEY=${R}`],
+    ["a: b: TOKEN=v", `a: b: TOKEN=${R}`],
+    ["a:b:c:TOKEN=v", `a:b:c:TOKEN=${R}`],
+    [`Note: x,API_KEY=${PW}`, `Note: x,API_KEY=${R}`],
+    [`msg="run API_KEY=${PW} now"`, `msg="run API_KEY=${R} now"`],
+    [`USER: --password ${PW}`, `USER: --password ${R}`],
+  ])("redacts %j", (input, expected) => {
+    expect(preScrub(input)).toStrictEqual({ text: expected, count: 1 });
+  });
+
+  it("is idempotent on the new shapes", () => {
+    for (const input of ["USER: API_KEY=v", "a: b: TOKEN=v", "Note: password: v"]) {
+      const once = preScrub(input).text;
+      expect(preScrub(once)).toStrictEqual({ text: once, count: 0 });
+    }
+  });
+
+  it("keeps non-secret labels and values", () => {
+    for (const input of ["USER: hello", "Note: size=5", "a: b: c=d", "my_token_count: 5"]) {
+      expect(preScrub(input)).toStrictEqual({ text: input, count: 0 });
+    }
+  });
+
+  it("finishes 200k hostile label chains under 1 s", () => {
+    for (const input of [
+      "a:".repeat(100000),
+      "a: ".repeat(66000),
+      `${"a:".repeat(99990)}KEY=${PW}`,
+      'a="'.repeat(66000),
+      "a=b ".repeat(50000),
+    ]) {
+      const t0 = performance.now();
+      preScrub(input);
+      expect(performance.now() - t0).toBeLessThan(1000);
+    }
+  });
+});
