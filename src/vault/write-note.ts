@@ -507,6 +507,18 @@ export function createNoteWriter({
       : { path: note.path, commit };
   }
 
+  /** Reset one index entry to HEAD, with one retry; a second failure is swallowed. */
+  async function resetIndexEntry(rel: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await git.unstageFile(root, rel);
+        return;
+      } catch {
+        // retried once, then swallowed: the original error matters more
+      }
+    }
+  }
+
   /**
    * Create a meeting note: the create branch of `writeOne` without adoption. Anything already at
    * the path is `NoteExistsError`. Returns the commit; a push that does not land is
@@ -519,17 +531,6 @@ export function createNoteWriter({
    * did; if HEAD did not move, the new file is removed and the other note gets `link.original`
    * back. The other note is written without following a symlink swapped in after the check.
    */
-  async function resetIndexEntry(rel: string): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        await git.unstageFile(root, rel);
-        return;
-      } catch {
-        // retried once, then swallowed: the original error matters more
-      }
-    }
-  }
-
   async function createMeetingNote(
     path: string,
     bytes: string,
