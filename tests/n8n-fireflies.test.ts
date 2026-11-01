@@ -15,6 +15,7 @@ const t = loadTemplate(FILE);
 const POST = "Post meeting";
 const FETCH = "Fetch transcript";
 const CALENDAR = "Calendar events";
+const ROUTE = "Poll route";
 
 function str(value: unknown): string {
   return typeof value === "string" ? value : (JSON.stringify(value) ?? "");
@@ -74,16 +75,23 @@ describe("meetings-fireflies template", () => {
   });
 
   it("one list request per poll path", () => {
-    const poll = paths(t, "Poll schedule", FETCH);
-    expect(poll.length).toBeGreaterThan(0);
-    const isList = (name: string) =>
-      str(nodeByName(t, name).parameters?.jsonBody).includes("transcripts(");
-    for (const p of poll) expect(p.filter(isList)).toHaveLength(1);
+    const lists = t.nodes.filter((n) => str(n.parameters?.jsonBody).includes("transcripts("));
+    expect(lists.map((n) => n.name)).toEqual(["List transcripts"]);
+    const parentsOf = (name: string) =>
+      Object.entries(t.connections)
+        .filter(([, outs]) =>
+          Object.values(outs)
+            .flat(2)
+            .some((c) => c.node === name),
+        )
+        .map(([source]) => source)
+        .sort();
+    expect(parentsOf("List transcripts")).toEqual(["Poll route"]);
+    expect(parentsOf(FETCH)).toEqual(["Poll route", "Retry wait"]);
     const body = str(nodeByName(t, "List transcripts").parameters?.jsonBody);
     expect(body).toContain("transcripts(fromDate:");
     expect(body).toContain("limit: 50");
     expect(body).toContain("minus({ hours: 24 })");
-    expect(paths(t, "Fireflies webhook", FETCH).flat().some(isList)).toBe(false);
   });
 
   it("webhook passes only Transcription completed", () => {
@@ -131,25 +139,34 @@ describe("meetings-fireflies template", () => {
       expect(body).toContain(f);
     }
     const raw = nodeByName(t, FETCH).parameters?.jsonBody as string;
-    const polled = JSON.parse(evalExpr(raw, { id: "poll1" }, {}) as string);
+    const polled = JSON.parse(evalExpr(raw, { poll: { id: "poll1" } }, {}) as string);
     expect(polled.variables.id).toBe("poll1");
-    const hooked = JSON.parse(evalExpr(raw, { body: { meetingId: "hook1" } }, {}) as string);
-    expect(hooked.variables.id).toBe("hook1");
   });
 
-  it.each([FETCH, CALENDAR])("retries: %s", (name) => {
-    const node = nodeByName(t, name);
+  it("retries: Calendar events", () => {
+    const node = nodeByName(t, CALENDAR);
     expect(node.retryOnFail).toBe(true);
     expect(node.maxTries).toBe(3);
     expect(node.onError).toBe("continueErrorOutput");
   });
 
+  it("fetch has no built-in retry", () => {
+    const node = nodeByName(t, FETCH);
+    expect(node.retryOnFail).toBeUndefined();
+    expect(node.maxTries).toBeUndefined();
+    expect(node.onError).toBe("continueErrorOutput");
+    expect((node.parameters?.options as { response: unknown } | undefined)?.response).toEqual({
+      response: { fullResponse: true, neverError: true, responseFormat: "json" },
+    });
+    const outputs = t.connections[FETCH].main.map((o) => o.map((c) => c.node));
+    expect(outputs).toEqual([["Poll state"], ["Poll state"]]);
+  });
+
   it("no post without calendar", () => {
-    for (const name of [FETCH, CALENDAR]) {
-      const errorReach = reachable(t, name, 1);
-      expect(errorReach.has(POST)).toBe(false);
-      expect(errorReach.has("Source or calendar failed")).toBe(true);
-    }
+    const errorReach = reachable(t, CALENDAR, 1);
+    expect(errorReach.has(POST)).toBe(false);
+    expect(errorReach.has("Source or calendar failed")).toBe(true);
+    expect(pathsAvoiding(t, "Poll route", POST, CALENDAR)).toEqual([]);
     expect(paths(t, "Poll schedule", POST).length).toBeGreaterThan(0);
     expect(paths(t, "Fireflies webhook", POST).length).toBeGreaterThan(0);
     for (const trigger of ["Poll schedule", "Fireflies webhook"]) {
@@ -170,7 +187,7 @@ describe("meetings-fireflies template", () => {
     const body = nodeByName(t, POST).parameters?.jsonBody as string;
     const transcript = { id: "ff1", date: 1, duration: 2, sentences: [] };
     const nodes = {
-      [FETCH]: { data: { transcript } },
+      [ROUTE]: { transcript },
       Settings: { calendar_id: "team@example.com" },
     };
     const out = JSON.parse(
@@ -193,7 +210,7 @@ describe("meetings-fireflies template", () => {
       },
     ]);
     const poll = JSON.parse(
-      evalExpr(body, { items: [{ id: "e1", summary: "x" }] }, { [FETCH]: nodes[FETCH] }) as string,
+      evalExpr(body, { items: [{ id: "e1", summary: "x" }] }, { [ROUTE]: nodes[ROUTE] }) as string,
     );
     expect(poll.calendar_events[0].calendar_id).toBe("primary");
     expect(JSON.parse(evalExpr(body, {}, nodes) as string).calendar_events).toEqual([]);
@@ -201,10 +218,10 @@ describe("meetings-fireflies template", () => {
 
   it("each item uses its own paired transcript", () => {
     const fetched = [
-      { data: { transcript: { id: "a", date: 3_600_000, duration: 10 } } },
-      { data: { transcript: { id: "b", date: 7_200_000, duration: 20 } } },
+      { transcript: { id: "a", date: 3_600_000, duration: 10 } },
+      { transcript: { id: "b", date: 7_200_000, duration: 20 } },
     ];
-    const nodes = { [FETCH]: fetched, Settings: { calendar_id: "primary" } };
+    const nodes = { [ROUTE]: fetched, Settings: { calendar_id: "primary" } };
     const p = nodeByName(t, CALENDAR).parameters as {
       queryParameters: { parameters: { name: string; value: string }[] };
     };
@@ -226,7 +243,7 @@ describe("meetings-fireflies template", () => {
     const q = Object.fromEntries(p.queryParameters.parameters.map((x) => [x.name, x.value]));
     expect(q.singleEvents).toBe("true");
     expect(q.maxResults).toBe("50");
-    const nodes = { [FETCH]: { data: { transcript: { date: 3_600_000, duration: 10 } } } };
+    const nodes = { [ROUTE]: { transcript: { date: 3_600_000, duration: 10 } } };
     expect(evalExpr(q.timeMin, {}, nodes)).toBe(new Date(3_600_000 - 1_800_000).toISOString());
     expect(evalExpr(q.timeMax, {}, nodes)).toBe(
       new Date(3_600_000 + 600_000 + 1_800_000).toISOString(),
