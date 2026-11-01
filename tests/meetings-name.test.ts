@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_VAULT_CONFIG } from "../src/config/defaults.js";
 import { ConfigInvalidError, type VaultConfig } from "../src/config/vault-config.js";
@@ -11,6 +12,7 @@ import {
   withTimeSuffix,
 } from "../src/meetings/name.js";
 import { NotePath } from "../src/vault/note-schema.js";
+import { scrub } from "../src/vault/scrub/index.js";
 
 const cfg = (over: Partial<VaultConfig["meetings"]> = {}, tz = "America/Bogota"): VaultConfig => ({
   ...DEFAULT_VAULT_CONFIG,
@@ -92,6 +94,36 @@ describe("length", () => {
   });
 });
 
+describe("bytes and invisible characters", () => {
+  it.each(["\u00e9", "\u{1F600}", "\u4e2d"])(
+    "keeps the file name within 255 bytes for %j",
+    (ch) => {
+      const c = cfg();
+      const r = meetingPath({ id: "e", title: ch.repeat(400) } as never, START, "work", c);
+      const longest = Math.max(...Object.values(c.meetings.sources).map((s) => s.label.length));
+      const withBoth = `${withTimeSuffix(r.base, START, c)} (${"y".repeat(longest)}).md`;
+      expect(Buffer.byteLength(basename(r.path))).toBeLessThanOrEqual(255);
+      expect(Buffer.byteLength(withBoth)).toBeLessThanOrEqual(255);
+      expect(r.path.length).toBeLessThanOrEqual(255);
+      expect(r.base.length).toBeGreaterThan(20);
+    },
+  );
+  it("cuts a long untitled label by bytes too", () => {
+    const r = meetingPath(undefined, START, "work", cfg({ untitled_label: "\u00e9".repeat(400) }));
+    const full = `${withTimeSuffix(r.base, START, cfg())} (Fireflies).md`;
+    expect(Buffer.byteLength(basename(r.path))).toBeLessThanOrEqual(255);
+    expect(Buffer.byteLength(full)).toBeLessThanOrEqual(255);
+  });
+  it("turns bidi overrides, zero-width, BOM and C1 controls into spaces", () => {
+    const rlo = "\u202e";
+    expect(cleanTitle(`a${rlo}b`)).toBe("a b");
+    expect(cleanTitle("a\u200bb\ufeffc\u0085d")).toBe("a b c d");
+    const r = meetingPath({ id: "e", title: `evil${rlo}fdp.exe` } as never, START, "work", cfg());
+    expect(r.base).toBe("2026-10-30 · evil fdp.exe");
+    expect(r.path).not.toContain(rlo);
+  });
+});
+
 describe("fallbacks", () => {
   it("a title empty after cleaning gives the untitled name", () => {
     expect(meetingTitle({ id: "e", title: "???" } as never, START, cfg(), 100)).toBe(
@@ -105,6 +137,23 @@ describe("fallbacks", () => {
     expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
     expect(r.path).not.toContain("ghp_");
     expect(r.path).not.toContain("clone");
+  });
+  it("a title that only matches the scrubber after cleaning gives the untitled name", () => {
+    const card = ["4111", "1111", "1111", "1111"].join("/");
+    const bearer = `Bearer\n${"abcdEFGH"}${"1234ijkl"}MNOP5678`;
+    for (const title of [card, bearer]) {
+      expect(scrub(title).hits.size).toBe(0);
+      const r = meetingPath({ id: "e", title } as never, START, "work", cfg());
+      expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
+      expect(r.path).not.toContain("4111");
+      expect(r.path).not.toContain("abcdEFGH");
+    }
+  });
+  it("an untitled label that only matches after cleaning falls back to the default", () => {
+    const label = ["4111", "1111", "1111", "1111"].join("/");
+    expect(meetingTitle(undefined, START, cfg({ untitled_label: label }), 100)).toBe(
+      "Untitled meeting 22-30",
+    );
   });
   it("a labeled secret title is replaced too", () => {
     const r = meetingPath({ id: "e", title: scrubTitle(25) } as never, START, "work", cfg());

@@ -8,6 +8,7 @@ import type { CalendarEvent } from "./types.js";
 // cleaned and scrubbed here; the writer's NotePath and path-secret checks still run later.
 
 const MAX_PATH = 255;
+const MAX_NAME_BYTES = 255; // one file name component, in UTF-8 bytes
 const DATE_PREFIX_LENGTH = "YYYY-MM-DD · ".length;
 const EXTENSION_LENGTH = ".md".length;
 const TIME_SUFFIX_LENGTH = " HH-MM".length;
@@ -15,7 +16,7 @@ const LABEL_SUFFIX_OVERHEAD = " ()".length;
 
 // Characters that are unsafe in a file name or break Obsidian links, plus control characters.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing control characters is the point
-const FORBIDDEN_RUN = /[<>:"/\\|?*[\]#^\u0000-\u001f\u007f]+/gu;
+const FORBIDDEN_RUN = /[<>:"/\\|?*[\]#^\u0000-\u001f\u007f\p{Cc}\p{Cf}]+/gu;
 
 export function localParts(start: Date, timeZone: string): { date: string; hhmm: string } {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -43,12 +44,17 @@ export function cleanTitle(raw: string): string {
   return trimEdges(raw.normalize("NFC").replace(FORBIDDEN_RUN, " ").replace(/\s+/gu, " "));
 }
 
-function cut(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
+// Cut on code points to at most `maxLen` UTF-16 characters and `maxBytes` UTF-8 bytes (a Linux
+// file name component is limited in bytes), then trim the edges again.
+function cut(text: string, maxLen: number, maxBytes: number): string {
+  if (text.length <= maxLen && Buffer.byteLength(text) <= maxBytes) return text;
   let out = "";
+  let bytes = 0;
   for (const ch of Array.from(text)) {
-    if (out.length + ch.length > maxLen) break;
+    const size = Buffer.byteLength(ch);
+    if (out.length + ch.length > maxLen || bytes + size > maxBytes) break;
     out += ch;
+    bytes += size;
   }
   return trimEdges(out);
 }
@@ -58,8 +64,8 @@ function scrubHit(text: string): boolean {
 }
 
 /** A cleaned, cut text that is non-empty and not a scrub hit (raw or cleaned), else "". */
-function safeText(raw: string, maxLen: number): string {
-  const cleaned = cut(cleanTitle(raw), maxLen);
+function safeText(raw: string, maxLen: number, maxBytes: number): string {
+  const cleaned = cut(cleanTitle(raw), maxLen, maxBytes);
   if (cleaned === "" || scrubHit(raw) || scrubHit(cleaned)) return "";
   return cleaned;
 }
@@ -73,15 +79,20 @@ export function meetingTitle(
   start: Date,
   cfg: VaultConfig,
   maxLen: number,
+  maxBytes: number = Number.MAX_SAFE_INTEGER,
 ): string {
   if (event?.title !== undefined) {
-    const title = safeText(event.title, maxLen);
+    const title = safeText(event.title, maxLen, maxBytes);
     if (title !== "") return title;
   }
   const labelMax = Math.max(maxLen - TIME_SUFFIX_LENGTH, 0);
   const label =
-    safeText(cfg.meetings.untitled_label, labelMax) ||
-    safeText(DEFAULT_VAULT_CONFIG.meetings.untitled_label, Number.MAX_SAFE_INTEGER);
+    safeText(cfg.meetings.untitled_label, labelMax, Math.max(maxBytes - TIME_SUFFIX_LENGTH, 0)) ||
+    safeText(
+      DEFAULT_VAULT_CONFIG.meetings.untitled_label,
+      Number.MAX_SAFE_INTEGER,
+      Number.MAX_SAFE_INTEGER,
+    );
   return `${label} ${localParts(start, cfg.meetings.timezone).hhmm}`;
 }
 
@@ -116,7 +127,14 @@ export function meetingPath(
   const reserve = TIME_SUFFIX_LENGTH + LABEL_SUFFIX_OVERHEAD + Math.max(0, ...labelLengths);
   const maxLen = MAX_PATH - folder.length - 1 - DATE_PREFIX_LENGTH - EXTENSION_LENGTH - reserve;
   const { date } = localParts(start, cfg.meetings.timezone);
-  const base = `${date} · ${meetingTitle(event, start, cfg, maxLen)}`;
+  const prefix = `${date} · `;
+  const labelBytes = Object.values(cfg.meetings.sources).map((s) => Buffer.byteLength(s.label));
+  const maxBytes =
+    MAX_NAME_BYTES -
+    Buffer.byteLength(prefix) -
+    EXTENSION_LENGTH -
+    (TIME_SUFFIX_LENGTH + LABEL_SUFFIX_OVERHEAD + Math.max(0, ...labelBytes));
+  const base = `${prefix}${meetingTitle(event, start, cfg, maxLen, maxBytes)}`;
   return { folder, base, path: `${folder}/${base}.md` };
 }
 
