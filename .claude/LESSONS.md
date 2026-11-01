@@ -50,3 +50,10 @@ Format:
 
 ## Orchestration: never run a fix and a review in the same worktree at once (F3 T19)
 A verifier mutation-probing the worktree while the implementer was still applying a follow-up fix saw foreign uncommitted edits and could not finish. Send review requests only after the fix is committed, and send follow-up fixes only after the reviews of the current head return.
+
+## Retro F4 and F5 (2026-11-01)
+- 2026-11-01 (F5 T15): merge the bookkeeping PR only between task merges, never while a task PR is in review; moving main forces the auditor and security reviewer to restate their verdicts at the new head.
+- 2026-11-01 (F5 T14, T15): in n8n templates, per-recording data reads the paired item (`$('Node').item` or `itemMatching(i)`), never `.first()` (only single-item nodes like Settings); a paired-item test needs multi-item arrays checked at index 1, or `.item` and `.first()` give the same answer.
+- 2026-11-01 (F5 T13, T16): byte-exact `.expected.md` fixtures are excluded from the Biome formatter in biome.json; never run `biome format --write` or `check --write` on files a task does not change (an implementer reformatted an unrelated template).
+- 2026-11-01 (F5 T18): review a guide sentence by sentence against the templates and code, and make its test read every stated fact from the templates; three false sentences passed a structure-only test.
+- 2026-11-01 (F5 T14): reviewer status lines use the spec task id (`task=T14`), not the worktree name (`F5-T14`); say so in every review prompt.
