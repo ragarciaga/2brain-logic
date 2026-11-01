@@ -10,9 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runHook } from "../../plugin/scripts/session-end.mjs";
+import { installFakeClaude } from "./helpers/fake-claude.js";
 
 const HOOK = resolve("plugin/scripts/session-end.mjs");
 const SCRIPTS = resolve("plugin/scripts");
@@ -235,7 +236,11 @@ describe("session-end.mjs as a child process", () => {
   const root = posix && process.getuid?.() === 0;
 
   /** Runs the hook under umask 777, as uid 65534 when the tests run as root. */
-  function runUnderUmask(event: Record<string, unknown>, parent: string) {
+  function runUnderUmask(
+    event: Record<string, unknown>,
+    parent: string,
+    baseEnv: Record<string, string | undefined> = process.env,
+  ) {
     chmodSync(parent, 0o777);
     const data = join(parent, "data");
     const run = ["sh", "-c", 'umask 777; exec "$@"', "sh", process.execPath, HOOK];
@@ -244,7 +249,7 @@ describe("session-end.mjs as a child process", () => {
       : run;
     const r = spawnSync(cmd[0] as string, cmd.slice(1), {
       input: JSON.stringify(event),
-      env: { ...process.env, CLAUDE_PLUGIN_DATA: data },
+      env: { ...baseEnv, CLAUDE_PLUGIN_DATA: data } as NodeJS.ProcessEnv,
       encoding: "utf8",
     });
     return { r, data };
@@ -265,18 +270,40 @@ describe("session-end.mjs as a child process", () => {
     },
   );
 
-  it.skipIf(!posix || (root && !hasSetpriv))("stores the job privately under umask 777", () => {
-    const parent = mkdtempSync(join(tmpdir(), "hook-umask-"));
-    try {
-      const { r, data } = runUnderUmask(EVENT, parent);
-      expectSilent(r);
-      expect(statSync(data).mode & 0o777).toBe(0o700);
-      expect(statSync(join(data, "queue")).mode & 0o777).toBe(0o700);
-      const jobs = readdirSync(join(data, "queue")).filter((n) => n.endsWith(".json"));
-      expect(jobs).toHaveLength(1);
-      expect(statSync(join(data, "queue", jobs[0] as string)).mode & 0o777).toBe(0o600);
-    } finally {
-      rmSync(parent, { recursive: true, force: true });
-    }
-  });
+  it.skipIf(!posix || (root && !hasSetpriv))(
+    "stores the job privately under umask 777",
+    async () => {
+      const parent = mkdtempSync(join(tmpdir(), "hook-umask-"));
+      const fake = installFakeClaude({ result: {} });
+      const base: Record<string, string | undefined> = { ...process.env };
+      for (const k of Object.keys(base)) {
+        if (
+          k === "TWOBRAIN_AREA" ||
+          k === "TWOBRAIN_CAPTURE" ||
+          k.startsWith("CLAUDE_PLUGIN_OPTION_")
+        ) {
+          delete base[k];
+        }
+      }
+      base.PATH = `${fake.binDir}${delimiter}${process.env.PATH ?? ""}`;
+      try {
+        const { r, data } = runUnderUmask(EVENT, parent, base);
+        expectSilent(r);
+        expect(statSync(data).mode & 0o777).toBe(0o700);
+        expect(statSync(join(data, "queue")).mode & 0o777).toBe(0o700);
+        const jobs = readdirSync(join(data, "queue")).filter((n) => n.endsWith(".json"));
+        expect(jobs).toHaveLength(1);
+        expect(statSync(join(data, "queue", jobs[0] as string)).mode & 0o777).toBe(0o600);
+        // The detached worker runs too: no area is set, so it logs not_configured and keeps the job.
+        for (let i = 0; i < 100 && !logText(data).includes("abc-123 not_configured"); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(logText(data)).toContain("abc-123 not_configured");
+        expect(fake.runs()).toHaveLength(0);
+      } finally {
+        rmSync(dirname(fake.binDir), { recursive: true, force: true });
+        rmSync(parent, { recursive: true, force: true });
+      }
+    },
+  );
 });

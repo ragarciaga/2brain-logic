@@ -126,7 +126,7 @@ OAuth, and the worker would need an MCP client and token storage. (ADR 0016) (R7
 - Plugin data directory `CLAUDE_PLUGIN_DATA` on the owner's machine, outside the vault (D3)
   (R4.4, R8.6 to R8.9):
   ```text
-  queue/<epoch ms>-<session id>.json   job: { version: 1, event: <SessionEnd input>, attempts: 0, createdAt }
+  queue/<epoch ms>-<session id>.json   job: { version: 1, event: <SessionEnd input>, attempts: 0, createdAt, area }  (area is resolved at hook time)
   failed/<same name>                   jobs that gave up
   state.json                           { version: 1, sessions: { <session id>: { lineage, prompts, parts, capturedAt } } }
   capture.lock                         { pid, startedAt }

@@ -1,11 +1,11 @@
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -88,10 +88,21 @@ export function createQueue({ dataDir, now, log }) {
     privateDir(failedDir);
   }
 
+  /** @param {string} path */
+  function isRegular(path) {
+    try {
+      return lstatSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }
+
   /** @returns {string[]} */
   function jobNames() {
     try {
-      return readdirSync(queueDir).filter((n) => n.endsWith(".json"));
+      return readdirSync(queueDir).filter(
+        (n) => n.endsWith(".json") && isRegular(join(queueDir, n)),
+      );
     } catch (err) {
       if (/** @type {NodeJS.ErrnoException} */ (err).code === "ENOENT") {
         return [];
@@ -203,8 +214,11 @@ export function createQueue({ dataDir, now, log }) {
     }
     for (const name of old) {
       const path = join(failedDir, name);
-      if (statSync(path).mtimeMs < t - FAILED_TTL_MS) {
-        rmSync(path, { force: true });
+      try {
+        const st = lstatSync(path);
+        if (st.isFile() && st.mtimeMs < t - FAILED_TTL_MS) rmSync(path, { force: true });
+      } catch {
+        // vanished or unreadable: leave it
       }
     }
   }
