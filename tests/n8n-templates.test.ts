@@ -3,7 +3,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { meetingBodySchema } from "../src/meetings/schema.js";
 import { scrub } from "../src/vault/scrub/index.js";
-import { evalN8n, loadTemplate, type N8nTemplate, nodeByName } from "./helpers/n8n-template.js";
+import {
+  evalN8n,
+  loadTemplate,
+  type N8nTemplate,
+  nodeByName,
+  paths,
+  pathsAvoiding,
+} from "./helpers/n8n-template.js";
 
 const DIR = join(import.meta.dirname, "..", "n8n", "templates");
 const FILES = ["meetings-fireflies.json", "meetings-gemini.json"];
@@ -125,6 +132,27 @@ describe.each(FILES)("n8n template %s", (file) => {
     expect(post.credentials).toEqual({ httpHeaderAuth: { name: "2brain ingest" } });
   });
 
+  it("the post answer is read by the workflow, not retried by n8n", () => {
+    const post = nodeByName(t, POST);
+    expect(post.retryOnFail).toBeUndefined();
+    expect(post.maxTries).toBeUndefined();
+    expect(post.waitBetweenTries).toBeUndefined();
+    expect(post.parameters?.options).toEqual({
+      response: { response: { fullResponse: true, neverError: true, responseFormat: "json" } },
+    });
+  });
+
+  it("the post retry waits at least 60 s and goes back through the calendar", () => {
+    const wait = nodeByName(t, "Post wait");
+    expect(wait.type).toBe("n8n-nodes-base.wait");
+    const p = wait.parameters as { resume: string; amount: number; unit: string };
+    expect(p.resume).toBe("timeInterval");
+    const seconds = p.amount * { seconds: 1, minutes: 60, hours: 3600 }[p.unit as "seconds"];
+    expect(seconds).toBeGreaterThanOrEqual(60);
+    expect(paths(t, "Post wait", POST).length).toBeGreaterThan(0);
+    expect(pathsAvoiding(t, "Post wait", POST, CALENDAR)).toEqual([]);
+  });
+
   it("calendar window", () => {
     const q = Object.fromEntries(
       params(t, CALENDAR).queryParameters.parameters.map((x) => [x.name, x.value]),
@@ -186,5 +214,91 @@ describe.each(FILES)("n8n template %s", (file) => {
     expect(foreignEmails(JSON.stringify({ note: "who@acme.test" }))).toEqual(["who@acme.test"]);
     expect(foreignEmails(JSON.stringify({ note: "who@example.com.evil.test" })).length).toBe(1);
     expect(ownerNames(JSON.stringify({ note: "ask marta quintero" }))).toEqual(["Marta Quintero"]);
+  });
+});
+
+describe("n8n template meetings-gemini.json: ingest answer", () => {
+  const t = loadTemplate(join(DIR, "meetings-gemini.json"));
+
+  interface Cond {
+    leftValue: string;
+    rightValue: number;
+    operator: { type: string; operation: string };
+  }
+  const cond = (name: string): Cond => {
+    const p = nodeByName(t, name).parameters as unknown as {
+      conditions: { combinator: string; conditions: Cond[] };
+    };
+    expect(p.conditions.combinator).toBe("and");
+    expect(p.conditions.conditions).toHaveLength(1);
+    expect(p.conditions.conditions[0].operator).toEqual({ type: "number", operation: "gt" });
+    expect(p.conditions.conditions[0].rightValue).toBe(0);
+    return p.conditions.conditions[0];
+  };
+  const setValue = (name: string): string => {
+    const p = nodeByName(t, name).parameters as unknown as {
+      assignments: { assignments: { name: string; value: string; type: string }[] };
+    };
+    expect(p.assignments.assignments).toHaveLength(1);
+    expect(p.assignments.assignments[0].name).toBe("post_try");
+    expect(p.assignments.assignments[0].type).toBe("number");
+    return p.assignments.assignments[0].value;
+  };
+
+  /** Runs the retry loop from the nodes' own expressions; returns how many posts it made. */
+  function posts(status: (post: number) => number | undefined): number {
+    const retry = cond("Retry post");
+    let tryNo = evalN8n(setValue("Post try"), { json: {} }) as number;
+    for (let n = 1; n <= 20; n++) {
+      const json = { statusCode: status(n) };
+      const nodes = { "Post try": { post_try: tryNo } };
+      if (!((evalN8n(retry.leftValue, { json, nodes }) as number) > retry.rightValue)) return n;
+      const next = evalN8n(setValue("Next post try"), { json, nodes }) as number;
+      tryNo = evalN8n(setValue("Post try"), { json: { post_try: next } }) as number;
+    }
+    throw new Error("the retry loop did not end");
+  }
+
+  it("a first pass starts at try 1 and keeps the try it is given", () => {
+    expect(evalN8n(setValue("Post try"), { json: {} })).toBe(1);
+    expect(evalN8n(setValue("Post try"), { json: { post_try: 3 } })).toBe(3);
+  });
+
+  it.each([502, 503])("%i is retried 3 times, 4 posts in all", (code) => {
+    expect(posts(() => code)).toBe(4);
+  });
+
+  it("502 then 201 posts twice, 503 then 502 then 200 three times", () => {
+    expect(posts((n) => (n === 1 ? 502 : 201))).toBe(2);
+    expect(posts((n) => (n === 1 ? 503 : n === 2 ? 502 : 200))).toBe(3);
+  });
+
+  it.each([400, 404, 409, 422, 429, 500, 200, 201, undefined])("%s is not retried", (code) => {
+    expect(posts(() => code)).toBe(1);
+  });
+
+  it("the retry waits 60 s through Post wait and a retry never skips the post", () => {
+    const main = (name: string) => t.connections[name].main.map((o) => o.map((c) => c.node));
+    expect(main("Retry post")).toEqual([["Next post try"], ["Loop transcripts"]]);
+    expect(main("Next post try")).toEqual([["Post wait"]]);
+    expect(main("Post wait")).toEqual([["Post try"]]);
+    expect(main("Post try")).toEqual([[CALENDAR]]);
+    expect(main("Transcript entries")[0]).toEqual(["Post try"]);
+  });
+
+  it("Refused flags 4xx answers only", () => {
+    const c = cond("Refused");
+    const refused = (statusCode?: number) =>
+      (evalN8n(c.leftValue, { json: { statusCode } }) as number) > c.rightValue;
+    for (const code of [400, 409, 499]) expect(refused(code)).toBe(true);
+    for (const code of [200, 201, 399, 500, 502, 503, undefined]) expect(refused(code)).toBe(false);
+  });
+
+  it("Refused runs when the loop is done and leads to a stop", () => {
+    const main = (name: string) => t.connections[name].main.map((o) => o.map((c) => c.node));
+    expect(main("Loop transcripts")[0]).toEqual(["Refused"]);
+    expect(main("Refused")[0]).toEqual(["Ingest refused"]);
+    expect(nodeByName(t, "Ingest refused").type).toBe("n8n-nodes-base.stopAndError");
+    expect(t.connections["Ingest refused"]).toBeUndefined();
   });
 });

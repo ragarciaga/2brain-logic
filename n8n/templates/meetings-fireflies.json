@@ -51,7 +51,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Poll state: picks the ids to ask Fireflies for, one request per round.\n// Static data holds only day, used, posted and pending (id -> ISO time).\nconst ID = /^[A-Za-z0-9_-]{1,64}$/;\nconst RESERVED = ['__proto__', 'constructor', 'prototype'];\nconst MAX_TRIES = 3;\nconst WINDOW_MS = 48 * 60 * 60 * 1000;\nconst validId = (v) => typeof v === 'string' && ID.test(v) && !RESERVED.includes(v);\nconst isoOk = (v) => typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T/.test(v) && !Number.isNaN(Date.parse(v));\nconst has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);\n\nconst s = $getWorkflowStaticData('global');\nfor (const k of Object.keys(s)) {\n  if (!['day', 'used', 'posted', 'pending'].includes(k)) delete s[k];\n}\nif (typeof s.day !== 'string') s.day = '';\nif (!Number.isInteger(s.used) || s.used < 0) s.used = 0;\nfor (const f of ['posted', 'pending']) {\n  const cur = s[f];\n  if (cur === null || typeof cur !== 'object' || Array.isArray(cur)) {\n    s[f] = {};\n  } else {\n    for (const k of Object.keys(cur)) {\n      if (!validId(k) || !isoOk(cur[k])) delete cur[k];\n    }\n  }\n}\n\nconst b = Number($('Settings').first().json.daily_budget);\nconst budget = Number.isFinite(b) && b >= 0 ? Math.floor(b) : 0;\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst today = nowIso.slice(0, 10);\nif (s.day !== today) {\n  s.day = today;\n  s.used = 0;\n}\nfor (const k of Object.keys(s.posted)) {\n  if (now.getTime() - Date.parse(s.posted[k]) > WINDOW_MS) delete s.posted[k];\n}\nconst reserve = () => {\n  if (s.used + 1 > budget) return false;\n  s.used += 1;\n  return true;\n};\n\nconst ok2xx = (r) => typeof r.statusCode === 'number' && r.statusCode >= 200 && r.statusCode < 300;\nconst rateLimited = (r) => {\n  if (r.statusCode === 429) return true;\n  const errs = r.body && Array.isArray(r.body.errors) ? r.body.errors : [];\n  return errs.some((e) => e && ((e.extensions && e.extensions.code) ?? e.code) === 'too_many_requests');\n};\nconst req = (next, id, attempt, queue) => ({ json: { poll: { next, id, attempt, queue } } });\nconst fromQueue = (queue, out) => {\n  const q = Array.isArray(queue) ? queue.filter(validId) : [];\n  if (q.length > 0 && reserve()) out.push(req('fetch', q[0], 1, q.slice(1)));\n};\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const j = items[i].json;\n  if (j === null || typeof j !== 'object') continue;\n\n  if ('daily_budget' in j) {\n    if ('body' in j) {\n      const body = j.body;\n      const id = body !== null && typeof body === 'object' && !Array.isArray(body) ? body.meetingId : undefined;\n      if (validId(id) && !has(s.posted, id) && reserve()) out.push(req('fetch', id, 1, []));\n    } else if (reserve()) {\n      out.push({ json: { poll: { next: 'list' } } });\n    }\n    continue;\n  }\n\n  const ctx = $('Poll route').itemMatching(i).json.poll;\n  if (!ctx || typeof ctx !== 'object') continue;\n  if (rateLimited(j)) continue;\n\n  if (ctx.next === 'list') {\n    const list = j.body && j.body.data ? j.body.data.transcripts : undefined;\n    if (!ok2xx(j) || !Array.isArray(list)) continue;\n    const seen = new Set();\n    const sel = [];\n    const add = (id) => {\n      if (validId(id) && !has(s.posted, id) && !seen.has(id)) {\n        seen.add(id);\n        sel.push(id);\n      }\n    };\n    for (const t of list) {\n      if (t && !has(s.pending, t.id)) add(t.id);\n    }\n    for (const id of Object.keys(s.pending)) add(id);\n    for (const id of sel) {\n      if (!has(s.pending, id)) s.pending[id] = nowIso;\n    }\n    if (sel.length > 0 && reserve()) out.push(req('fetch', sel[0], 1, sel.slice(1)));\n    continue;\n  }\n\n  if (ctx.next === 'fetch' || ctx.next === 'retry') {\n    if (!validId(ctx.id)) continue;\n    const tr = j.body && j.body.data ? j.body.data.transcript : undefined;\n    if (ok2xx(j) && tr && tr.id === ctx.id) {\n      out.push({ json: { poll: { next: 'post', id: ctx.id }, transcript: tr } });\n      fromQueue(ctx.queue, out);\n    } else {\n      const attempt = Number.isInteger(ctx.attempt) ? ctx.attempt : MAX_TRIES;\n      if (attempt < MAX_TRIES) {\n        if (reserve()) out.push(req('retry', ctx.id, attempt + 1, Array.isArray(ctx.queue) ? ctx.queue : []));\n      } else {\n        out.push({ json: { poll: { next: 'failed', id: ctx.id } } });\n        if (has(s.pending, ctx.id)) {\n          const first = s.pending[ctx.id];\n          delete s.pending[ctx.id];\n          s.pending[ctx.id] = first;\n        }\n        fromQueue(ctx.queue, out);\n      }\n    }\n  }\n}\nreturn out;\n"
+        "jsCode": "// Poll state: picks the ids to ask Fireflies for, one request per round.\n// A round is serial: one fetch, its post and the post answer, then the next id.\n// Static data holds only day, used, posted and pending (id -> ISO time).\nconst ID = /^[A-Za-z0-9_-]{1,64}$/;\nconst RESERVED = ['__proto__', 'constructor', 'prototype'];\nconst MAX_TRIES = 3;\nconst MAX_POSTS = 4;\nconst WINDOW_MS = 48 * 60 * 60 * 1000;\nconst validId = (v) => typeof v === 'string' && ID.test(v) && !RESERVED.includes(v);\nconst isoOk = (v) => typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T/.test(v) && !Number.isNaN(Date.parse(v));\nconst has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);\n\nconst s = $getWorkflowStaticData('global');\nfor (const k of Object.keys(s)) {\n  if (!['day', 'used', 'posted', 'pending'].includes(k)) delete s[k];\n}\nif (typeof s.day !== 'string') s.day = '';\nif (!Number.isInteger(s.used) || s.used < 0) s.used = 0;\nfor (const f of ['posted', 'pending']) {\n  const cur = s[f];\n  if (cur === null || typeof cur !== 'object' || Array.isArray(cur)) {\n    s[f] = {};\n  } else {\n    for (const k of Object.keys(cur)) {\n      if (!validId(k) || !isoOk(cur[k])) delete cur[k];\n    }\n  }\n}\n\nconst b = Number($('Settings').first().json.daily_budget);\nconst budget = Number.isFinite(b) && b >= 0 ? Math.floor(b) : 0;\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst today = nowIso.slice(0, 10);\nif (s.day !== today) {\n  s.day = today;\n  s.used = 0;\n}\nfor (const k of Object.keys(s.posted)) {\n  if (now.getTime() - Date.parse(s.posted[k]) > WINDOW_MS) delete s.posted[k];\n}\nconst reserve = () => {\n  if (s.used + 1 > budget) return false;\n  s.used += 1;\n  return true;\n};\n\nconst ok2xx = (r) => typeof r.statusCode === 'number' && r.statusCode >= 200 && r.statusCode < 300;\nconst rateLimited = (r) => {\n  if (r.statusCode === 429) return true;\n  const errs = r.body && Array.isArray(r.body.errors) ? r.body.errors : [];\n  return errs.some((e) => e && ((e.extensions && e.extensions.code) ?? e.code) === 'too_many_requests');\n};\n// The carry travels in the items: the ids still to fetch and the stop to emit when the round ends.\nconst carryOf = (ctx) => {\n  const st = ctx.stop;\n  const stop =\n    st !== null && typeof st === 'object' && (st.next === 'failed' || st.next === 'rejected') && validId(st.id)\n      ? { next: st.next, id: st.id }\n      : undefined;\n  return { queue: Array.isArray(ctx.queue) ? ctx.queue.filter(validId) : [], stop };\n};\nconst withCarry = (poll, carry) => (carry.stop ? { ...poll, queue: carry.queue, stop: carry.stop } : { ...poll, queue: carry.queue });\nconst req = (next, id, attempt, carry) => ({ json: { poll: withCarry({ next, id, attempt }, carry) } });\nconst end = (carry, out) => {\n  if (carry.stop) out.push({ json: { poll: carry.stop } });\n};\nconst cont = (carry, out) => {\n  if (carry.queue.length > 0 && reserve()) {\n    out.push(req('fetch', carry.queue[0], 1, { queue: carry.queue.slice(1), stop: carry.stop }));\n  } else {\n    end(carry, out);\n  }\n};\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const j = items[i].json;\n  if (j === null || typeof j !== 'object') continue;\n\n  if ('daily_budget' in j) {\n    if ('body' in j) {\n      const body = j.body;\n      const id = body !== null && typeof body === 'object' && !Array.isArray(body) ? body.meetingId : undefined;\n      if (validId(id) && !has(s.posted, id) && reserve()) out.push(req('fetch', id, 1, { queue: [] }));\n    } else if (reserve()) {\n      out.push({ json: { poll: { next: 'list' } } });\n    }\n    continue;\n  }\n\n  const row = $('Poll route').itemMatching(i).json;\n  const ctx = row ? row.poll : undefined;\n  if (!ctx || typeof ctx !== 'object') continue;\n  const carry = carryOf(ctx);\n\n  if (ctx.next === 'post' || ctx.next === 'repost') {\n    if (!validId(ctx.id)) {\n      end(carry, out);\n      continue;\n    }\n    const code = typeof j.statusCode === 'number' ? j.statusCode : 0;\n    if (code === 200 || code === 201) {\n      s.posted[ctx.id] = nowIso;\n      delete s.pending[ctx.id];\n      cont(carry, out);\n    } else if (code === 502 || code === 503) {\n      const attempt = ctx.next === 'repost' && Number.isInteger(ctx.attempt) ? ctx.attempt : 1;\n      if (attempt < MAX_POSTS) {\n        out.push({ json: { poll: withCarry({ next: 'repost', id: ctx.id, attempt: attempt + 1 }, carry), transcript: row.transcript } });\n      } else {\n        end(carry, out);\n      }\n    } else if (code >= 400 && code < 500) {\n      s.posted[ctx.id] = nowIso;\n      delete s.pending[ctx.id];\n      cont({ queue: carry.queue, stop: carry.stop ?? { next: 'rejected', id: ctx.id } }, out);\n    } else {\n      cont(carry, out);\n    }\n    continue;\n  }\n\n  if (rateLimited(j)) {\n    end(carry, out);\n    continue;\n  }\n\n  if (ctx.next === 'list') {\n    const list = j.body && j.body.data ? j.body.data.transcripts : undefined;\n    if (!ok2xx(j) || !Array.isArray(list)) continue;\n    const seen = new Set();\n    const sel = [];\n    const add = (id) => {\n      if (validId(id) && !has(s.posted, id) && !seen.has(id)) {\n        seen.add(id);\n        sel.push(id);\n      }\n    };\n    for (const t of list) {\n      if (t && !has(s.pending, t.id)) add(t.id);\n    }\n    for (const id of Object.keys(s.pending)) add(id);\n    for (const id of sel) {\n      if (!has(s.pending, id)) s.pending[id] = nowIso;\n    }\n    if (sel.length > 0 && reserve()) out.push(req('fetch', sel[0], 1, { queue: sel.slice(1) }));\n    continue;\n  }\n\n  if (ctx.next === 'fetch' || ctx.next === 'retry') {\n    if (!validId(ctx.id)) {\n      end(carry, out);\n      continue;\n    }\n    const tr = j.body && j.body.data ? j.body.data.transcript : undefined;\n    if (ok2xx(j) && tr && tr.id === ctx.id) {\n      out.push({ json: { poll: withCarry({ next: 'post', id: ctx.id }, carry), transcript: tr } });\n    } else {\n      const attempt = Number.isInteger(ctx.attempt) ? ctx.attempt : MAX_TRIES;\n      if (attempt < MAX_TRIES) {\n        if (reserve()) out.push(req('retry', ctx.id, attempt + 1, carry));\n        else end(carry, out);\n      } else {\n        if (has(s.pending, ctx.id)) {\n          const first = s.pending[ctx.id];\n          delete s.pending[ctx.id];\n          s.pending[ctx.id] = first;\n        }\n        cont({ queue: carry.queue, stop: carry.stop ?? { next: 'failed', id: ctx.id } }, out);\n      }\n    }\n  }\n}\nreturn out;\n"
       },
       "name": "Poll state",
       "type": "n8n-nodes-base.code",
@@ -176,6 +176,52 @@
               },
               "renameOutput": true,
               "outputKey": "failed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-repost",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "repost",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "repost"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-rejected",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "rejected",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "rejected"
             }
           ]
         },
@@ -349,7 +395,15 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ source: \"fireflies\", transcript: $('Poll route').item.json.transcript, calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: ($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary') })) }) }}",
-        "options": {}
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
       },
       "name": "Post meeting",
       "type": "n8n-nodes-base.httpRequest",
@@ -359,7 +413,8 @@
         "httpHeaderAuth": {
           "name": "2brain ingest"
         }
-      }
+      },
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -369,6 +424,26 @@
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
       "position": [1100, 320]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 60,
+        "unit": "seconds"
+      },
+      "name": "Post wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [880, 540]
+    },
+    {
+      "parameters": {
+        "errorMessage": "2brain ingest refused a transcript with a 4xx answer; the Post meeting output shows which one"
+      },
+      "name": "Ingest refused",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1320, 320]
     }
   ],
   "connections": {
@@ -517,6 +592,20 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Post wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ingest refused",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -525,6 +614,35 @@
         [
           {
             "node": "Fetch transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post wait": {
+      "main": [
+        [
+          {
+            "node": "Calendar events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post meeting": {
+      "main": [
+        [
+          {
+            "node": "Poll state",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Poll state",
             "type": "main",
             "index": 0
           }
