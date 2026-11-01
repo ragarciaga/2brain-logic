@@ -1,0 +1,108 @@
+{
+  "source": "gemini",
+  "conference": {
+    "name": "conferenceRecords/exampleconf1",
+    "startTime": "2026-10-29T16:00:03.250000000Z",
+    "endTime": "2026-10-29T16:41:30.500000000Z",
+    "expireTime": "2026-11-28T16:41:30.500000000Z",
+    "space": "spaces/examplespace1"
+  },
+  "transcript": {
+    "name": "conferenceRecords/exampleconf1/transcripts/exampletr1",
+    "state": "FILE_GENERATED",
+    "startTime": "2026-10-29T16:00:05Z",
+    "endTime": "2026-10-29T16:41:30Z",
+    "docsDestination": {
+      "document": "documents/exampledoc1",
+      "exportUri": "https://docs.example.com/document/d/exampledoc1/export"
+    }
+  },
+  "participants": [
+    {
+      "name": "conferenceRecords/exampleconf1/participants/examplep1",
+      "earliestStartTime": "2026-10-29T16:00:03Z",
+      "latestEndTime": "2026-10-29T16:41:30Z",
+      "signedinUser": { "user": "users/100001", "displayName": "Dana Ortiz" }
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/participants/examplep2",
+      "earliestStartTime": "2026-10-29T16:00:40Z",
+      "latestEndTime": "2026-10-29T16:41:30Z",
+      "anonymousUser": { "displayName": "Eli Mora" }
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/participants/examplep3",
+      "earliestStartTime": "2026-10-29T16:02:10Z",
+      "latestEndTime": "2026-10-29T16:30:00Z",
+      "phoneUser": { "displayName": "Visitor by phone" }
+    }
+  ],
+  "entries": [
+    {
+      "name": "conferenceRecords/exampleconf1/transcripts/exampletr1/entries/e1",
+      "participant": "conferenceRecords/exampleconf1/participants/examplep1",
+      "text": "Good afternoon, shall we begin?",
+      "languageCode": "en-US",
+      "startTime": "2026-10-29T16:00:05.123456789Z",
+      "endTime": "2026-10-29T16:00:08.500000000Z"
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/transcripts/exampletr1/entries/e2",
+      "participant": "conferenceRecords/exampleconf1/participants/examplep1",
+      "text": "The agenda has two items.",
+      "languageCode": "en-US",
+      "startTime": "2026-10-29T16:00:09.987654321Z",
+      "endTime": "2026-10-29T16:00:12Z"
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/transcripts/exampletr1/entries/e3",
+      "participant": "conferenceRecords/exampleconf1/participants/examplep2",
+      "text": "Sounds good to me.",
+      "languageCode": "en-US",
+      "startTime": "2026-10-29T16:00:45.5Z",
+      "endTime": "2026-10-29T16:00:47Z"
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/transcripts/exampletr1/entries/e4",
+      "participant": "conferenceRecords/exampleconf1/participants/examplep3",
+      "text": "I can only stay for half an hour.",
+      "languageCode": "en-US",
+      "startTime": "2026-10-29T16:02:15Z",
+      "endTime": "2026-10-29T16:02:19Z"
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/transcripts/exampletr1/entries/e5",
+      "participant": "conferenceRecords/exampleconf1/participants/examplep1",
+      "text": "Understood, we will start with your topic.",
+      "languageCode": "en-US",
+      "startTime": "2026-10-29T16:02:21.000000001Z",
+      "endTime": "2026-10-29T16:02:25Z"
+    },
+    {
+      "name": "conferenceRecords/exampleconf1/transcripts/exampletr1/entries/e6",
+      "participant": "conferenceRecords/exampleconf1/participants/examplep2",
+      "text": "Thanks everyone, talk soon.",
+      "languageCode": "en-US",
+      "startTime": "2026-10-29T16:40:59.999999999Z",
+      "endTime": "2026-10-29T16:41:02Z"
+    }
+  ],
+  "calendar_events": [
+    {
+      "kind": "calendar#event",
+      "id": "evtgm0001",
+      "status": "confirmed",
+      "summary": "Budget review",
+      "title": "Budget review",
+      "calendar_id": "primary",
+      "htmlLink": "https://calendar.example.com/event?eid=evtgm0001",
+      "start": { "dateTime": "2026-10-29T11:00:00-05:00", "timeZone": "America/Bogota" },
+      "end": { "dateTime": "2026-10-29T11:45:00-05:00", "timeZone": "America/Bogota" },
+      "organizer": { "email": "dana@example.com" },
+      "attendees": [
+        { "email": "dana@example.com", "displayName": "Dana Ortiz", "responseStatus": "accepted" },
+        { "email": "eli@example.com", "displayName": "Eli Mora", "responseStatus": "tentative" }
+      ]
+    }
+  ]
+}

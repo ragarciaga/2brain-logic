@@ -11,7 +11,10 @@
     "enabled": true,
     "rules": { "preset": "recommended" }
   },
-  "overrides": [{ "includes": ["plugin/skills/**/*.md"], "formatter": { "enabled": false } }],
+  "overrides": [
+    { "includes": ["plugin/skills/**/*.md"], "formatter": { "enabled": false } },
+    { "includes": ["tests/fixtures/**/*.expected.md"], "formatter": { "enabled": false } }
+  ],
   "javascript": {
     "formatter": { "quoteStyle": "double" }
   }
