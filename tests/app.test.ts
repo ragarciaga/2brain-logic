@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CONFIG_FILE, ConfigInvalidError } from "../src/config/vault-config.js";
 import { GitError } from "../src/git/index.js";
+import { TranscriptNotReadyError } from "../src/meetings/schema.js";
 import { createApp } from "../src/server/app.js";
 import { mapWriteError } from "../src/server/errors.js";
 import type { NoteArchive, NoteInput, NotePatch } from "../src/vault/note-schema.js";
@@ -149,6 +150,28 @@ describe("POST /notes", () => {
   it("returns 413 for a body over 1 MB", async () => {
     const { app, writer } = setup();
     const response = await post(app, JSON.stringify({ ...valid, body: "x".repeat(1024 * 1024) }));
+    expect(response.status).toBe(413);
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it("D4: notes limit unchanged: exactly 1 MiB + 1 byte is 413 on /notes", async () => {
+    const { app, writer } = setup();
+    const response = await app.request("/notes", {
+      method: "POST",
+      body: new Uint8Array(1024 * 1024 + 1),
+      headers: { ...AUTH, "content-type": "application/json" },
+    });
+    expect(response.status).toBe(413);
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it("D4: a /notes body of 2 MiB is still 413", async () => {
+    const { app, writer } = setup();
+    const response = await app.request("/notes", {
+      method: "POST",
+      body: new Uint8Array(2 * 1024 * 1024),
+      headers: { ...AUTH, "content-type": "application/json" },
+    });
     expect(response.status).toBe(413);
     expect(writer.write).not.toHaveBeenCalled();
   });
@@ -921,6 +944,13 @@ describe("mapWriteError: the shared error table", () => {
       status: 500,
       body: { ok: false, error: "write_failed" },
       log: "write_failed: git commit exit 128",
+    },
+    {
+      name: "TranscriptNotReadyError",
+      error: new TranscriptNotReadyError(),
+      status: 409,
+      body: { ok: false, error: "transcript_not_ready" },
+      log: "transcript_not_ready",
     },
     {
       name: "an unknown error",

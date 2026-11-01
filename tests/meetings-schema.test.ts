@@ -209,6 +209,86 @@ describe("httpsUrl (D2)", () => {
   });
 });
 
+describe("string field caps (1000 characters)", () => {
+  const ok = "x".repeat(1000);
+  const over = "x".repeat(1001);
+  const cal = (over_: Record<string, unknown>) => ({
+    calendar_events: [{ ...event(1), ...over_ }],
+  });
+  const ffPeople = (name: string) => ({
+    meeting_attendees: [{ displayName: name, email: name, name }],
+  });
+  const cases: Array<[string, (v: string) => unknown, string]> = [
+    ["fireflies transcript.id", (v) => fireflies({ id: v }), "transcript.id"],
+    ["fireflies transcript.title", (v) => fireflies({ title: v }), "transcript.title"],
+    [
+      "fireflies transcript_url",
+      (v) => fireflies({ transcript_url: v }),
+      "transcript.transcript_url",
+    ],
+    [
+      "fireflies organizer_email",
+      (v) => fireflies({ organizer_email: v }),
+      "transcript.organizer_email",
+    ],
+    [
+      "fireflies participants",
+      (v) => fireflies({ participants: [v] }),
+      "transcript.participants.0",
+    ],
+    [
+      "fireflies attendee email",
+      (v) => fireflies(ffPeople(v)),
+      "transcript.meeting_attendees.0.email",
+    ],
+    ["calendar event id", (v) => fireflies({}, cal({ id: v })), "calendar_events.0.id"],
+    ["calendar event title", (v) => fireflies({}, cal({ title: v })), "calendar_events.0.title"],
+    [
+      "gemini conference.name",
+      (v) =>
+        gemini({
+          conference: {
+            name: v,
+            startTime: "2026-10-30T14:00:00Z",
+            endTime: "2026-10-30T14:45:00Z",
+          },
+        }),
+      "conference.name",
+    ],
+    [
+      "gemini transcript.name",
+      (v) => gemini({ transcript: { name: v, state: GEMINI_FINISHED_STATE } }),
+      "transcript.name",
+    ],
+    [
+      "gemini exportUri",
+      (v) =>
+        gemini({
+          transcript: {
+            name: "t",
+            state: GEMINI_FINISHED_STATE,
+            docsDestination: { exportUri: v },
+          },
+        }),
+      "transcript.docsDestination.exportUri",
+    ],
+    [
+      "gemini participant name",
+      (v) => gemini({ participants: [{ name: v }] }),
+      "participants.0.name",
+    ],
+    [
+      "gemini participant displayName",
+      (v) => gemini({ participants: [{ name: "p1", signedinUser: { displayName: v } }] }),
+      "participants.0.signedinUser.displayName",
+    ],
+  ];
+  it.each(cases)("%s: 1000 passes, 1001 is rejected", (_name, build, path) => {
+    expect(() => parseMeetingBody(build(ok))).not.toThrow();
+    expect(paths(rejection(build(over)))).toContain(path);
+  });
+});
+
 describe("no LLM imports (D4)", () => {
   function tsFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((n) => {
