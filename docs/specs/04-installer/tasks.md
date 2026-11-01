@@ -38,7 +38,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/answers.ts, src/config/env.ts, tests/install-answers.test.ts, tests/env.test.ts
 - Verify: `npm test -- tests/install-answers.test.ts tests/env.test.ts`; `npm run typecheck`; `npm run lint`; src/config/env.ts exports `isAllowedBaseUrl` with no behavior change (tests/env.test.ts unchanged and green, including "errors name variables, never values"); answers.ts validates email, https origin through `isAllowedBaseUrl`, whole-number hop count (0 to 10), Docker network name (`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`), passphrase of 12 characters or more and both entries equal, each failure an `{ field, rule }` whose rendered message contains neither the input value nor any substring of 4 or more characters of it; `parseSshRemote` accepts `git@github.com:owner/vault.git` (host `github.com`, port 22) and `ssh://git@git.example.com:2222/owner/vault.git` (port 2222), and refuses with `remote_not_ssh` `https://github.com/owner/vault.git`, `https://user:tok@github.com/x.git`, `ssh://user:secret@host/x.git`, `file:///tmp/x`, a bare path and an empty string, the error carrying no part of the input; named cases "refuses https remote", "refuses credential in ssh url", "message omits the value" for every field
 - Issue: #147
-- Status: todo
+- Status: done
 
 ### Decision log
 
