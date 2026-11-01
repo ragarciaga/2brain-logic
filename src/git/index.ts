@@ -335,7 +335,7 @@ export async function addPaths(dir: string, paths: string[]): Promise<void> {
 }
 
 /** Refuse a branch name that could change the refspec or look like an option. */
-function assertBranchName(branch: string): void {
+export function assertBranchName(branch: string): void {
   if (branch === "" || branch.startsWith("-") || branch.includes(":") || branch.includes("..")) {
     throw new Error("invalid branch name");
   }
