@@ -100,6 +100,118 @@ const AreasSchema = z
   .min(1)
   .refine((areas) => new Set(areas).size === areas.length, { message: "areas must be unique" });
 
+/** A label used inside a file name: non-empty, no separators or control characters, not `.`/`..`. */
+function isSafeLabel(value: string): boolean {
+  return (
+    value !== "" &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    !CONTROL_CHARS.test(value)
+  );
+}
+
+function isKnownTimezone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const safeLabel = nonEmpty.refine(isSafeLabel, {
+  message: "must be usable in a file name: no slashes, backslashes or control characters",
+});
+
+const MeetingSourceSchema = z.strictObject({ value: nonEmpty, label: safeLabel });
+
+const AreaRuleSchema = z.strictObject({
+  area: nonEmpty,
+  domain: nonEmpty.optional(),
+  calendar: nonEmpty.optional(),
+});
+
+const MEETING_PROPERTY_KEYS = [
+  "start",
+  "end",
+  "duration",
+  "participants",
+  "calendar_event",
+  "source_title",
+  "source_url",
+  "versions",
+] as const;
+
+const MeetingPropertiesSchema = z.strictObject({
+  start: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.start),
+  end: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.end),
+  duration: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.duration),
+  participants: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.participants),
+  calendar_event: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.calendar_event),
+  source_title: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.source_title),
+  source_url: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.source_url),
+  versions: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.properties.versions),
+});
+
+const MeetingsSectionSchema = z.strictObject({
+  timezone: nonEmpty
+    .refine(isKnownTimezone, { message: "must be an IANA time zone name" })
+    .default(DEFAULT_VAULT_CONFIG.meetings.timezone),
+  min_minutes: z.number().int().min(0).max(120).default(DEFAULT_VAULT_CONFIG.meetings.min_minutes),
+  untitled_label: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.untitled_label),
+  unknown_speaker_label: nonEmpty.default(DEFAULT_VAULT_CONFIG.meetings.unknown_speaker_label),
+  default_area: nonEmpty.nullable().default(DEFAULT_VAULT_CONFIG.meetings.default_area),
+  area_rules: z
+    .array(AreaRuleSchema)
+    .default(() => structuredClone(DEFAULT_VAULT_CONFIG.meetings.area_rules)),
+  sources: z
+    .strictObject({
+      fireflies: MeetingSourceSchema.default(() =>
+        structuredClone(DEFAULT_VAULT_CONFIG.meetings.sources.fireflies),
+      ),
+      gemini: MeetingSourceSchema.default(() =>
+        structuredClone(DEFAULT_VAULT_CONFIG.meetings.sources.gemini),
+      ),
+    })
+    .default(() => structuredClone(DEFAULT_VAULT_CONFIG.meetings.sources)),
+  properties: MeetingPropertiesSchema.default(() =>
+    structuredClone(DEFAULT_VAULT_CONFIG.meetings.properties),
+  ),
+});
+
+export interface AreaRule {
+  area: string;
+  domain?: string | undefined;
+  calendar?: string | undefined;
+}
+
+export interface MeetingSource {
+  value: string;
+  label: string;
+}
+
+export interface MeetingsConfig {
+  timezone: string;
+  min_minutes: number;
+  untitled_label: string;
+  unknown_speaker_label: string;
+  default_area: string | null;
+  area_rules: AreaRule[];
+  sources: { fireflies: MeetingSource; gemini: MeetingSource };
+  properties: {
+    start: string;
+    end: string;
+    duration: string;
+    participants: string;
+    calendar_event: string;
+    source_title: string;
+    source_url: string;
+    versions: string;
+  };
+}
+
 export interface TypeEntry {
   value: string;
   folder?: string | undefined;
@@ -113,18 +225,55 @@ export interface VaultConfig {
   areas: string[];
   sources: string[];
   types: Record<string, TypeEntry>;
+  meetings: MeetingsConfig;
 }
 
 // Zod clones a `.default(object)` shallowly, so object defaults come from a function. The type
 // is written out (not inferred) because the defaults file is typed with it.
-export const VaultConfigSchema: z.ZodType<VaultConfig, unknown> = z.strictObject({
-  version: z.literal(1).default(1),
-  vault: VaultSectionSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.vault)),
-  properties: PropertiesSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.properties)),
-  areas: AreasSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.areas)),
-  sources: z.array(nonEmpty).default(() => structuredClone(DEFAULT_VAULT_CONFIG.sources)),
-  types: TypesSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.types)),
-});
+export const VaultConfigSchema: z.ZodType<VaultConfig, unknown> = z
+  .strictObject({
+    version: z.literal(1).default(1),
+    vault: VaultSectionSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.vault)),
+    properties: PropertiesSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.properties)),
+    areas: AreasSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.areas)),
+    sources: z.array(nonEmpty).default(() => structuredClone(DEFAULT_VAULT_CONFIG.sources)),
+    types: TypesSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.types)),
+    meetings: MeetingsSectionSchema.default(() => structuredClone(DEFAULT_VAULT_CONFIG.meetings)),
+  })
+  .superRefine((config, ctx) => {
+    const { meetings } = config;
+    const add = (path: (string | number)[], message: string): void => {
+      ctx.addIssue({ code: "custom", path: ["meetings", ...path], message });
+    };
+
+    meetings.area_rules.forEach((rule, i) => {
+      if ((rule.domain === undefined) === (rule.calendar === undefined)) {
+        add(["area_rules", i], "an area rule needs exactly one of domain or calendar");
+      }
+      if (!config.areas.includes(rule.area)) {
+        add(["area_rules", i, "area"], `"${rule.area}" is not one of the configured areas`);
+      }
+    });
+
+    if (meetings.default_area !== null && !config.areas.includes(meetings.default_area)) {
+      add(["default_area"], `"${meetings.default_area}" is not one of the configured areas`);
+    }
+
+    if (meetings.sources.fireflies.value === meetings.sources.gemini.value) {
+      add(["sources", "gemini", "value"], "source values must be distinct");
+    }
+
+    const names = MEETING_PROPERTY_KEYS.map((key) => meetings.properties[key]);
+    if (new Set(names).size !== names.length) {
+      add(["properties"], "meeting property names must be distinct");
+    }
+    const reserved = new Set<string>([...Object.values(config.properties), "analysis"]);
+    for (const key of MEETING_PROPERTY_KEYS) {
+      if (reserved.has(meetings.properties[key])) {
+        add(["properties", key], `"${meetings.properties[key]}" is reserved by another property`);
+      }
+    }
+  });
 
 function keyPathOf(issue: z.core.$ZodIssue): string {
   const path = issue.path.map(String);
@@ -163,6 +312,33 @@ export async function loadVaultConfig(vaultDir: string): Promise<VaultConfig> {
     throw new ConfigInvalidError(CONFIG_FILE, keyPathOf(issue), issue.message);
   }
   return parsed.data;
+}
+
+/**
+ * The checks only meeting requests need, so a vault without meetings keeps every other write
+ * working. Throws `ConfigInvalidError` for a missing meeting type or folder, or a non-empty
+ * `sources` allow-list that lacks a meeting source value.
+ */
+export function requireMeetingSetup(config: VaultConfig): void {
+  const meeting = config.types.meeting;
+  if (meeting === undefined || meeting.folder === undefined) {
+    throw new ConfigInvalidError(
+      CONFIG_FILE,
+      "types.meeting",
+      "meetings need a meeting type with a folder",
+    );
+  }
+  if (config.sources.length > 0) {
+    for (const { value } of Object.values(config.meetings.sources)) {
+      if (!config.sources.includes(value)) {
+        throw new ConfigInvalidError(
+          CONFIG_FILE,
+          "sources",
+          `the allow-list lacks the meeting source "${value}"`,
+        );
+      }
+    }
+  }
 }
 
 /**
