@@ -202,7 +202,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: n8n/templates/meetings-gemini.json, tests/n8n-gemini.test.ts, tests/n8n-templates.test.ts
 - Verify: `npm test -- tests/n8n-gemini.test.ts tests/n8n-templates.test.ts`; `npm run typecheck`; `npm run lint`; meetings-gemini.json parses as an n8n workflow export; it runs on a Schedule trigger, lists `conferenceRecords` with an end-time filter of the last 24 hours, reads transcripts and follows `nextPageToken` for entries until none is left, and posts only transcripts in the finished state; for both templates: the post node targets exactly `http://brain:3000/meetings` with the `2brain ingest` Header Auth credential referenced by name; the calendar query spans from 30 minutes before the recording start to 30 minutes after its end and the events are passed as delivered (no mapping node between the calendar node and the post); case "no secrets": neither file holds a credential `id`, a bearer token, an API key pattern from the scrub rules, an email whose domain is not `example.com`, or a name from a planted owner list; for meetings-gemini.json, the Meet API and calendar nodes have `retryOnFail: true` and `maxTries: 3`, and on final failure reach no node that posts to the ingest route (case "gemini no post without calendar", checked over the connection graph)
 - Issue: #210
-- Status: todo
+- Status: done
 
 ### Decision log
 
