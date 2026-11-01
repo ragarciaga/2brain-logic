@@ -224,6 +224,24 @@ describe("re-asking", () => {
     expect(term.text()).not.toContain("😀");
   });
 
+  it("asks again when the NFC length is under 12 although the typed length passes", async () => {
+    const combining = "e\u0301".repeat(6);
+    const term = scripted([
+      ...head,
+      `${combining}\r`,
+      `${combining}\r`,
+      `${PASS}\r`,
+      `${PASS}\r`,
+      ...lines("n8n"),
+    ]);
+    const a = await askSetupAnswers(term, FRESH);
+    const count = term.writes.filter((w) => w === "passphrase: must be 12 characters or more\n");
+    expect(count).toHaveLength(1);
+    expect(term.raw).toEqual([true, false, true, false, true, false, true, false]);
+    expect(await verifyPassphrase(PASS, a.passphraseHash as string)).toBe(true);
+    expect(await verifyPassphrase(combining, a.passphraseHash as string)).toBe(false);
+  });
+
   it("asks again on an invalid email naming the field, without the value", async () => {
     const term = scripted([
       ...lines(REMOTE, "Ana Perez", "zqxjkkvv-not-mail", "ana@example.com", "", ""),
@@ -312,12 +330,25 @@ describe("safe display", () => {
     const a = await askSetupAnswers(term, { hasPassphraseHash: false, remote: "git@h:o‮x" });
     expect(term.text()).toContain("vault remote []: ");
     expect(term.text()).not.toContain("‮");
+    // Enter at the hidden-remote prompt returns nothing: it is refused once, then the typed one is used.
+    expect(term.writes.filter((w) => w.startsWith("vault remote: remote_not_ssh"))).toHaveLength(1);
     expect(a.remote).toBe(REMOTE);
   });
 
+  it("shows the current author email in brackets", async () => {
+    const term = scripted(lines(REMOTE, "Ana Perez", "", "", ""));
+    const a = await askSetupAnswers(term, {
+      hasPassphraseHash: false,
+      authorEmail: "ana@example.com",
+    });
+    expect(term.text()).toContain("author email [ana@example.com]: ");
+    expect(a.authorEmail).toBe("ana@example.com");
+  });
+
   it("shows a name with a bidi character escaped", async () => {
-    const term = scripted(lines(REMOTE, "", "ana@example.com", "", ""));
+    const term = scripted(lines(REMOTE, "", "Ana Perez", "ana@example.com", "", ""));
     await askSetupAnswers(term, { hasPassphraseHash: false, authorName: "Ana‮" });
+    expect(term.text()).toContain("author name: must not contain direction-control");
     expect(term.text()).toContain("author name [Ana\\u{202E}]: ");
     expect(term.text()).not.toContain("‮");
   });

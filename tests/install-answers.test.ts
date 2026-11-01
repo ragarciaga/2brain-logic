@@ -146,6 +146,32 @@ describe("validatePassphrase", () => {
   });
 });
 
+describe("validateAuthorName extra rules", () => {
+  it("refuses a whitespace-only name", () => {
+    for (const bad of [" ", "   ", "\u00a0", "\u3000"]) {
+      const error = failure(validateAuthorName(bad));
+      expect(error).toEqual({ field: "author name", rule: "must not be empty" });
+    }
+  });
+  it("refuses bidi and zero-width characters", () => {
+    for (const bad of [
+      "a\u202eb",
+      "a\u202ab",
+      "a\u2066b",
+      "a\u2069b",
+      "a\u061cb",
+      "a\u200bb",
+      "a\u200fb",
+      "a\ufeffb",
+    ]) {
+      const error = failure(validateAuthorName(bad));
+      expect(error.field).toBe("author name");
+      expect(error.rule).toBe("must not contain direction-control or zero-width characters");
+    }
+    expect(validateAuthorName("Ana Pérez").ok).toBe(true);
+  });
+});
+
 describe("isEnvWritableName", () => {
   it("accepts plain names and each quote form", () => {
     for (const ok of ["Ana Perez", "O'Brien", 'Ana "Nick" Perez', "Ana $Perez", "dom\\ana"]) {

@@ -314,7 +314,8 @@ async function askPassphraseHash(reader: Reader): Promise<string> {
     try {
       return await hashPassphrase(first);
     } catch {
-      // The validator counts UTF-16 units, the hash counts NFC code points: 12 units can be fewer.
+      // The validator counts code points as typed, the hash counts them after NFC composition, so a
+      // passphrase of combining sequences can pass the validator and still be too short here.
       reject(reader.term, { field: "passphrase", rule: PASSPHRASE_LENGTH_RULE });
     }
   }

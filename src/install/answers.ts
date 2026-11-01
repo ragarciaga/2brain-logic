@@ -58,6 +58,8 @@ export function validateAuthorEmail(value: string): AnswerResult<string> {
 
 const NAME_EMPTY_RULE = "must not be empty";
 const NAME_CONTROL_RULE = "must be a single line with no control characters";
+const NAME_FORMAT_RULE = "must not contain direction-control or zero-width characters";
+const FORMAT_CHAR_RE = /[\u202a-\u202e\u2066-\u2069\u061c\u200b-\u200f\ufeff]/;
 const NAME_ENV_RULE =
   "cannot be stored in the .env file: no apostrophe together with $, a double quote or a backslash, and a backslash only in a name of letters, digits and . _ @ + : / -";
 const BARE_NAME_RE = /^[A-Za-z0-9_.@+:/\\-]+$/;
@@ -82,8 +84,9 @@ export function isEnvWritableName(value: string): boolean {
 
 const NameSchema = z
   .string({ error: NAME_EMPTY_RULE })
-  .min(1, { error: NAME_EMPTY_RULE })
+  .refine((v) => v.trim().length > 0, { error: NAME_EMPTY_RULE })
   .refine((v) => !hasControlChar(v), { error: NAME_CONTROL_RULE })
+  .refine((v) => !FORMAT_CHAR_RE.test(v), { error: NAME_FORMAT_RULE })
   .refine(isEnvWritableName, { error: NAME_ENV_RULE });
 
 export function validateAuthorName(value: string): AnswerResult<string> {
