@@ -37,6 +37,17 @@ function templateFiles(): string[] {
     .sort();
 }
 
+/** Push a valid vault config to the fixture remote, so the vault no longer counts as unseeded. */
+function seedValidConfig(): string {
+  const other = fixture.cloneElsewhere("config-writer");
+  mkdirSync(join(other, ".2brain"));
+  writeFileSync(join(other, ".2brain", "config.yaml"), "version: 1\n");
+  git(other, ["add", ".2brain/config.yaml"]);
+  git(other, ["commit", "-m", "config"]);
+  git(other, ["push", "origin", "main"]);
+  return git(fixture.remote, ["rev-parse", "main"]);
+}
+
 describe("bootstrapVault", () => {
   it("clones when there is no clone", async () => {
     await bootstrapVault({ remote: empty, vaultDir: fixture.vaultDir, author: AUTHOR });
@@ -107,8 +118,8 @@ describe("bootstrapVault", () => {
     expect(existsSync(join(fixture.vaultDir, ".git"))).toBe(false);
   });
 
-  it("leaves a non-empty remote untouched", async () => {
-    const seed = git(fixture.remote, ["rev-parse", "main"]);
+  it("leaves a non-empty remote with a valid config untouched", async () => {
+    const seed = seedValidConfig();
     const result = await bootstrapVault({
       remote: fixture.remote,
       vaultDir: fixture.vaultDir,
@@ -117,7 +128,7 @@ describe("bootstrapVault", () => {
     expect(result).toEqual({ code: "done", fix: "", seeded: false });
     expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(seed);
     expect(git(fixture.remote, ["rev-parse", "main"])).toBe(seed);
-    expect(git(fixture.vaultDir, ["rev-list", "--count", "HEAD"])).toBe("1");
+    expect(git(fixture.vaultDir, ["rev-list", "--count", "HEAD"])).toBe("2");
   });
 
   it("keeps the commit when the push is refused", async () => {
@@ -152,6 +163,7 @@ describe("bootstrapVault", () => {
   });
 
   it("does not re-clone an existing clone", async () => {
+    seedValidConfig();
     await cloneInto(fixture.remote, fixture.vaultDir);
     const head = git(fixture.vaultDir, ["rev-parse", "HEAD"]);
     let clones = 0;

@@ -1,14 +1,21 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { type CliIo, initVault, TEMPLATE_DIR } from "../cli.js";
+import { CONFIG_FILE, ConfigInvalidError, loadVaultConfig } from "../config/vault-config.js";
 import {
   addPaths,
+  CLONE_TIMEOUT_MS,
   classifyRemoteError,
   cloneInto,
   commitPaths,
+  commitsAhead,
+  currentBranch,
   type GitAuthor,
   GitError,
+  hasCommits,
   lsRemote,
+  originUrl,
+  PUSH_TIMEOUT_MS,
   pushBranch,
 } from "../git/index.js";
 
@@ -17,7 +24,9 @@ export type BootstrapCode =
   | "remote_unreachable"
   | "remote_auth_failed"
   | "push_refused"
-  | "project_not_writable";
+  | "project_not_writable"
+  | "vault_remote_mismatch"
+  | "config_invalid";
 
 export interface BootstrapResult {
   code: BootstrapCode;
@@ -25,6 +34,10 @@ export interface BootstrapResult {
   fix: string;
   /** True when this call committed and pushed the template. */
   seeded: boolean;
+  /** Set only on `config_invalid`: the config file, relative to the vault. */
+  file?: string;
+  /** Set only on `config_invalid`: the dot-joined key path, control characters replaced by `?`. */
+  keyPath?: string;
 }
 
 export interface BootstrapDeps {
@@ -33,7 +46,12 @@ export interface BootstrapDeps {
   addPaths: typeof addPaths;
   commitPaths: typeof commitPaths;
   pushBranch: typeof pushBranch;
+  commitsAhead: typeof commitsAhead;
   initVault: typeof initVault;
+  originUrl: typeof originUrl;
+  hasCommits: typeof hasCommits;
+  currentBranch: typeof currentBranch;
+  loadVaultConfig: typeof loadVaultConfig;
 }
 
 export const defaultBootstrapDeps: BootstrapDeps = {
@@ -42,7 +60,12 @@ export const defaultBootstrapDeps: BootstrapDeps = {
   addPaths,
   commitPaths,
   pushBranch,
+  commitsAhead,
   initVault,
+  originUrl,
+  hasCommits,
+  currentBranch,
+  loadVaultConfig,
 };
 
 export interface BootstrapOptions {
@@ -60,6 +83,9 @@ export const FIX_AUTH =
   "add secrets/deploy_key.pub to the repository as a deploy key with write access, then re-run setup";
 export const FIX_OWNERSHIP =
   "make the project directory writable by the current user, then re-run setup";
+export const FIX_MISMATCH =
+  "VAULT_DIR holds a clone of another repository; set VAULT_REMOTE to its origin or use an empty vault directory, then re-run setup";
+export const FIX_CONFIG = "correct the named key in the vault config, then re-run setup";
 
 export const SEED_MESSAGE = "2brain: seed vault template";
 
@@ -81,29 +107,22 @@ function remoteFailure(error: unknown): BootstrapResult {
   };
 }
 
-/**
- * Make `vaultDir` a clone of `remote`. An empty remote gets one commit with the vault template,
- * pushed to `main`. Results carry fixed fix lines only: no git output, no remote URL.
- */
-export async function bootstrapVault(
+const mismatch = (): BootstrapResult => ({
+  code: "vault_remote_mismatch",
+  fix: FIX_MISMATCH,
+  seeded: false,
+});
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: replacing control characters is the point
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
+
+/** Copy the missing template files, commit only those and push to `branch`. */
+async function seedTemplate(
   opts: BootstrapOptions,
-  deps: BootstrapDeps = defaultBootstrapDeps,
+  deps: BootstrapDeps,
+  branch: string,
 ): Promise<BootstrapResult> {
   const env = opts.gitEnv ?? {};
-  let branches: string[];
-  try {
-    if (!(await exists(join(opts.vaultDir, ".git")))) {
-      await deps.cloneInto(opts.remote, opts.vaultDir, env);
-    }
-    branches = await deps.lsRemote(opts.vaultDir, "origin", env);
-  } catch (error) {
-    return remoteFailure(error);
-  }
-  if (branches.length > 0) {
-    // T11 adds the existing-vault rules (config checks, origin mismatch).
-    return { code: "done", fix: "", seeded: false };
-  }
-
   const copied: string[] = [];
   const captureIo: CliIo = {
     stdout(line) {
@@ -121,11 +140,110 @@ export async function bootstrapVault(
   // Only the copied paths are committed: anything else already staged stays out.
   await deps.commitPaths(opts.vaultDir, copied, SEED_MESSAGE, opts.author);
   try {
-    await deps.pushBranch(opts.vaultDir, "main", env);
+    await deps.pushBranch(opts.vaultDir, branch, env, PUSH_TIMEOUT_MS);
   } catch (error) {
-    // The commit stays local; T12 handles the re-run push.
-    if (error instanceof GitError) return { code: "push_refused", fix: FIX_AUTH, seeded: false };
-    throw error;
+    // The commit stays local; a re-run pushes it (pushPending).
+    return pushFailure(error);
   }
   return { code: "done", fix: "", seeded: true };
+}
+
+/** Map a failed push: a timeout is unreachable, any other git failure is a refusal. */
+function pushFailure(error: unknown): BootstrapResult {
+  if (!(error instanceof GitError)) throw error;
+  if (error.exitCode === null) {
+    return { code: "remote_unreachable", fix: FIX_UNREACHABLE, seeded: false };
+  }
+  return { code: "push_refused", fix: FIX_AUTH, seeded: false };
+}
+
+/** Push local commits that origin lacks (a refused seed push, re-run). No new commit is made. */
+async function pushPending(
+  opts: BootstrapOptions,
+  deps: BootstrapDeps,
+  branches: string[],
+): Promise<BootstrapResult> {
+  const env = opts.gitEnv ?? {};
+  const done: BootstrapResult = { code: "done", fix: "", seeded: false };
+  let branch = "main";
+  if (branches.length > 0) {
+    try {
+      branch = await deps.currentBranch(opts.vaultDir);
+      if (!branches.includes(branch)) return done;
+      if ((await deps.commitsAhead(opts.vaultDir, branch)) <= 0) return done;
+    } catch {
+      return done;
+    }
+  }
+  try {
+    await deps.pushBranch(opts.vaultDir, branch, env, PUSH_TIMEOUT_MS);
+  } catch (error) {
+    return pushFailure(error);
+  }
+  return done;
+}
+
+/**
+ * Make `vaultDir` a clone of `remote`.
+ * - No clone yet: clone. An existing clone whose origin is not exactly `remote` (or has none) is
+ *   `vault_remote_mismatch`, before any remote call.
+ * - Empty remote and no local commits: one commit with the vault template, pushed to `main`.
+ * - Otherwise, no `.2brain/config.yaml`: copy the missing template files, commit them and push to
+ *   the current branch (a detached HEAD, or a local-only history on an empty remote, is a mismatch).
+ * - Valid config: nothing to do, except pushing local commits origin lacks (a refused seed, re-run;
+ *   on an empty remote to `main`), without a new commit. A push failure is `push_refused`, or
+ *   `remote_unreachable` when it timed out; the local commit is kept. Invalid config: `config_invalid` with the file and key path.
+ * Results carry fixed fix lines only: no git output, no remote URL, no parser detail.
+ */
+export async function bootstrapVault(
+  opts: BootstrapOptions,
+  deps: BootstrapDeps = defaultBootstrapDeps,
+): Promise<BootstrapResult> {
+  const env = opts.gitEnv ?? {};
+  let branches: string[];
+  let localCommits: boolean;
+  try {
+    if (!(await exists(join(opts.vaultDir, ".git")))) {
+      await deps.cloneInto(opts.remote, opts.vaultDir, env, CLONE_TIMEOUT_MS);
+    }
+  } catch (error) {
+    return remoteFailure(error);
+  }
+  try {
+    if ((await deps.originUrl(opts.vaultDir, env)) !== opts.remote) return mismatch();
+  } catch {
+    return mismatch();
+  }
+  try {
+    branches = await deps.lsRemote(opts.vaultDir, "origin", env);
+    localCommits = await deps.hasCommits(opts.vaultDir);
+  } catch (error) {
+    return remoteFailure(error);
+  }
+  if (branches.length === 0 && !localCommits) return seedTemplate(opts, deps, "main");
+
+  if (await exists(join(opts.vaultDir, CONFIG_FILE))) {
+    try {
+      await deps.loadVaultConfig(opts.vaultDir);
+    } catch (error) {
+      const keyPath = error instanceof ConfigInvalidError ? error.keyPath : "";
+      return {
+        code: "config_invalid",
+        fix: FIX_CONFIG,
+        file: CONFIG_FILE,
+        keyPath: keyPath.replace(CONTROL_CHARS, "?"),
+        seeded: false,
+      };
+    }
+    return pushPending(opts, deps, branches);
+  }
+  // No config: only a vault with a remote history can be filled in.
+  if (branches.length === 0) return mismatch();
+  let branch: string;
+  try {
+    branch = await deps.currentBranch(opts.vaultDir);
+  } catch {
+    return mismatch();
+  }
+  return seedTemplate(opts, deps, branch);
 }
