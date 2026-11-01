@@ -149,7 +149,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 - Project segment sanitizing (replace F1 NotePath-unsafe characters with `-`) added at review: design.md says only "last segment of cwd", and an unsafe name would fail save_note on every retry until gave_up. This is consistent with F1 path rules and is not a new behavior decision.
 - The worker never resolves the session folder (R8.10, no vault access). Per design.md, the headless session joins the file name to the folder it gets from vault_info.
 - Round 1: Depends narrowed from T6, T7, T8 to T3, T7 (buildInput takes plain values; T15 does the wiring).
-- Progress keeps its header line, but its body is scrubbed and indented, so no progress or transcript text starts a column-0 line that looks like a header, separator or label; this supersedes "unchanged" in Verify and "T9 only places the string" in the T7 log. Digest lines that are not T6 builder labels are indented too.
+- Progress keeps its header line, but its body is scrubbed and indented, so no progress or transcript text starts a column-0 line that looks like a header, separator or label; this supersedes "unchanged" in Verify, "T9 only places the string" in the T7 log and "(T9 places this string unchanged)" in the T7 Verify. Digest lines that are not T6 builder labels are indented too.
 - `buildInput` throws `Error("invalid_field:<name>")` for an invalid header field, including a null `lastDate`; T15 must catch it, log it and drop the job. `NOT_CONFIGURED` is exported and compared by constant. The design.md parenthetical about joining the file name to the folder is not placed in the input; capture.md (T14) explains it.
 
 ## T10: Build the SessionEnd hook

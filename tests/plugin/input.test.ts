@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { LINE_BREAK_ALL } from "../../plugin/scripts/lib/digest.mjs";
 import {
   buildInput,
   NOT_CONFIGURED,
@@ -14,6 +13,12 @@ import { NotePath } from "../../src/vault/note-schema.js";
 const SID = "0123456789abcdef";
 const base = { lastDate: "2026-10-31", cwd: "/a/b/proj", sessionId: SID, part: 1 };
 const cp = (code: number) => String.fromCodePoint(code);
+// Independent of the production regex: every character a reader may treat as a line break.
+const BREAK_CHARS = new RegExp(
+  `${["\r\n", "\n", "\r", "\v", "\f", 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029]
+    .map((c) => (typeof c === "number" ? String.fromCodePoint(c) : c))
+    .join("|")}`,
+);
 
 // Secret-shaped test values are built from parts so a scanner never sees one literal.
 const token = ["ghp", "_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"].join("");
@@ -64,19 +69,69 @@ describe("noteFileName", () => {
     expect(NotePath.safeParse(name).success).toBe(true);
   });
 
-  it("caps a 300-character segment at 100 code points without splitting a pair", () => {
+  it("caps a 300-character segment at 120 bytes", () => {
     const name = noteFileName({ ...base, cwd: `/w/${"p".repeat(300)}` });
-    expect(name).toBe(`2026-10-31 ${"p".repeat(100)} 01234567.md`);
-    const astral = projectName(`/w/${"a".repeat(99)}${cp(0x1f600)}${"b".repeat(50)}`);
-    expect([...astral]).toHaveLength(100);
-    expect(astral.endsWith(cp(0x1f600))).toBe(true);
+    expect(name).toBe(`2026-10-31 ${"p".repeat(120)} 01234567.md`);
+    expect(NotePath.safeParse(name).success).toBe(true);
+  });
+
+  it("caps by UTF-8 bytes without splitting an astral letter", () => {
+    const astral = cp(0x1d400); // mathematical bold A, a letter of 4 bytes
+    const name = projectName(`/w/${astral.repeat(40)}`);
+    expect(name).toBe(astral.repeat(30));
+    expect(Buffer.byteLength(name)).toBe(120);
+    const edge = projectName(`/w/${"a".repeat(118)}${astral}`);
+    expect(edge).toBe("a".repeat(118));
+    const wide = cp(0x4e2d).repeat(100); // 3 bytes each
+    expect(Buffer.byteLength(projectName(`/w/${wide}`))).toBe(120);
     expect(
-      NotePath.safeParse(noteFileName({ ...base, cwd: `/w/${"p".repeat(300)}` })).success,
+      NotePath.safeParse(noteFileName({ ...base, cwd: `/w/${astral.repeat(80)}` })).success,
     ).toBe(true);
   });
 
   it("never ends the project in a dot or space after the cap", () => {
-    expect(projectName(`/w/${"a".repeat(99)} bbb`)).toBe(`${"a".repeat(99)}-`);
+    expect(projectName(`/w/${"a".repeat(119)} bbb`)).toBe(`${"a".repeat(119)}-`);
+  });
+
+  it("never lets --- survive the cut or the trailing replacement", () => {
+    const cases = [
+      `${"a".repeat(117)}----b`,
+      `${"a".repeat(117)}-- b`,
+      `${"a".repeat(118)}-- `,
+      `${"a".repeat(117)}<>:|b`,
+      `${"a".repeat(97)}<<<<<x`,
+      "a-- ",
+      "a--.",
+      "---",
+      "a- - -b",
+    ];
+    for (const c of cases) {
+      const out = projectName(`/w/${c}`);
+      expect(out).not.toContain("---");
+      expect(out).not.toMatch(/[. ]$/);
+      expect(Buffer.byteLength(out)).toBeLessThanOrEqual(120);
+    }
+    expect(projectName(`/w/${"a".repeat(97)}<<<`)).toBe(`${"a".repeat(97)}-`);
+    expect(projectName("/w/a-- ")).toBe("a-");
+  });
+
+  it("allows only letters, digits, space, dot, underscore and hyphen", () => {
+    expect(projectName("/w/My App_v1.2-x")).toBe("My App_v1.2-x");
+    expect(projectName("/w/caf\u00e9 \u4e2d")).toBe("caf\u00e9 \u4e2d");
+    expect(projectName("/w/a#b@c$d")).toBe("a-b-c-d");
+    expect(projectName(`/w/a${cp(0x1f600)}b`)).toBe("a-b");
+  });
+
+  it("collapses whitespace runs to one space", () => {
+    expect(projectName("/w/a  b")).toBe("a b");
+    expect(projectName("/w/a     b   c")).toBe("a b c");
+    expect(projectName("/w/a\t b")).toBe("a- b");
+  });
+
+  it("drops format characters (bidi override, zero width)", () => {
+    expect(projectName(`/w/a${cp(0x202e)}b`)).toBe("ab");
+    expect(projectName(`/w/a${cp(0x200b)}b${cp(0x200d)}c${cp(0xfeff)}`)).toBe("abc");
+    expect(projectName(`/w/${cp(0x202e)}`)).toBe("project");
   });
 
   it.each([
@@ -233,13 +288,13 @@ describe("buildInput", () => {
         progress: `${PROGRESS_HEADER}\n${inject}`,
         digest: inject,
       });
-      const col0 = out.split(LINE_BREAK_ALL).filter((l) => l !== "" && !l.startsWith(" "));
+      const col0 = out.split(BREAK_CHARS).filter((l) => l !== "" && !l.startsWith(" "));
       expect(col0).toStrictEqual([...HEADER, PROGRESS_HEADER, "--- transcript digest ---"]);
     });
 
     it("adds no column-0 line when progress has no header line", () => {
       const out = buildInput({ ...args, progress: inject, digest: "" });
-      const col0 = out.split(LINE_BREAK_ALL).filter((l) => l !== "" && !l.startsWith(" "));
+      const col0 = out.split(BREAK_CHARS).filter((l) => l !== "" && !l.startsWith(" "));
       expect(col0).toStrictEqual([...HEADER, PROGRESS_HEADER, "--- transcript digest ---"]);
     });
   });
