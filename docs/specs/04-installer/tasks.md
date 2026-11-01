@@ -134,7 +134,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/vault-bootstrap.ts, src/cli.ts, tests/install-bootstrap.integration.test.ts, tests/cli.integration.test.ts
 - Verify: `npm test -- tests/install-bootstrap.integration.test.ts tests/cli.integration.test.ts`; `npm run typecheck`; `npm run lint`; src/cli.ts exports the `init-vault` copy function (`initVault`) with no behavior change and bootstrap learns which files were copied from its `copied <path>` output lines through an injected `CliIo`; the existing `init-vault` cases (never overwrites, lists copied and skipped files) pass unchanged; integration against an empty bare fixture repo: `bootstrapVault` clones it into an empty vault dir (case "clones when no clone"), copies the template, stages only the copied files, makes one commit with message `2brain: seed vault template` and the configured author name and email, and pushes it so the bare repo's `main` points at that commit even when the clone's default branch is not `main` (case "seeds empty remote"); case "clone failure codes": a missing remote path gives `remote_unreachable`, a stubbed runner failing with exit 128 and `Permission denied` gives `remote_auth_failed`, each with a fix line, no commit, and no git stderr marker in the result or output
 - Issue: #155
-- Status: todo
+- Status: done
 
 ### Decision log
 
