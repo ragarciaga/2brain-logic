@@ -7,19 +7,21 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /**
- * A git command failed. It carries only the subcommand name and the exit code: stderr, the
- * command line and the underlying error are dropped on purpose, because a remote URL may hold
- * credentials and git echoes it in its messages.
+ * A git command failed. It carries the subcommand name, the exit code and one boolean derived from
+ * stderr (`permissionDenied`). The stderr text, the command line and the underlying error are
+ * dropped on purpose, because a remote URL may hold credentials and git echoes it in its messages.
  */
 export class GitError extends Error {
   readonly subcommand: string;
   readonly exitCode: number | null;
+  readonly permissionDenied: boolean;
 
-  constructor(subcommand: string, exitCode: number | null) {
+  constructor(subcommand: string, exitCode: number | null, permissionDenied = false) {
     super(`git ${subcommand} failed (exit ${exitCode ?? "unknown"})`);
     this.name = "GitError";
     this.subcommand = subcommand;
     this.exitCode = exitCode;
+    this.permissionDenied = permissionDenied;
   }
 }
 
@@ -35,6 +37,8 @@ function committerEnv(author: GitAuthor): Record<string, string> {
 export interface RunOptions {
   /** Aborting it stops the child; the call then fails with `GitError(sub, null)`. */
   signal?: AbortSignal;
+  /** Kill the child after this many milliseconds; the call then also fails with `GitError(sub, null)`. */
+  timeoutMs?: number;
 }
 
 /** Run git with an argument array (never a shell string) and return trimmed stdout. */
@@ -48,14 +52,19 @@ export async function runGit(
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
       // Last, so no caller can override it: a path is a file name, never a glob or pathspec magic.
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
     });
     return stdout.trim();
   } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    throw new GitError(args[0] ?? "unknown", typeof code === "number" ? code : null);
+    const { code, stderr } = error as { code?: unknown; stderr?: unknown };
+    const exitCode = typeof code === "number" ? code : null;
+    // Only a boolean leaves this block; the stderr text is never stored.
+    const permissionDenied =
+      exitCode === 128 && typeof stderr === "string" && /Permission denied/.test(stderr);
+    throw new GitError(args[0] ?? "unknown", exitCode, permissionDenied);
   }
 }
 
@@ -73,6 +82,7 @@ export async function runGitBuffer(
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env, GIT_LITERAL_PATHSPECS: "1" },
       maxBuffer: 16 * 1024 * 1024,
       encoding: "buffer",
@@ -265,6 +275,63 @@ export async function commitPaths(
     ...committerEnv(author),
   });
   return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
+/** Upper bound for a command that talks to a remote during setup and doctor. */
+export const REMOTE_TIMEOUT_MS = 15_000;
+
+/** Clone `remote` into `dir` unconditionally (setup). */
+export async function cloneInto(
+  remote: string,
+  dir: string,
+  env: Record<string, string> = {},
+): Promise<void> {
+  await runGit(process.cwd(), ["clone", "--", remote, dir], env);
+}
+
+/** Branch names on `remote`, without the `refs/heads/` prefix. */
+export async function lsRemote(
+  cwd: string,
+  remote: string,
+  env: Record<string, string> = {},
+): Promise<string[]> {
+  const out = await runGit(cwd, ["ls-remote", "--heads", "--", remote], env, {
+    timeoutMs: REMOTE_TIMEOUT_MS,
+  });
+  return out
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => (line.split("\t")[1] ?? "").replace(/^refs\/heads\//, ""))
+    .filter((name) => name.length > 0);
+}
+
+/** Check that HEAD could be pushed to origin, without changing the remote. */
+export async function pushDryRun(dir: string, env: Record<string, string> = {}): Promise<void> {
+  await runGit(dir, ["push", "--dry-run", "origin", "HEAD"], env, {
+    timeoutMs: REMOTE_TIMEOUT_MS,
+  });
+}
+
+/** Push HEAD to `branch` on origin. */
+export async function pushBranch(
+  dir: string,
+  branch: string,
+  env: Record<string, string> = {},
+): Promise<void> {
+  await runGit(dir, ["push", "origin", `HEAD:refs/heads/${branch}`], env);
+}
+
+/** The URL of the `origin` remote. */
+export async function originUrl(dir: string, env: Record<string, string> = {}): Promise<string> {
+  return runGit(dir, ["remote", "get-url", "origin"], env);
+}
+
+export type RemoteErrorCode = "remote_auth_failed" | "remote_unreachable";
+
+/** Map a failed remote command to a code; `null` for an error that is not a `GitError`. */
+export function classifyRemoteError(err: unknown): RemoteErrorCode | null {
+  if (!(err instanceof GitError)) return null;
+  return err.permissionDenied ? "remote_auth_failed" : "remote_unreachable";
 }
 
 export interface GitApi {
