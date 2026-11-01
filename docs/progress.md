@@ -1,9 +1,9 @@
 # Progress
 
-Updated: 2026-10-31
+Updated: 2026-11-01
 
 ## Current objective
-Build F1 vault core (docs/specs/01-vault-core/, issues #12 to #28) and, in parallel, F2 MCP server with OAuth (docs/specs/02-mcp-server/, spec PR #62 merged, issues #44 to #61).
+F4 installer (docs/specs/04-installer/): `setup` and `doctor` run in the service container, one install guide from a fresh host to a note saved from claude.ai. F1, F2 and F3 are merged; F3 manual checks T21 to T26 (#109 to #114) wait for the owner.
 
 ## Current state
 - Works: walking skeleton (PR #10) plus F1 tasks merged: strict vault config and template (T1), INGEST_TOKEN required (T2), bearer token on every route except `GET /health` (T3), Windows-safe paths and literal pathspecs (T4), frontmatter validator (T6), config re-read after each pull with 503 `config_invalid` (T7), frontmatter validated on create with 400 (T8), `init-vault` (T16), template in the image and compose healthcheck (T17).
@@ -26,6 +26,8 @@ Build F1 vault core (docs/specs/01-vault-core/, issues #12 to #28) and, in paral
 - 2026-10-31: MCP SDK v2 server package, see docs/adr/0013-mcp-sdk-v2.md
 - 2026-10-31: built-in single-owner OAuth 2.1 server, see docs/adr/0014-built-in-authorization-server.md (benchmark: docs/research/mcp-oauth/REPORT.md)
 - 2026-10-31: public MCP app separate from ingest, see docs/adr/0015-public-mcp-app.md
+- 2026-10-31: session capture with headless claude on the owner's plan, see docs/adr/0016-session-capture-with-headless-claude.md
+- 2026-11-01: installer runs in the service container, see docs/adr/0017-installer-runs-in-the-container.md
 - 2026-10-31: skeleton bodies stored verbatim, 409 on an existing path, HOST defaults to 127.0.0.1, see PR #10
 
 ## Next steps
