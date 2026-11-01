@@ -1,0 +1,137 @@
+import { randomBytes } from "node:crypto";
+import { parseEnv } from "node:util";
+
+/** The keys the installer owns in `.env`, in the order they are appended. */
+export const MANAGED_KEYS = [
+  "VAULT_REMOTE",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "INGEST_TOKEN",
+  "PUBLIC_BASE_URL",
+  "OWNER_PASSPHRASE_HASH",
+  "TRUST_PROXY_HOPS",
+  "N8N_NETWORK",
+] as const;
+
+export type ManagedKey = (typeof MANAGED_KEYS)[number];
+
+/**
+ * New answers for the managed keys. `undefined` means "no new answer, keep the
+ * existing value". `publicBaseUrl: ""` is an answer that turns MCP off.
+ */
+export type EnvAnswers = {
+  vaultRemote?: string;
+  authorName?: string;
+  authorEmail?: string;
+  publicBaseUrl?: string;
+  passphraseHash?: string;
+  trustProxyHops?: number;
+  n8nNetwork?: string;
+};
+
+export const ENV_MARKER = "# Written by 2brain setup";
+
+export function generateIngestToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+function answerFor(answers: EnvAnswers, key: ManagedKey): string | undefined {
+  switch (key) {
+    case "VAULT_REMOTE":
+      return answers.vaultRemote;
+    case "GIT_AUTHOR_NAME":
+      return answers.authorName;
+    case "GIT_AUTHOR_EMAIL":
+      return answers.authorEmail;
+    case "PUBLIC_BASE_URL":
+      return answers.publicBaseUrl;
+    case "OWNER_PASSPHRASE_HASH":
+      return answers.passphraseHash;
+    case "TRUST_PROXY_HOPS":
+      return answers.trustProxyHops === undefined ? undefined : String(answers.trustProxyHops);
+    case "N8N_NETWORK":
+      return answers.n8nNetwork;
+    default:
+      return undefined;
+  }
+}
+
+/** Pure: answer, else existing value, else default, for each managed key. */
+export function mergeEnv(
+  existingText: string,
+  answers: EnvAnswers,
+  makeToken: () => string = generateIngestToken,
+): Record<ManagedKey, string> {
+  const existing = parseEnv(existingText);
+  const pick = (key: ManagedKey): string | undefined => answerFor(answers, key) ?? existing[key];
+
+  const publicBaseUrl = pick("PUBLIC_BASE_URL") ?? "";
+  const token = pick("INGEST_TOKEN");
+  return {
+    VAULT_REMOTE: pick("VAULT_REMOTE") ?? "",
+    GIT_AUTHOR_NAME: pick("GIT_AUTHOR_NAME") ?? "",
+    GIT_AUTHOR_EMAIL: pick("GIT_AUTHOR_EMAIL") ?? "",
+    INGEST_TOKEN: token === undefined || token === "" ? makeToken() : token,
+    PUBLIC_BASE_URL: publicBaseUrl,
+    OWNER_PASSPHRASE_HASH: pick("OWNER_PASSPHRASE_HASH") ?? "",
+    TRUST_PROXY_HOPS: pick("TRUST_PROXY_HOPS") ?? (publicBaseUrl === "" ? "0" : "1"),
+    N8N_NETWORK: pick("N8N_NETWORK") ?? "n8n",
+  };
+}
+
+const BARE = /^[A-Za-z0-9_@.:/+=-]*$/;
+
+function unwritable(key: string): Error {
+  return new Error(`${key}: value cannot be written to .env`);
+}
+
+function formatValue(key: ManagedKey, value: string): string {
+  if (value === "") return "";
+  if (/[\n\r]/.test(value)) throw unwritable(key);
+  if (key === "OWNER_PASSPHRASE_HASH") {
+    if (value.includes("'")) throw unwritable(key);
+    return `'${value}'`;
+  }
+  if (BARE.test(value)) return value;
+  if (!value.includes("'")) return `'${value}'`;
+  // Double quotes interpolate `$` and process escapes in Compose, so they are
+  // used only for a value that has none of those.
+  if (/[$"\\]/.test(value)) throw unwritable(key);
+  return `"${value}"`;
+}
+
+const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
+
+function isManaged(key: string): key is ManagedKey {
+  return (MANAGED_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * Pure: put `values` into `existingText`. Unmanaged lines and managed lines
+ * that already hold the right value keep their bytes. A key assigned twice
+ * changes only its last assignment. Missing keys are appended under a marker.
+ */
+export function renderEnv(existingText: string, values: Record<ManagedKey, string>): string {
+  const lines = existingText === "" ? [] : existingText.split(/(?<=\n)/);
+
+  const lastIndex = new Map<ManagedKey, number>();
+  lines.forEach((line, i) => {
+    const key = ASSIGNMENT.exec(line)?.[1];
+    if (key !== undefined && isManaged(key)) lastIndex.set(key, i);
+  });
+
+  for (const [key, i] of lastIndex) {
+    const line = lines[i] as string;
+    if (parseEnv(line)[key] === values[key]) continue;
+    const ending = /\r?\n$/.exec(line)?.[0] ?? "";
+    lines[i] = `${key}=${formatValue(key, values[key])}${ending}`;
+  }
+
+  const missing = MANAGED_KEYS.filter((key) => !lastIndex.has(key));
+  let out = lines.join("");
+  if (missing.length === 0) return out;
+  if (out !== "" && !out.endsWith("\n")) out += "\n";
+  out += `${ENV_MARKER}\n`;
+  for (const key of missing) out += `${key}=${formatValue(key, values[key])}\n`;
+  return out;
+}
