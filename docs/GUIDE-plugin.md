@@ -154,6 +154,7 @@ Look at the last lines of `logs/capture.log`, find the code in the table, and fo
 | `mcp_unavailable` | The capture session could not reach the `brain` server. | Kept, up to 3 attempts. | Check the service is up and run `claude mcp login brain`. |
 | `session_type_missing` | The vault does not know the `session` type. | Kept, up to 3 attempts. | Add the `session` line from step 4. |
 | `worker_error` | The background worker hit an unexpected error. | Kept for the next worker. | Look at the lines before it in the log. |
+| `lock_blocked` | Capture could not take `capture.lock` for a reason other than a running capture, for example a folder or an unreadable file at `capture.lock` or `capture.lock.takeover`, or a missing data folder. | Kept in the queue. | Remove that entry from the data folder, or create the folder. |
 | `gave_up` | The job failed 3 times or is older than 7 days. | Moved to `failed/`, deleted after 30 days. | Fix the cause shown by the earlier codes. |
 
 ## 7. Turn capture off

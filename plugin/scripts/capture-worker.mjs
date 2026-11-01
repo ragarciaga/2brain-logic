@@ -139,7 +139,7 @@ export async function runWorker(deps) {
   const runner = deps.runner ?? runCapture;
   const log = deps.log ?? createLog({ dataDir, now }).log;
   const queue = deps.queue ?? createQueue({ dataDir, now, log });
-  const lock = deps.lock ?? createLock({ dataDir, now });
+  const lock = deps.lock ?? createLock({ dataDir, now, log });
 
   /** @type {(sessionId: unknown, code: string, fields?: Record<string, unknown>) => void} */
   const safeLog = (sessionId, code, fields) => {
@@ -341,7 +341,11 @@ if (isMain()) {
     const queueDir = process.argv[2];
     if (queueDir && isAbsolute(queueDir) && basename(queueDir) === "queue") {
       const dataDir = dirname(queueDir);
-      const lock = createLock({ dataDir, now: Date.now });
+      const lock = createLock({
+        dataDir,
+        now: Date.now,
+        log: createLog({ dataDir, now: Date.now }).log,
+      });
       process.once("exit", () => lock.release());
       await runWorker({
         lock,

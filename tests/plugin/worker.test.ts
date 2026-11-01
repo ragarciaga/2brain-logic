@@ -688,6 +688,19 @@ describe("capture lock", () => {
     },
   );
 
+  it("a folder at capture.lock means no runner call, no sweep and a lock_blocked line", async () => {
+    const exhausted = enqueue("tired-1");
+    q.recordAttempt(q.recordAttempt(q.recordAttempt(exhausted)));
+    mkdirSync(lockFile());
+    const runner = ok();
+    await run(setup(transcript(3)), runner);
+    expect(runner).not.toHaveBeenCalled();
+    expect(queued()).toHaveLength(1);
+    const failed = join(dir, "failed");
+    expect(existsSync(failed) ? readdirSync(failed) : []).toStrictEqual([]);
+    expect(logText()).toContain(" lock_blocked");
+  });
+
   it("refreshes the lock before each runner call", async () => {
     clock = NOW - 2000;
     enqueue("job-one");
