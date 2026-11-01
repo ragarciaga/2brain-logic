@@ -270,6 +270,19 @@ describe("meetings-gemini template", () => {
     expect(post.transcript).toEqual(baseNodes["Loop transcripts"][1]);
   });
 
+  it("participants and entries URLs use the paired record and transcript", () => {
+    const nodes = baseNodes;
+    expect(evalN8n(params("Participants").url, { nodes, index: 1 })).toBe(
+      "https://meet.googleapis.com/v2/conferenceRecords/r1/participants",
+    );
+    expect(evalN8n(params("Transcript entries").url, { nodes, index: 1 })).toBe(
+      "https://meet.googleapis.com/v2/conferenceRecords/r1/transcripts/x1/entries",
+    );
+    expect(evalN8n(params("List transcripts").url, { json: rec1 })).toBe(
+      "https://meet.googleapis.com/v2/conferenceRecords/r1/transcripts",
+    );
+  });
+
   it("calendar events keep fields and use Settings", () => {
     const out = JSON.parse(
       evalN8n(params(POST).jsonBody as string, {
