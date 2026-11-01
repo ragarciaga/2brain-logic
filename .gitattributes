@@ -1,0 +1,2 @@
+# Expected fixtures are compared byte for byte: git must not rewrite their line endings.
+tests/fixtures/**/*.expected.md -text

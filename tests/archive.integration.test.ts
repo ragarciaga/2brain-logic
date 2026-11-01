@@ -463,7 +463,7 @@ describe("R7.3: nothing in the service deletes a vault file", () => {
   const ALLOWED: Array<{ file: string; line: string; reason: string }> = [
     {
       file: "vault/write-note.ts",
-      line: 'import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";',
+      line: 'import { lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";',
       reason: "import for the cleanup below",
     },
     {

@@ -3,6 +3,7 @@ import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { posix, resolve, sep } from "node:path";
 import { requireMeetingSetup, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi } from "../git/index.js";
+import { trackedAtHead } from "../git/sync.js";
 import { routeArea } from "../meetings/area.js";
 import { pickEvent } from "../meetings/calendar.js";
 import { meetingFrontmatter } from "../meetings/frontmatter.js";
@@ -68,7 +69,8 @@ const WIKILINK_BREAKERS = /[[\]|#^]/u;
  * directly inside a meeting folder, whose frontmatter is read (block only). A candidate is a
  * non-archived meeting note within a day of the date, stored in the folder of its own area, from a
  * configured source, with readable start and end, and with no `versions` yet. Symlinks and folders
- * that leave the vault are skipped; a parse error skips the file.
+ * that leave the vault are skipped; a parse error skips the file. Only a note tracked at HEAD
+ * counts: an untracked file (a crash leftover) is never linked or committed.
  */
 async function listVersionCandidates(
   root: string,
@@ -134,6 +136,7 @@ async function listVersionCandidates(
       const end = new Date(Date.parse(endText));
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
       const calendarEvent = own(names.calendar_event);
+      if (!(await trackedAtHead(root, path))) continue;
       candidates.push({
         path,
         source,
