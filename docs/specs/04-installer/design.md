@@ -131,7 +131,7 @@ doctor: 1 failed, 8 passed, 2 skipped
 
 Compose additions (R5.1 to R5.5, R7.4):
 ```yaml
-x-git-ssh: &git-ssh "ssh -i /run/2brain/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/run/2brain/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes"
+x-git-ssh: &git-ssh "ssh -i /run/2brain/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=/run/2brain/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
 services:
   brain:       # unchanged except: env_file [{path: .env, required: false}], GIT_SSH_COMMAND: *git-ssh, ./secrets:/run/2brain:ro
   setup:

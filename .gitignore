@@ -17,3 +17,6 @@ e2e/.explore/
 # Build output and dependencies
 node_modules/
 dist/
+
+# Deploy key and known_hosts written by setup
+secrets/
