@@ -7,6 +7,9 @@ import {
   type BootstrapDeps,
   bootstrapVault,
   defaultBootstrapDeps,
+  FIX_AUTH,
+  FIX_OWNERSHIP,
+  FIX_UNREACHABLE,
 } from "../src/install/vault-bootstrap.js";
 import { createGitFixture, type GitFixture, git } from "./helpers/git-fixture.js";
 
@@ -86,7 +89,15 @@ describe("bootstrapVault", () => {
       },
     );
     expect(unreachable.code).toBe("remote_unreachable");
+    expect(unreachable.fix).toBe(FIX_UNREACHABLE);
+    expect(FIX_UNREACHABLE).toBe(
+      "check VAULT_REMOTE, the network and secrets/known_hosts, then re-run setup",
+    );
     expect(denied.code).toBe("remote_auth_failed");
+    expect(denied.fix).toBe(FIX_AUTH);
+    expect(FIX_AUTH).toBe(
+      "add secrets/deploy_key.pub to the repository as a deploy key with write access, then re-run setup",
+    );
     for (const result of [unreachable, denied]) {
       expect(result.fix.length).toBeGreaterThan(0);
       expect(result.seeded).toBe(false);
@@ -120,7 +131,7 @@ describe("bootstrapVault", () => {
       },
     );
     expect(result.code).toBe("push_refused");
-    expect(result.fix.length).toBeGreaterThan(0);
+    expect(result.fix).toBe(FIX_AUTH);
     expect(git(fixture.vaultDir, ["log", "-1", "--format=%s"])).toBe("2brain: seed vault template");
     expect(git(empty, ["for-each-ref"])).toBe("");
   });
@@ -133,6 +144,51 @@ describe("bootstrapVault", () => {
       templateDir: join(fixture.root, "no-template"),
     });
     expect(result.code).toBe("project_not_writable");
+    expect(result.fix).toBe(FIX_OWNERSHIP);
+    expect(FIX_OWNERSHIP).toBe(
+      "make the project directory writable by the current user, then re-run setup",
+    );
     expect(git(empty, ["for-each-ref"])).toBe("");
+  });
+
+  it("does not re-clone an existing clone", async () => {
+    await cloneInto(fixture.remote, fixture.vaultDir);
+    const head = git(fixture.vaultDir, ["rev-parse", "HEAD"]);
+    let clones = 0;
+    const result = await bootstrapVault(
+      { remote: fixture.remote, vaultDir: fixture.vaultDir, author: AUTHOR },
+      {
+        ...defaultBootstrapDeps,
+        cloneInto: async () => {
+          clones += 1;
+        },
+      },
+    );
+    expect(clones).toBe(0);
+    expect(result.code).toBe("done");
+    expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(head);
+    expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+  });
+
+  it("keeps a pre-staged non-template file out of the seed commit", async () => {
+    const deps: BootstrapDeps = {
+      ...defaultBootstrapDeps,
+      cloneInto: async (remote, dir, env) => {
+        await cloneInto(remote, dir, env);
+        writeFileSync(join(dir, "staged.txt"), "staged\n");
+        git(dir, ["add", "staged.txt"]);
+      },
+    };
+    const result = await bootstrapVault(
+      { remote: empty, vaultDir: fixture.vaultDir, author: AUTHOR },
+      deps,
+    );
+    expect(result.seeded).toBe(true);
+    const committed = git(fixture.vaultDir, ["show", "--name-only", "--format=", "HEAD"]).split(
+      "\n",
+    );
+    expect(committed).not.toContain("staged.txt");
+    expect(committed.sort()).toEqual(templateFiles());
+    expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("A  staged.txt");
   });
 });

@@ -5,7 +5,7 @@ import {
   addPaths,
   classifyRemoteError,
   cloneInto,
-  commitIndex,
+  commitPaths,
   type GitAuthor,
   GitError,
   lsRemote,
@@ -31,7 +31,7 @@ export interface BootstrapDeps {
   cloneInto: typeof cloneInto;
   lsRemote: typeof lsRemote;
   addPaths: typeof addPaths;
-  commitIndex: typeof commitIndex;
+  commitPaths: typeof commitPaths;
   pushBranch: typeof pushBranch;
   initVault: typeof initVault;
 }
@@ -40,7 +40,7 @@ export const defaultBootstrapDeps: BootstrapDeps = {
   cloneInto,
   lsRemote,
   addPaths,
-  commitIndex,
+  commitPaths,
   pushBranch,
   initVault,
 };
@@ -54,11 +54,12 @@ export interface BootstrapOptions {
   templateDir?: string;
 }
 
-const FIX_UNREACHABLE =
+export const FIX_UNREACHABLE =
   "check VAULT_REMOTE, the network and secrets/known_hosts, then re-run setup";
-const FIX_AUTH =
+export const FIX_AUTH =
   "add secrets/deploy_key.pub to the repository as a deploy key with write access, then re-run setup";
-const FIX_OWNERSHIP = "make the project directory writable by the current user, then re-run setup";
+export const FIX_OWNERSHIP =
+  "make the project directory writable by the current user, then re-run setup";
 
 export const SEED_MESSAGE = "2brain: seed vault template";
 
@@ -117,7 +118,8 @@ export async function bootstrapVault(
   if (copied.length === 0) return { code: "done", fix: "", seeded: false };
 
   await deps.addPaths(opts.vaultDir, copied);
-  await deps.commitIndex(opts.vaultDir, SEED_MESSAGE, opts.author);
+  // Only the copied paths are committed: anything else already staged stays out.
+  await deps.commitPaths(opts.vaultDir, copied, SEED_MESSAGE, opts.author);
   try {
     await deps.pushBranch(opts.vaultDir, "main", env);
   } catch (error) {
