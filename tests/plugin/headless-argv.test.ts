@@ -78,7 +78,7 @@ describe("buildInvocation", () => {
     const out = buildInvocation(readSettings({}), env, paths);
     expect(env).toStrictEqual(copy);
     if ("error" in out) throw new Error("unexpected error");
-    expect(out.env).toStrictEqual(copy);
+    expect(out.env).toStrictEqual({ ...copy, TWOBRAIN_CAPTURE: "1" });
     expect(out.env).not.toBe(env);
   });
 
@@ -87,10 +87,22 @@ describe("buildInvocation", () => {
     expect(out).toStrictEqual({ error: "not_configured" });
   });
 
-  it.each(["", "-x", "a b", "a\tb", "a,b"])("rejects model %j", (model) => {
-    const out = buildInvocation({ ...readSettings({}), model }, {}, paths);
-    expect(out).toStrictEqual({ error: "not_configured" });
-  });
+  it.each(["", "-x", "a b", "a\tb", "a,b", "a/b", "a;b", 'a"b', ".x", "a".repeat(65)])(
+    "rejects model %j",
+    (model) => {
+      const out = buildInvocation({ ...readSettings({}), model }, {}, paths);
+      expect(out).toStrictEqual({ error: "not_configured" });
+    },
+  );
+});
+
+describe("model names", () => {
+  it.each(["claude-sonnet-4-5", "sonnet", "opus[1m]", "a".repeat(64), "x.y_z"])(
+    "accepts %j",
+    (model) => {
+      expect(argvOf("brain", model)[argvOf("brain", model).indexOf("--model") + 1]).toBe(model);
+    },
+  );
 });
 
 describe("result.schema.json", () => {
