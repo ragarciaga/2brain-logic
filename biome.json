@@ -11,6 +11,7 @@
     "enabled": true,
     "rules": { "preset": "recommended" }
   },
+  "overrides": [{ "includes": ["plugin/skills/**/*.md"], "formatter": { "enabled": false } }],
   "javascript": {
     "formatter": { "quoteStyle": "double" }
   }

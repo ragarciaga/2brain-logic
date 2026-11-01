@@ -125,6 +125,12 @@ describe("package shape", () => {
   });
 });
 
+describe("skills", () => {
+  it("ships the analizar-reunion skill", () => {
+    expect(listPluginFiles()).toContain("skills/analizar-reunion/SKILL.md");
+  });
+});
+
 describe("plugin files pass the shared scans", () => {
   // The icon is binary, so the text scans skip it; its signature is checked above.
   const files = listPluginFiles().filter((f) => !f.endsWith(".png"));
