@@ -16,6 +16,34 @@ services:
     volumes:
       - vault:/data/vault
       - auth:/data/auth
+      - ./secrets:/run/2brain:ro
+    networks:
+      - n8n
+
+  setup:
+    build: .
+    profiles:
+      - tools
+    user: root
+    entrypoint: ["node", "dist/cli.js", "setup"]
+    environment:
+      VAULT_DIR: /data/vault
+    volumes:
+      - .:/project
+      - vault:/data/vault
+
+  doctor:
+    build: .
+    profiles:
+      - tools
+    env_file: .env
+    entrypoint: ["node", "dist/cli.js", "doctor"]
+    environment:
+      VAULT_DIR: /data/vault
+    volumes:
+      - .:/project:ro
+      - ./secrets:/run/2brain:ro
+      - vault:/data/vault:ro
     networks:
       - n8n
 
