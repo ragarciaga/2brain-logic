@@ -113,6 +113,19 @@ function brainService(): Record<string, unknown> {
   return brain;
 }
 
+function composeFile(): Record<string, unknown> {
+  const compose = parseYamlConfig(read("compose.yaml"));
+  if (!isRecord(compose)) throw new Error("compose.yaml is not a mapping");
+  return compose;
+}
+
+function service(name: string): Record<string, unknown> {
+  const services = composeFile().services;
+  const found = isRecord(services) ? services[name] : undefined;
+  if (!isRecord(found)) throw new Error(`compose.yaml: services.${name} missing`);
+  return found;
+}
+
 function brainMounts(): { source: string; target: string }[] {
   const volumes = brainService().volumes;
   if (!Array.isArray(volumes)) throw new Error("brain.volumes is not a list");
@@ -328,6 +341,86 @@ describe("compose isolation and memory", () => {
 
   it("joins only the n8n network", () => {
     expect(brainService().networks).toEqual(["n8n"]);
+  });
+});
+
+describe("compose tools services (setup and doctor)", () => {
+  it("builds setup and doctor from the image and keeps them in the tools profile", () => {
+    for (const name of ["setup", "doctor"]) {
+      expect(service(name).build).toBe(".");
+      expect(service(name).profiles).toEqual(["tools"]);
+    }
+    expect(Object.hasOwn(brainService(), "profiles")).toBe(false);
+  });
+
+  it("passes flags to the CLI through entrypoint, with no command", () => {
+    expect(service("setup").entrypoint).toEqual(["node", "dist/cli.js", "setup"]);
+    expect(service("doctor").entrypoint).toEqual(["node", "dist/cli.js", "doctor"]);
+    expect(Object.hasOwn(service("setup"), "command")).toBe(false);
+    expect(Object.hasOwn(service("doctor"), "command")).toBe(false);
+  });
+
+  it("mounts exactly the project and the vault for setup", () => {
+    expect(service("setup").volumes).toEqual([".:/project", "vault:/data/vault"]);
+  });
+
+  it("runs setup as root without env_file or networks", () => {
+    const setup = service("setup");
+    expect(setup.user).toBe("root");
+    expect(Object.hasOwn(setup, "env_file")).toBe(false);
+    expect(Object.hasOwn(setup, "networks")).toBe(false);
+    expect(Object.hasOwn(setup, "ports")).toBe(false);
+  });
+
+  it("mounts everything read-only for doctor", () => {
+    const volumes = service("doctor").volumes;
+    expect(volumes).toEqual([".:/project:ro", "./secrets:/run/2brain:ro", "vault:/data/vault:ro"]);
+    for (const entry of Array.isArray(volumes) ? volumes : []) {
+      expect(String(entry).endsWith(":ro")).toBe(true);
+    }
+  });
+
+  it("joins doctor to the n8n network with the .env file and the image user", () => {
+    const doctor = service("doctor");
+    expect(doctor.networks).toEqual(["n8n"]);
+    expect(doctor.env_file).toBe(".env");
+    expect(Object.hasOwn(doctor, "user")).toBe(false);
+    expect(Object.hasOwn(doctor, "ports")).toBe(false);
+  });
+
+  it("gives brain the secrets mount read-only next to vault and auth", () => {
+    expect(brainService().volumes).toEqual([
+      "vault:/data/vault",
+      "auth:/data/auth",
+      "./secrets:/run/2brain:ro",
+    ]);
+  });
+
+  it("declares the n8n network as external with a configurable name", () => {
+    const networks = composeFile().networks;
+    const n8n = isRecord(networks) ? networks.n8n : undefined;
+    expect(isRecord(n8n) ? n8n.external : undefined).toBe(true);
+    expect(isRecord(n8n) ? n8n.name : undefined).toBe(["$", "{N8N_NETWORK:-n8n}"].join(""));
+  });
+
+  it("points VAULT_DIR at /data/vault for setup and doctor", () => {
+    for (const name of ["setup", "doctor"]) {
+      const environment = service(name).environment;
+      expect(isRecord(environment) ? environment.VAULT_DIR : undefined).toBe("/data/vault");
+    }
+  });
+
+  it("never mounts the docker socket in any service", () => {
+    const services = composeFile().services;
+    expect(isRecord(services)).toBe(true);
+    const names = isRecord(services) ? Object.keys(services) : [];
+    expect(names).toEqual(expect.arrayContaining(["brain", "setup", "doctor"]));
+    for (const name of names) {
+      const volumes = service(name).volumes;
+      for (const entry of Array.isArray(volumes) ? volumes : []) {
+        expect(JSON.stringify(entry)).not.toContain("docker.sock");
+      }
+    }
   });
 });
 
