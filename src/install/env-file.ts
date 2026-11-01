@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { open, readFile, rename, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, open, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { parseEnv } from "node:util";
 
@@ -83,8 +84,18 @@ export function mergeEnv(
 
 const BARE = /^[A-Za-z0-9_@.:/+=-]*$/;
 
+/** A value the installer refuses to write to `.env`; `key` names the variable, never the value. */
+export class EnvValueError extends Error {
+  readonly key: string;
+  constructor(key: string) {
+    super(`${key}: value cannot be written to .env`);
+    this.name = "EnvValueError";
+    this.key = key;
+  }
+}
+
 function unwritable(key: string): Error {
-  return new Error(`${key}: value cannot be written to .env`);
+  return new EnvValueError(key);
 }
 
 function formatValue(key: ManagedKey, value: string): string {
@@ -200,9 +211,52 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+/** Thrown by `readEnvText` for a `.env` that is not a regular file. */
+export class EnvFileError extends Error {
+  readonly code = "not_regular";
+  constructor() {
+    super(".env is not a regular file");
+    this.name = "EnvFileError";
+  }
+}
+
 /**
- * Merge `answers` into `<projectDir>/.env`. Nothing is written when the result equals the
- * current bytes. Otherwise the text goes to a 0600 temp file in the same directory and is
+ * The text of `<projectDir>/.env`, or "" when it does not exist. A symlink, FIFO, device or
+ * directory is refused before it is opened, and the open itself does not follow a link or block.
+ */
+export async function readEnvText(projectDir: string): Promise<string> {
+  const target = path.join(projectDir, ".env");
+  try {
+    const info = await lstat(target);
+    if (!info.isFile()) throw new EnvFileError();
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return "";
+    throw error;
+  }
+  const flags =
+    process.platform === "win32"
+      ? constants.O_RDONLY
+      : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(target, flags);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return "";
+    if (errorCode(error) === "ELOOP") throw new EnvFileError();
+    throw error;
+  }
+  try {
+    if (!(await handle.stat()).isFile()) throw new EnvFileError();
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Merge `answers` into `<projectDir>/.env`. When the result equals the current bytes nothing is
+ * written, except that a file wider than 0600 is narrowed to 0600 (content and times kept).
+ * Otherwise the text goes to a 0600 temp file in the same directory and is
  * renamed over `.env`; the temp file never outlives the call. The result carries no value.
  */
 export async function writeEnvFile(
@@ -215,14 +269,19 @@ export async function writeEnvFile(
   const temp = path.join(projectDir, `.env.tmp-${randomBytes(8).toString("hex")}`);
   let ownsTemp = true;
   try {
-    let existing = "";
-    try {
-      existing = await readFile(target, "utf8");
-    } catch (error) {
-      if (errorCode(error) !== "ENOENT") throw error;
-    }
+    const existing = await readEnvText(projectDir);
     const next = renderEnv(existing, mergeEnv(existing, answers, options.makeToken));
-    if (next === existing) return { ok: true, changed: false };
+    if (next === existing) {
+      if (process.platform !== "win32") {
+        try {
+          const info = await lstat(target);
+          if (info.isFile() && (info.mode & 0o077) !== 0) await chmod(target, 0o600);
+        } catch (error) {
+          if (errorCode(error) !== "ENOENT") throw error;
+        }
+      }
+      return { ok: true, changed: false };
+    }
     ownsTemp = true;
     try {
       await io.writeTemp(temp, next);
@@ -235,6 +294,7 @@ export async function writeEnvFile(
     await syncDirectory(projectDir);
     return { ok: true, changed: true };
   } catch (error) {
+    if (error instanceof EnvFileError) return { ok: false, code: "project_not_writable" };
     const code = errorCode(error);
     if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
       return { ok: false, code: "project_not_writable" };

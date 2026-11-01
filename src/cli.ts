@@ -13,10 +13,10 @@ export const MAX_STDIN_BYTES = 1024;
 export interface CliIo {
   stdout(line: string): void;
   stderr(line: string): void;
-  /** True when standard input is a terminal. Only `hash-passphrase` looks at it. */
+  /** True when standard input is a terminal. Only `hash-passphrase` and `setup` look at it. */
   stdinIsTTY: boolean;
   /**
-   * Standard input as bytes. Only `hash-passphrase` calls it. It may stop reading after more than
+   * Standard input as bytes. Only `hash-passphrase` and `setup --non-interactive` call it. It may stop reading after more than
    * `MAX_STDIN_BYTES`, which the command then refuses.
    */
   readStdin(): Promise<Uint8Array>;
@@ -25,9 +25,12 @@ export interface CliIo {
 export interface CliOptions {
   /** Defaults to `TEMPLATE_DIR`; tests point it at a missing or odd template. */
   templateDir?: string;
+  /** Defaults to the real process; tests inject a fake identity, runners and terminal. */
+  setupDeps?: import("./install/setup.js").SetupDeps;
 }
 
-const USAGE = "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase";
+const USAGE =
+  "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]";
 
 function errorCode(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
@@ -178,6 +181,11 @@ export async function main(
   if (argv[0] === "hash-passphrase" && argv.length === 1) {
     return hashPassphraseCommand(io);
   }
+  if (argv[0] === "setup") {
+    // Imported on use: setup reaches vault-bootstrap, which imports this module.
+    const { runSetup, defaultSetupDeps } = await import("./install/setup.js");
+    return runSetup(argv, io, options.setupDeps ?? defaultSetupDeps);
+  }
   if (argv[0] !== "init-vault" || argv.length !== 2 || argv[1] === undefined || argv[1] === "") {
     io.stderr(USAGE);
     return 2;
@@ -227,5 +235,15 @@ export function processIo(stdin: StdinSource): CliIo {
 }
 
 if (isEntryPoint()) {
-  process.exitCode = await main(process.argv.slice(2), processIo(process.stdin));
+  // No top-level await: `setup` imports a module that imports this one, and a module still
+  // waiting on its own top-level await would never finish evaluating for that import.
+  main(process.argv.slice(2), processIo(process.stdin)).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: unknown) => {
+      console.error(`cli: ${errorCode(error)}`);
+      process.exitCode = 1;
+    },
+  );
 }

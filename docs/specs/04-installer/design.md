@@ -182,7 +182,9 @@ nginx:  server { listen 443 ssl; server_name brain.example.com; location / { pro
 - Idempotency: `.env` keeps values and renders deterministically; an existing key is kept; the
   seed copies only missing files and commits only when something was copied; a clone ahead of
   origin is pushed without a new commit (R1.7, R1.8, R2.2, R3.4, R3.6).
-- Concurrency limit: one setup at a time by convention; vault steps run only when there is no
+- Concurrency limit: one setup at a time, enforced by the lock file `secrets/.setup.lock`
+  (created exclusively, removed when setup ends; a second setup exits 1 `project_not_writable`
+  with a fix that says to delete the lock if no setup runs); vault steps run only when there is no
   clone or the clone is ahead, so a running `brain` is not disturbed (R3.4).
 - Cleanup: the `.env` temporary file and a half-written key are removed in `finally` (R1.5, R2.1).
 - Git stderr is never printed: `GitError` carries only the subcommand and exit code (R3.7, R4.14).

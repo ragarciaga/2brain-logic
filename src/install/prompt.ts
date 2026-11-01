@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { hashPassphrase } from "../auth/owner.js";
+import { hashPassphrase, MIN_PASSPHRASE_LENGTH, passphraseLength } from "../auth/owner.js";
 import {
   type AnswerError,
   type AnswerResult,
@@ -29,12 +29,13 @@ export interface PromptTerminal {
   isTTY: boolean;
 }
 
-export type PromptAbortCode = "interrupted" | "input_closed" | "not_a_terminal";
+export type PromptAbortCode = "interrupted" | "input_closed" | "not_a_terminal" | "hash_failed";
 
 const ABORT_MESSAGES: Record<PromptAbortCode, string> = {
   interrupted: "setup interrupted",
   input_closed: "input ended before the questions were answered",
   not_a_terminal: "a passphrase can only be typed in a terminal",
+  hash_failed: "the passphrase could not be hashed",
 };
 
 export class PromptAbort extends Error {
@@ -265,6 +266,7 @@ export type PromptAnswers = {
 const REMOTE_RULE = "remote_not_ssh: use git@host:owner/repo.git or ssh://user@host[:port]/path";
 const KEEP_RULE = "answer y or n";
 const PASSPHRASE_LENGTH_RULE = "must be 12 characters or more";
+const HASH_FAILED_RULE = "could not be hashed on this machine";
 
 function reject(term: PromptTerminal, error: AnswerError): void {
   term.write(`${renderAnswerError(error)}\n`);
@@ -319,6 +321,8 @@ async function askPassphraseHash(reader: Reader): Promise<string> {
     } catch {
       // The validator counts code points as typed, the hash counts them after NFC composition, so a
       // passphrase of combining sequences can pass the validator and still be too short here.
+      // Any other failure (scrypt itself) will not change on a retry, so it aborts.
+      if (passphraseLength(first) >= MIN_PASSPHRASE_LENGTH) throw new PromptAbort("hash_failed");
       reject(reader.term, { field: "passphrase", rule: PASSPHRASE_LENGTH_RULE });
     }
   }
@@ -572,7 +576,12 @@ export async function readNonInteractive(
       try {
         answers.passphraseHash = await hashPassphrase(passphrase);
       } catch {
-        return invalid("passphrase", PASSPHRASE_LENGTH_RULE);
+        return invalid(
+          "passphrase",
+          passphraseLength(passphrase) < MIN_PASSPHRASE_LENGTH
+            ? PASSPHRASE_LENGTH_RULE
+            : HASH_FAILED_RULE,
+        );
       }
     }
   }
