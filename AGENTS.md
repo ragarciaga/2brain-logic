@@ -78,7 +78,7 @@ npm ci
 ## Autonomy
 Sensitive paths: src/auth/**, src/vault/scrub/**, src/sources/**/delete*.ts, Dockerfile, compose*.yaml, n8n/templates/**
 Tier A paths: vault-template/**
-Paid services: Anthropic API (monthly cap USD 20)
+Paid services: Anthropic API (monthly cap USD 20); speech to text API for Telegram voice notes (Groq, monthly cap USD 2)
 
 How the harness decides (computed by `rb risk` from the real diff; the highest tier wins):
 
