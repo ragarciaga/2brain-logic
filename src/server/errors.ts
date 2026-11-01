@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { ConfigInvalidError } from "../config/vault-config.js";
 import { GitError } from "../git/index.js";
+import { TranscriptNotReadyError } from "../meetings/schema.js";
 import {
   AlreadyArchivedError,
   ArchiveTargetExistsError,
@@ -38,7 +39,8 @@ export type WriteErrorCode =
   | "unsafe_path"
   | "invalid_frontmatter"
   | "wrong_folder"
-  | "push_pending";
+  | "push_pending"
+  | "transcript_not_ready";
 
 export interface MappedWriteError {
   status: 400 | 404 | 409 | 500 | 502 | 503;
@@ -158,6 +160,13 @@ export function mapWriteError(error: unknown): MappedWriteError {
       status: 500,
       body: { ok: false, error: "write_failed" },
       log: `write_failed: git ${error.subcommand} exit ${error.exitCode ?? "unknown"}`,
+    };
+  }
+  if (error instanceof TranscriptNotReadyError) {
+    return {
+      status: 409,
+      body: { ok: false, error: "transcript_not_ready" },
+      log: "transcript_not_ready",
     };
   }
   return {
