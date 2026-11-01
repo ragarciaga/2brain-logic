@@ -74,7 +74,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/prompt.ts, tests/install-prompt.test.ts
 - Verify: `npm test -- tests/install-prompt.test.ts`; `npm run typecheck`; `npm run lint`; with a scripted io: case "prompt order" asks vault remote, author name, author email, public base URL, proxy hop count, keep current passphrase (only when a hash exists), passphrase, repeat, Docker network name, in that order; with an empty base URL the hop count and passphrase prompts are not asked; every prompt but the passphrase shows the current or default value in brackets; case "hidden input": the scripted output stream receives none of the passphrase characters and raw mode is set and restored (also on error); the passphrase is passed to `hashPassphrase` (src/auth/owner.ts, imported, unchanged) and the returned answers hold only the hash; mismatched entries or one shorter than 12 characters re-ask with the field and rule message; an invalid email re-asks naming `author email`; case "re-asks a non-SSH remote": on a terminal an https remote is refused with `remote_not_ssh` and asked again, and the second (SSH) answer is accepted
 - Issue: #150
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -110,7 +110,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/ssh.ts, tests/install-ssh-confirm.test.ts
 - Verify: `npm test -- tests/install-ssh-confirm.test.ts`; `npm run typecheck`; `ssh-keyscan` runs through an injected runner with argument array `["-t", "ed25519", "-p", <port>, <host>]` and a 10 s timeout; case "typed yes pins": the scripted io shows the fingerprint and pins on `yes`; case "anything else rejects": `y`, `no` and empty give `host_key_rejected` with no known_hosts; case "non-interactive fingerprint": `--host-fingerprint` equal to the seen one pins, a different one gives `host_key_rejected`; case "keyscan timeout": a runner that never resolves gives `host_unreachable` with a fix line after the 10 s timer (fake timers) and no known_hosts
 - Issue: #153
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -122,7 +122,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/ssh.ts, tests/install-keygen.test.ts, tests/install-keygen.integration.test.ts
 - Verify: `npm test -- tests/install-keygen.test.ts tests/install-keygen.integration.test.ts`; `npm run typecheck`; unit: with an existing `secrets/deploy_key` the runner is not called (case "keeps existing key"); a runner failure gives `keygen_failed` and removes partial `deploy_key` and `deploy_key.pub` (case "cleans partial key"); integration (real `ssh-keygen`, skipped when the binary is absent and on Windows): `ensureDeployKey` creates `secrets/` 0700, `deploy_key` 0600 and `deploy_key.pub` with type `ssh-ed25519` and comment `2brain deploy key`, and `ssh-keygen -y -P "" -f deploy_key` succeeds (no passphrase)
 - Issue: #154
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -134,7 +134,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/vault-bootstrap.ts, src/cli.ts, tests/install-bootstrap.integration.test.ts, tests/cli.integration.test.ts
 - Verify: `npm test -- tests/install-bootstrap.integration.test.ts tests/cli.integration.test.ts`; `npm run typecheck`; `npm run lint`; src/cli.ts exports the `init-vault` copy function (`initVault`) with no behavior change and bootstrap learns which files were copied from its `copied <path>` output lines through an injected `CliIo`; the existing `init-vault` cases (never overwrites, lists copied and skipped files) pass unchanged; integration against an empty bare fixture repo: `bootstrapVault` clones it into an empty vault dir (case "clones when no clone"), copies the template, stages only the copied files, makes one commit with message `2brain: seed vault template` and the configured author name and email, and pushes it so the bare repo's `main` points at that commit even when the clone's default branch is not `main` (case "seeds empty remote"); case "clone failure codes": a missing remote path gives `remote_unreachable`, a stubbed runner failing with exit 128 and `Permission denied` gives `remote_auth_failed`, each with a fix line, no commit, and no git stderr marker in the result or output
 - Issue: #155
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -147,7 +147,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/vault-bootstrap.ts, tests/install-bootstrap-existing.integration.test.ts
 - Verify: `npm test -- tests/install-bootstrap-existing.integration.test.ts`; `npm run typecheck`; case "fills missing template files": a remote with one note and no `.2brain/config.yaml` gets one commit `2brain: seed vault template` adding only template files, the note unchanged, pushed to the current branch; case "valid config is a no-op": a vault with a valid config has the same HEAD, no new commit and a clean `git status` after bootstrap; case "invalid config": a config failing `loadVaultConfig` gives `config_invalid` naming `.2brain/config.yaml` and the key path, no commit; case "origin mismatch": a clone of another bare repo gives `vault_remote_mismatch` and the clone's HEAD, files and remote config are unchanged
 - Issue: #156
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -184,7 +184,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/doctor.ts, tests/install-doctor.test.ts
 - Verify: `npm test -- tests/install-doctor.test.ts`; `npm run typecheck`; `npm run lint`; with stubbed checks: case "order" runs and prints `env`, `env_file`, `secrets`, `network`, `remote_reachable`, `remote_pushable`, `vault_config`, `ingest_health`, `mcp_internal`, `proxy_metadata`, `proxy_mcp` in that order, each line `pass  <id>`, `fail  <id>` followed by `      fix: <line>`, or `skip  <id> (<note>)`, and a summary `doctor: <n> failed, <n> passed, <n> skipped`; a failing check does not stop the next one; exit code 0 when none failed, 1 when any failed; case "skip without base URL": with `PUBLIC_BASE_URL` empty the last three are `skip` with the note `PUBLIC_BASE_URL is empty: claude.ai cannot connect` and their probes are never called; case "no secrets": planted `INGEST_TOKEN`, `OWNER_PASSPHRASE_HASH` and a `VAULT_REMOTE` with a `user:pass@` part never appear in the output, even when a check's fix or error text contains them (the runner prints only fixed strings, ids, codes and paths)
 - Issue: #159
-- Status: todo
+- Status: done
 
 ### Decision log
 
