@@ -35,10 +35,14 @@ const rfc3339 = z
   .string()
   .refine((v) => parseRfc3339(v) !== undefined, { error: "must be an RFC 3339 timestamp" });
 
-const optionalString = z.string().optional();
+// Bounds one string field. The 4 MiB body limit is the only total bound; this keeps a single
+// field from taking the whole body.
+export const MAX_FIELD_CHARS = 1000;
+const field = () => z.string().max(MAX_FIELD_CHARS, { error: "text is too long" });
+const optionalString = field().optional();
 
 const calendarEvent = z.object({
-  id: z.string(),
+  id: field(),
   calendar_id: optionalString,
   title: optionalString,
   start: z.object({ dateTime: optionalString, date: optionalString }),
@@ -64,14 +68,14 @@ const calendarEvents = z
 const firefliesSchema = z.object({
   source: z.literal("fireflies"),
   transcript: z.object({
-    id: z.string(),
+    id: field(),
     title: optionalString,
     date: z.number().int().min(0).max(8_000_000_000_000_000),
     duration: z.number().gt(0).max(MAX_DURATION_MINUTES, { error: "recording is too long" }),
     transcript_url: optionalString,
     organizer_email: optionalString,
     participants: z
-      .array(z.string())
+      .array(field())
       .max(MAX_PARTICIPANTS, { error: "too many participants" })
       .optional(),
     meeting_attendees: z
@@ -102,7 +106,7 @@ const geminiUser = z.object({ displayName: optionalString }).optional();
 const geminiSchema = z.object({
   source: z.literal("gemini"),
   conference: z
-    .object({ name: z.string(), startTime: rfc3339, endTime: rfc3339 })
+    .object({ name: field(), startTime: rfc3339, endTime: rfc3339 })
     .superRefine((c, ctx) => {
       const start = parseRfc3339(c.startTime);
       const end = parseRfc3339(c.endTime);
@@ -114,14 +118,14 @@ const geminiSchema = z.object({
       }
     }),
   transcript: z.object({
-    name: z.string(),
+    name: field(),
     state: z.string(),
     docsDestination: z.object({ exportUri: optionalString }).optional(),
   }),
   participants: z
     .array(
       z.object({
-        name: z.string(),
+        name: field(),
         signedinUser: geminiUser,
         anonymousUser: geminiUser,
         phoneUser: geminiUser,
