@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -14,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { verifyPassphrase } from "../src/auth/owner.js";
+import { hashPassphrase, verifyPassphrase } from "../src/auth/owner.js";
 import {
   type CliIo,
   initVault,
@@ -25,6 +27,8 @@ import {
   TEMPLATE_DIR,
 } from "../src/cli.js";
 import { isPassphraseHashFormat, loadEnv } from "../src/config/env.js";
+import { cloneInto } from "../src/git/index.js";
+import { createGitFixture, git } from "./helpers/git-fixture.js";
 
 // Real hashing unless a test turns the switch on: only the CLI's failure path needs a rejection.
 const hashSwitch = vi.hoisted(() => ({ fail: false }));
@@ -273,7 +277,7 @@ describe("usage errors", () => {
       expect(await main(argv, io, options)).toBe(2);
       expect(err.join("\n")).toContain("usage: node dist/cli.js init-vault <dir>");
       expect(err).toStrictEqual([
-        "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]",
+        "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]\n       node dist/cli.js doctor [--project-dir <dir>]",
       ]);
       expect(out).toStrictEqual([]);
       expect(reads()).toBe(0);
@@ -291,6 +295,152 @@ const ENV_BASE = {
   INGEST_TOKEN: ["fictional-test-token", "0123456789", "abcdefghij"].join("-"),
   PUBLIC_BASE_URL: "https://brain.example.com",
 };
+
+describe("doctor", () => {
+  const BASE = "https://brain.example.com";
+  const USAGE_TEXT =
+    "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]\n       node dist/cli.js doctor [--project-dir <dir>]";
+  let fixtureRoot: ReturnType<typeof createGitFixture>;
+  let project: string;
+
+  beforeEach(async () => {
+    fixtureRoot = createGitFixture();
+    project = join(root, "project");
+    mkdirSync(join(project, "secrets"), { recursive: true });
+    for (const file of [".env", "secrets/deploy_key", "secrets/known_hosts"]) {
+      writeFileSync(join(project, file), "x\n");
+      chmodSync(join(project, file), 0o600);
+    }
+    await cloneInto(fixtureRoot.remote, fixtureRoot.vaultDir);
+    mkdirSync(join(fixtureRoot.vaultDir, ".2brain"));
+    cpSync(join(TEMPLATE_DIR, CONFIG), join(fixtureRoot.vaultDir, CONFIG));
+    git(fixtureRoot.vaultDir, ["add", "."]);
+    git(fixtureRoot.vaultDir, ["commit", "-m", "config"]);
+    git(fixtureRoot.vaultDir, ["push", "origin", "main"]);
+  });
+  afterEach(() => {
+    fixtureRoot.cleanup();
+  });
+
+  async function deps(extra: Record<string, string> = {}) {
+    const env = {
+      ...ENV_BASE,
+      VAULT_DIR: fixtureRoot.vaultDir,
+      VAULT_REMOTE: fixtureRoot.remote,
+      OWNER_PASSPHRASE_HASH: await hashPassphrase(PASSPHRASE),
+      ...extra,
+    };
+    const urls: string[] = [];
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/health")) return Response.json({ ok: true });
+      if (url.endsWith("/mcp")) return new Response(null, { status: 401 });
+      return Response.json({ issuer: BASE });
+    }) as typeof fetch;
+    return {
+      urls,
+      doctorDeps: {
+        env,
+        lookup: async () => ({ address: "10.0.0.2" }),
+        fetch: fetchStub,
+      },
+    };
+  }
+
+  function state() {
+    const out: Record<string, string> = {};
+    const walk = (rel: string): void => {
+      const abs = join(rel === "" ? fixtureRoot.root : join(fixtureRoot.root, rel));
+      const st = lstatSync(abs);
+      const head = `${(st.mode & 0o7777).toString(8)}:${st.mtimeMs}`;
+      if (st.isDirectory()) {
+        out[rel || "."] = head;
+        for (const name of readdirSync(abs).sort()) walk(join(rel, name));
+      } else if (st.isFile()) out[rel] = `${head}:${readFileSync(abs).toString("base64")}`;
+      else out[rel] = head;
+    };
+    walk("");
+    const projectTree: Record<string, string> = {};
+    for (const [k, v] of Object.entries(tree(project))) projectTree[k] = v;
+    return {
+      fixture: out,
+      project: projectTree,
+      modes: readdirSync(join(project, "secrets")).map((n) =>
+        statSync(join(project, "secrets", n)).mode.toString(8),
+      ),
+      refs: git(fixtureRoot.remote, ["for-each-ref"]),
+    };
+  }
+
+  it("exits 0 and prints the summary when all eleven checks pass", async () => {
+    const d = await deps();
+    const { io, out, err, reads } = fakeIo();
+    expect(await main(["doctor", "--project-dir", project], io, { doctorDeps: d.doctorDeps })).toBe(
+      0,
+    );
+    expect(out.at(-1)).toBe("doctor: 0 failed, 11 passed, 0 skipped");
+    expect(err).toStrictEqual([]);
+    expect(reads()).toBe(0);
+  });
+
+  it("exits 1 and prints the fix when one check fails", async () => {
+    const d = await deps();
+    d.doctorDeps.lookup = async () => {
+      throw new Error("ENOTFOUND");
+    };
+    const { io, out } = fakeIo();
+    expect(await main(["doctor", "--project-dir", project], io, { doctorDeps: d.doctorDeps })).toBe(
+      1,
+    );
+    const at = out.indexOf("fail  network");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(out[at + 1]).toMatch(/^ {6}fix: /);
+    expect(out.at(-1)).toBe("doctor: 1 failed, 10 passed, 0 skipped");
+  });
+
+  it("exits 0 with three skipped when PUBLIC_BASE_URL is empty, without public requests", async () => {
+    const d = await deps({ PUBLIC_BASE_URL: "" });
+    const { io, out } = fakeIo();
+    expect(await main(["doctor", "--project-dir", project], io, { doctorDeps: d.doctorDeps })).toBe(
+      0,
+    );
+    expect(out.at(-1)).toBe("doctor: 0 failed, 8 passed, 3 skipped");
+    expect(d.urls.filter((u) => u.startsWith(BASE))).toStrictEqual([]);
+  });
+
+  it("a full doctor run changes nothing", async () => {
+    const d = await deps();
+    const before = state();
+    await new Promise((r) => setTimeout(r, 20));
+    const { io, out } = fakeIo();
+    expect(await main(["doctor", "--project-dir", project], io, { doctorDeps: d.doctorDeps })).toBe(
+      0,
+    );
+    expect(out.at(-1)).toBe("doctor: 0 failed, 11 passed, 0 skipped");
+    expect(state()).toStrictEqual(before);
+  });
+
+  for (const argv of [
+    ["doctor", "x"],
+    ["doctor", "--bogus"],
+    ["doctor", "--project-dir"],
+  ]) {
+    it(`exits 2 with the usage text and runs no check for ${argv.join(" ")}`, async () => {
+      const d = await deps();
+      const lookup = vi.fn(d.doctorDeps.lookup);
+      const fetchSpy = vi.fn(d.doctorDeps.fetch);
+      const { io, out, err } = fakeIo();
+      expect(
+        await main(argv, io, { doctorDeps: { ...d.doctorDeps, lookup, fetch: fetchSpy } }),
+      ).toBe(2);
+      expect(err).toStrictEqual([USAGE_TEXT]);
+      expect(out).toStrictEqual([]);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  }
+});
 
 describe("hash-passphrase", () => {
   it("prints exactly one hash line and nothing else, accepted by loadEnv and verifyPassphrase", async () => {
@@ -578,6 +728,13 @@ describe("entry point", () => {
     expect(result.stderr.trim()).toMatch(/^setup: missing_answers: .+$/);
     expect(result.status).toBe(2);
     expect(readdirSync(project)).toStrictEqual([]);
+  });
+
+  it("doctor with an unknown flag exits 2 with the doctor usage line", () => {
+    const result = run(["doctor", "--bogus"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("node dist/cli.js doctor [--project-dir <dir>]");
   });
 
   it("prints usage and exits 2 for hash-passphrase with an argument, without reading stdin", () => {

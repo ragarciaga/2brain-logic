@@ -61,6 +61,15 @@ function isTimeout(err: unknown): boolean {
   return err instanceof TimedOut || (err instanceof GitError && err.exitCode === null);
 }
 
+/**
+ * A config key path comes from owner-authored YAML, so it may hold control or format characters
+ * (terminal escapes, bidi overrides). Plain paths print as is; others lose those characters.
+ */
+export function safeKeyPath(p: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(p)) return p;
+  return p.replace(/[\p{Cc}\p{Cf}]/gu, "").slice(0, 120);
+}
+
 const fail = (fix: string): CheckOutcome => ({ status: "fail", fix });
 
 /** The read-only remote and vault checks: `remote_reachable`, `remote_pushable`, `vault_config`. */
@@ -117,10 +126,13 @@ export function createGitChecks(opts: {
         return { status: "pass" };
       } catch (err) {
         if (err instanceof ConfigInvalidError) {
+          const keyPath = safeKeyPath(err.keyPath);
           return fail(
             err.keyPath === ""
               ? `${CONFIG_FILE} is not valid YAML: correct it or re-run setup`
-              : `${CONFIG_FILE} is invalid at ${err.keyPath}: correct it or re-run setup`,
+              : keyPath === ""
+                ? `${CONFIG_FILE} is invalid: correct it or re-run setup`
+                : `${CONFIG_FILE} is invalid at ${keyPath}: correct it or re-run setup`,
           );
         }
         return fail(`cannot read ${CONFIG_FILE}: check its permissions`);

@@ -2,6 +2,7 @@ import { constants, realpathSync } from "node:fs";
 import { copyFile, lstat, mkdir, readdir, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { hashPassphrase, MIN_PASSPHRASE_LENGTH, passphraseLength } from "./auth/owner.js";
 
 /** The default vault, next to `src/` and next to `dist/` (same relative path from both). */
@@ -27,10 +28,74 @@ export interface CliOptions {
   templateDir?: string;
   /** Defaults to the real process; tests inject a fake identity, runners and terminal. */
   setupDeps?: import("./install/setup.js").SetupDeps;
+  /** Effects of `doctor`; tests inject them so no check reaches the real network or clock. */
+  doctorDeps?: DoctorDeps;
+}
+
+/** Every effect of the `doctor` command. Unset fields use the real process. */
+export interface DoctorDeps {
+  env?: NodeJS.ProcessEnv;
+  lookup?: (host: string) => Promise<unknown>;
+  stat?: (p: string) => Promise<{ mode: number; isFile(): boolean }>;
+  platform?: NodeJS.Platform;
+  git?: Partial<import("./install/doctor-git.js").GitCheckDeps>;
+  fetch?: typeof fetch;
+  internalHost?: string;
+  timeouts?: { internalMs?: number; publicMs?: number };
 }
 
 const USAGE =
-  "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]";
+  "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]\n       node dist/cli.js doctor [--project-dir <dir>]";
+
+/** Run every doctor check and print the result lines on stdout. */
+async function doctorCommand(
+  args: readonly string[],
+  io: CliIo,
+  deps: DoctorDeps,
+): Promise<number> {
+  // Imported on use, like setup: the doctor modules reach code that imports this one.
+  const { createLocalChecks, runDoctor } = await import("./install/doctor.js");
+  const { createGitChecks } = await import("./install/doctor-git.js");
+  const { createHttpChecks } = await import("./install/doctor-http.js");
+  let projectFlag: string | undefined;
+  try {
+    const parsed = parseArgs({
+      args: [...args],
+      options: { "project-dir": { type: "string" } },
+      strict: true,
+      allowPositionals: false,
+    });
+    projectFlag = parsed.values["project-dir"];
+  } catch {
+    io.stderr(USAGE);
+    return 2;
+  }
+  try {
+    const env = deps.env ?? process.env;
+    const projectDir = resolve(projectFlag ?? "/project");
+    const vaultDir = env.VAULT_DIR || "/data/vault";
+    const checks = [
+      ...createLocalChecks({
+        env,
+        projectDir,
+        lookup: deps.lookup,
+        stat: deps.stat,
+        platform: deps.platform,
+      }),
+      ...createGitChecks({ vaultDir, deps: deps.git }),
+      ...createHttpChecks({
+        env,
+        fetch: deps.fetch,
+        internalHost: deps.internalHost,
+        timeouts: deps.timeouts,
+      }),
+    ];
+    return await runDoctor(checks, { env, out: (line) => io.stdout(line) });
+  } catch {
+    io.stderr("doctor: unexpected error; see docs/INSTALL.md Troubleshooting");
+    return 1;
+  }
+}
 
 function errorCode(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
@@ -185,6 +250,9 @@ export async function main(
     // Imported on use: setup reaches vault-bootstrap, which imports this module.
     const { runSetup, defaultSetupDeps } = await import("./install/setup.js");
     return runSetup(argv, io, options.setupDeps ?? defaultSetupDeps);
+  }
+  if (argv[0] === "doctor") {
+    return doctorCommand(argv.slice(1), io, options.doctorDeps ?? {});
   }
   if (argv[0] !== "init-vault" || argv.length !== 2 || argv[1] === undefined || argv[1] === "") {
     io.stderr(USAGE);

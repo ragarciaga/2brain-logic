@@ -231,6 +231,44 @@ describe("vault_config", () => {
     });
   });
 
+  async function withConfig(yaml: string): Promise<string> {
+    await cloned();
+    mkdirSync(join(fixture.vaultDir, ".2brain"));
+    writeFileSync(join(fixture.vaultDir, ".2brain", "config.yaml"), yaml);
+    const outcome = await run();
+    expect(outcome.status).toBe("fail");
+    return (outcome as { fix: string }).fix;
+  }
+
+  it("strips a terminal escape from an unknown key before printing it", async () => {
+    const fix = await withConfig('"a\\e[2Jb": 1\n');
+    expect(fix).toBe(".2brain/config.yaml is invalid at a[2Jb: correct it or re-run setup");
+    expect(fix).not.toContain("\x1b");
+  });
+
+  it("strips a bidi override from an unknown key before printing it", async () => {
+    const fix = await withConfig('"ab\\u202Ecd": 1\n');
+    expect(fix).toBe(".2brain/config.yaml is invalid at abcd: correct it or re-run setup");
+    expect(fix).not.toContain("‮");
+  });
+
+  it("drops the path when only control and format characters are left", async () => {
+    const fix = await withConfig('"\\e\\u202E": 1\n');
+    expect(fix).toBe(".2brain/config.yaml is invalid: correct it or re-run setup");
+  });
+
+  it("cuts a long non-plain key to 120 characters", async () => {
+    const fix = await withConfig(`"${"k".repeat(150)} x": 1\n`);
+    expect(fix).toBe(
+      `.2brain/config.yaml is invalid at ${"k".repeat(120)}: correct it or re-run setup`,
+    );
+  });
+
+  it("prints a plain unknown key as is", async () => {
+    const fix = await withConfig("areas.0: 1\n");
+    expect(fix).toBe(".2brain/config.yaml is invalid at areas.0: correct it or re-run setup");
+  });
+
   it("passes for a valid config and for a clone without one", async () => {
     await cloned();
     expect(await run()).toStrictEqual({ status: "pass" });
