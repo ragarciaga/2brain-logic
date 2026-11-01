@@ -11,7 +11,7 @@
     "area": {
       "type": "string",
       "title": "Area",
-      "description": "Vault area that session notes are filed under. Leave empty to let the capture session choose."
+      "description": "Vault area that session notes are filed under. It must be one of the areas in your vault config. Capture is off until it is set."
     },
     "server_name": {
       "type": "string",

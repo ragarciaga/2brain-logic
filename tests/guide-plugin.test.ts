@@ -97,6 +97,27 @@ describe("docs/GUIDE-plugin.md install and connection", () => {
     });
   }
 
+  it("shows working configure commands and the disable instruction", () => {
+    expect(guide).toContain(
+      `echo '{"area":"work"}' | claude plugin configure 2brain --values-stdin`,
+    );
+    expect(guide).toContain(
+      `echo '{"enabled":"false"}' | claude plugin configure 2brain --values-stdin`,
+    );
+    expect(guide).toMatch(/`enabled` setting to `false` \(or `0`\)/);
+    expect(guide).toContain("/plugin configure");
+  });
+
+  it("README.md has the install commands", () => {
+    expect(readme).toContain("/plugin marketplace add");
+    expect(readme).toContain("/plugin install 2brain@2brain-logic");
+  });
+
+  it("explains that area applies to later sessions and must be a vault area", () => {
+    expect(guide).toContain("applies to sessions that end afterwards");
+    expect(guide).toContain("one of the `areas`");
+  });
+
   it("tells owners with an allow-list to add claude-code", () => {
     expect(guide).toMatch(/`sources`[^\n]*add `claude-code`/);
   });

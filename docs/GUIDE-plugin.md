@@ -63,9 +63,19 @@ Show the plugin's options and which are unset:
 claude plugin configure 2brain
 ```
 
+That command only shows them. To save a value, send a JSON object of single-line strings on
+standard input with `--values-stdin`. For example, to set the area:
+
+```bash
+echo '{"area":"work"}' | claude plugin configure 2brain --values-stdin
+```
+
+Options you leave out keep their values. You can also set them in the interactive
+`/plugin configure` flow inside Claude Code.
+
 | Setting | Default | What it does |
 |---|---|---|
-| `area` | empty | Vault area that session notes go under, for example `work`. Empty means nothing is captured until you set it. |
+| `area` | empty | Vault area that session notes go under, for example `work`. It must be one of the `areas` in your vault's `.2brain/config.yaml`. Empty means capture is off until you set it. |
 | `server_name` | `brain` | Name of the MCP server from step 2. |
 | `model` | `sonnet` | Model used by the background capture session. |
 | `min_user_prompts` | `3` | Sessions with fewer of your prompts than this are skipped. |
@@ -81,6 +91,9 @@ TWOBRAIN_AREA=work claude
 ```
 
 `TWOBRAIN_AREA` wins over the `area` setting for that session.
+
+Setting `area` applies to sessions that end afterwards. A session that ended while `area` was empty
+is never captured: its job logs `not_configured` until it gives up after 7 days.
 
 ## 4. Vault config
 
@@ -106,14 +119,14 @@ the plugin deletes this folder.
 - `queue/`: sessions waiting to be captured. A job is removed after it is saved or skipped.
 - `failed/`: jobs that gave up. They are deleted after 30 days.
 - `state.json`: which sessions were already captured.
-- `capture.lock`: marks a capture that is running.
+- `capture.lock`: marks a capture that is running (one per user and Claude config folder).
 - `logs/capture.log` and `logs/capture.log.1`: the log. At 1 MiB the log is renamed to `.1`
   and a new one starts.
 
 Each log line has a time, the first 8 characters of the session id and a code. For example:
 
 ```text
-2026-03-14T10:22:31.000Z 1a2b3c4d saved notes=work/sessions/2026-03-14 example plan.md recipes=1
+2026-03-14T10:22:31.000Z 1a2b3c4d saved notes=work/sessions/2026-03-14 example-project 1a2b3c4d.md recipes=1
 ```
 
 ## 6. Troubleshooting
@@ -128,14 +141,14 @@ Look at the last lines of `logs/capture.log`, find the code in the table, and fo
 | `skipped_trivial` | Too few of your prompts (see `min_user_prompts`). | Deleted. | Lower `min_user_prompts` if you want short sessions. |
 | `skipped_duplicate` | This session was already captured. | Deleted. | Nothing. |
 | `invalid_input` | Claude Code sent the hook an event the plugin could not read. | No job is created. | Update Claude Code and the plugin. |
-| `hook_error` | The hook failed, for example the data folder cannot be written. | A stored job runs with the next capture. | Check that the data folder exists and that you can write to it. |
-| `invalid_field` | A setting or event field has an unusable value. | The job is dropped. | Run `claude plugin configure 2brain` and fix the value. |
-| `invalid_detail` | The capture session returned a malformed answer. | The job is retried. | Nothing; if it repeats, update the plugin. |
-| `not_configured` | `area` is empty, or `server_name` or `model` is not valid. | Kept and retried at every session end, until 7 days. | Set `area` (for example `work`), and use a plain `server_name` and `model`. |
+| `hook_error` | The hook failed, for example the background worker could not be started. | If the job was stored, it is kept and runs with the next worker. If it could not be stored, the session is not queued. | Check that the data folder exists and that you can write to it. If the folder cannot be created, nothing is logged at all. |
+| `invalid_field` | A setting or event field has an unusable value. | The job is dropped. | Save a valid value, for example `echo '{"area":"work"}' \| claude plugin configure 2brain --values-stdin`. |
+| `invalid_detail` | A second check found the capture session's answer malformed (normally a bad answer shows as `headless_failed`). | The job is retried. | Nothing; if it repeats, update the plugin. |
+| `not_configured` | `area` was empty when the session ended, or `server_name` or `model` is not valid. | Kept and retried at every session end, until 7 days. A job that has no area stays stuck and is never captured. An invalid `server_name` or `model` is rescued once you fix it. | Set `area` to one of your vault's areas for later sessions, for example `echo '{"area":"work"}' \| claude plugin configure 2brain --values-stdin`, and use a plain `server_name` and `model`. |
 | `transcript_missing` | Claude Code no longer has the session transcript. | Deleted. | Nothing; the session cannot be captured. |
-| `api_helper_present` | Your `~/.claude/settings.json` (or the folder named by `CLAUDE_CONFIG_DIR`) sets `apiKeyHelper`, or has an API credential in its `env` block. | Deleted. | Remove that entry if you want capture on your subscription. |
+| `api_helper_present` | Your `~/.claude/settings.json` (or the folder named by `CLAUDE_CONFIG_DIR`) sets `apiKeyHelper`, or has an API credential or a backend switch (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY`) in its `env` block. | Deleted. | Remove that entry if you want capture on your subscription. |
 | `claude_not_found` | The `claude` command is not on the path of the background session. | Kept, up to 3 attempts. | Make sure `claude` runs from a new terminal. |
-| `headless_failed` | The capture session ended with an error (the line shows `exit=<n>`). | Kept, up to 3 attempts. | Run `claude` once to check you are signed in, then end another session. |
+| `headless_failed` | The capture session ended with an error (the line shows `exit=<n>` only when the process exited with a number). | Kept, up to 3 attempts. | Run `claude` once to check you are signed in, then end another session. |
 | `timeout` | The capture session ran over 10 minutes and was stopped. | Kept, up to 3 attempts. | Nothing; try again with the next session. |
 | `failed` | The capture session reported it could not finish. | Kept, up to 3 attempts. | Check the service and your sign-in (`/mcp`). |
 | `mcp_unavailable` | The capture session could not reach the `brain` server. | Kept, up to 3 attempts. | Check the service is up and run `claude mcp login brain`. |
@@ -148,8 +161,10 @@ Look at the last lines of `logs/capture.log`, find the code in the table, and fo
 Set the `enabled` setting to `false` (or `0`):
 
 ```bash
-claude plugin configure 2brain
+echo '{"enabled":"false"}' | claude plugin configure 2brain --values-stdin
 ```
+
+To turn it on again, save `{"enabled":"true"}` the same way.
 
 You can also disable or uninstall the plugin. Uninstalling also deletes the data folder.
 
@@ -157,7 +172,7 @@ You can also disable or uninstall the plugin. Uninstalling also deletes the data
 
 Capture runs on your Claude subscription, so the API cost is USD 0. The plugin removes API
 credential variables from the background session so it cannot bill an API account. Each capture
-uses some of your plan's quota. Only one capture runs per machine at a time.
+uses some of your plan's quota. Only one capture runs at a time for each user and Claude config folder.
 
 ## 9. Analyze a meeting
 
