@@ -252,6 +252,18 @@ describe("vault_config", () => {
     expect(fix).not.toContain("‮");
   });
 
+  it("drops the path when only control and format characters are left", async () => {
+    const fix = await withConfig('"\\e\\u202E": 1\n');
+    expect(fix).toBe(".2brain/config.yaml is invalid: correct it or re-run setup");
+  });
+
+  it("cuts a long non-plain key to 120 characters", async () => {
+    const fix = await withConfig(`"${"k".repeat(150)} x": 1\n`);
+    expect(fix).toBe(
+      `.2brain/config.yaml is invalid at ${"k".repeat(120)}: correct it or re-run setup`,
+    );
+  });
+
   it("prints a plain unknown key as is", async () => {
     const fix = await withConfig("areas.0: 1\n");
     expect(fix).toBe(".2brain/config.yaml is invalid at areas.0: correct it or re-run setup");
