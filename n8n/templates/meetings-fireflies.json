@@ -1,0 +1,359 @@
+{
+  "name": "2brain meetings: Fireflies",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 60
+            }
+          ]
+        }
+      },
+      "name": "Poll schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "poll-interval",
+              "name": "poll_interval_minutes",
+              "value": 60,
+              "type": "number"
+            },
+            {
+              "id": "daily-budget",
+              "name": "daily_budget",
+              "value": 40,
+              "type": "number"
+            },
+            {
+              "id": "calendar-id",
+              "name": "calendar_id",
+              "value": "primary",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"query($from: DateTime) { transcripts(fromDate: $from, limit: 50) { id date } }\", variables: { from: $now.minus({ hours: 24 }).toISO() } }) }}",
+        "options": {}
+      },
+      "name": "List transcripts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Fireflies API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data.transcripts",
+        "options": {}
+      },
+      "name": "Split transcripts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "REPLACE-WITH-RANDOM-PATH",
+        "options": {}
+      },
+      "name": "Fireflies webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "event-type",
+              "leftValue": "={{ $json.body.eventType }}",
+              "rightValue": "Transcription completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Completed only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"query($id: String!) { transcript(id: $id) { id title date duration transcript_url organizer_email participants meeting_attendees { displayName email name } sentences { speaker_name text start_time } } }\", variables: { id: $json.id ?? $json.body.meetingId } }) }}",
+        "options": {}
+      },
+      "name": "Fetch transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Fireflies API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary')) + '/events' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "singleEvents",
+              "value": "true"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            },
+            {
+              "name": "timeMin",
+              "value": "={{ new Date($('Fetch transcript').first().json.data.transcript.date - 30 * 60000).toISOString() }}"
+            },
+            {
+              "name": "timeMax",
+              "value": "={{ new Date($('Fetch transcript').first().json.data.transcript.date + $('Fetch transcript').first().json.data.transcript.duration * 60000 + 30 * 60000).toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Calendar events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        100
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://brain:3000/meetings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source: \"fireflies\", transcript: $('Fetch transcript').first().json.data.transcript, calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: ($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary') })) }) }}",
+        "options": {}
+      },
+      "name": "Post meeting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "2brain ingest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "errorMessage": "Fireflies transcript or calendar request failed after 3 tries"
+      },
+      "name": "Source or calendar failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Poll schedule": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "List transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List transcripts": {
+      "main": [
+        [
+          {
+            "node": "Split transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split transcripts": {
+      "main": [
+        [
+          {
+            "node": "Fetch transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fireflies webhook": {
+      "main": [
+        [
+          {
+            "node": "Completed only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completed only": {
+      "main": [
+        [
+          {
+            "node": "Fetch transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch transcript": {
+      "main": [
+        [
+          {
+            "node": "Calendar events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Source or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar events": {
+      "main": [
+        [
+          {
+            "node": "Post meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Source or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
