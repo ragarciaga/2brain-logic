@@ -58,3 +58,4 @@ F5 meetings without LLM (docs/specs/05-meetings/): Fireflies and Gemini transcri
 Minutes per phase.
 Open (started, not ended): T5/verify, T8/plan.
 <!-- rb:timing:end -->
+- 2026-11-01: retro on F4 and F5: 5 lessons, 0 config changes, 0 autonomy changes, 5 harness issues (ragarciaga/rockbuilt#45 to #49) plus evidence comments on ragarciaga/rockbuilt#42 and #43.
