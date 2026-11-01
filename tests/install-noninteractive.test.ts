@@ -1,5 +1,19 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+
+// Real hashing unless a test turns the switch on.
+const hashSwitch = vi.hoisted(() => ({ fail: false }));
+vi.mock("../src/auth/owner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/auth/owner.js")>();
+  return {
+    ...actual,
+    hashPassphrase: (passphrase: string) =>
+      hashSwitch.fail
+        ? Promise.reject(new Error(`scrypt exploded on ${passphrase}`))
+        : actual.hashPassphrase(passphrase),
+  };
+});
+
 import { type NonInteractiveResult, readNonInteractive } from "../src/install/prompt.js";
 
 const REMOTE = "git@example.com:you/vault.git";
@@ -249,5 +263,31 @@ describe("readNonInteractive scope", () => {
     expect(src).not.toMatch(/from "node:fs/);
     expect(src).not.toMatch(/env-file/);
     expect(src).not.toMatch(/node:child_process/);
+  });
+});
+
+describe("readNonInteractive hash failure", () => {
+  const url = ["--public-base-url", "https://brain.example.com", "--passphrase-stdin"];
+
+  it("gives its own rule when scrypt fails on a long enough passphrase", async () => {
+    hashSwitch.fail = true;
+    try {
+      const r = fail(await readNonInteractive([...core, ...url], spy()));
+      expect(r).toMatchObject({ code: "invalid_answer", exitCode: 1, fields: ["passphrase"] });
+      expect(r.rule).toBe("could not be hashed on this machine");
+      expect(JSON.stringify(r)).not.toContain("exploded");
+    } finally {
+      hashSwitch.fail = false;
+    }
+  });
+
+  it("keeps the length rule for a short passphrase", async () => {
+    hashSwitch.fail = true;
+    try {
+      const r = fail(await readNonInteractive([...core, ...url], spy(enc("short\n"))));
+      expect(r.rule).toBe("must be 12 characters or more");
+    } finally {
+      hashSwitch.fail = false;
+    }
   });
 });

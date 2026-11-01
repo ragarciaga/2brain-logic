@@ -273,7 +273,7 @@ describe("usage errors", () => {
       expect(await main(argv, io, options)).toBe(2);
       expect(err.join("\n")).toContain("usage: node dist/cli.js init-vault <dir>");
       expect(err).toStrictEqual([
-        "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase",
+        "usage: node dist/cli.js init-vault <dir>\n       node dist/cli.js hash-passphrase\n       node dist/cli.js setup [--non-interactive ...]",
       ]);
       expect(out).toStrictEqual([]);
       expect(reads()).toBe(0);
@@ -568,6 +568,16 @@ describe("entry point", () => {
     expect(result.stdout.trim()).toBe("loaded");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
+  });
+
+  it("runs the documented setup command: the lazy import settles and missing answers exit 2", () => {
+    const project = join(root, "setup-spawn");
+    mkdirSync(project);
+    const result = run(["setup", "--non-interactive", "--project-dir", project], "");
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toMatch(/^setup: missing_answers: .+$/);
+    expect(result.status).toBe(2);
+    expect(readdirSync(project)).toStrictEqual([]);
   });
 
   it("prints usage and exits 2 for hash-passphrase with an argument, without reading stdin", () => {

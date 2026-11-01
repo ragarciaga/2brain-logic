@@ -1,6 +1,20 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { verifyPassphrase } from "../src/auth/owner.js";
+
+// Real hashing unless a test turns the switch on: only the abort path needs a rejection.
+const hashSwitch = vi.hoisted(() => ({ fail: false }));
+vi.mock("../src/auth/owner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/auth/owner.js")>();
+  return {
+    ...actual,
+    hashPassphrase: (passphrase: string) =>
+      hashSwitch.fail
+        ? Promise.reject(new Error(`scrypt exploded on ${passphrase}`))
+        : actual.hashPassphrase(passphrase),
+  };
+});
+
 import {
   askSetupAnswers,
   type CurrentValues,
@@ -240,6 +254,22 @@ describe("re-asking", () => {
     expect(term.raw).toEqual([true, false, true, false, true, false, true, false]);
     expect(await verifyPassphrase(PASS, a.passphraseHash as string)).toBe(true);
     expect(await verifyPassphrase(combining, a.passphraseHash as string)).toBe(false);
+  });
+
+  it("aborts with hash_failed, and does not ask again, when scrypt fails on a long passphrase", async () => {
+    hashSwitch.fail = true;
+    try {
+      const term = scripted([...head, `${PASS}\r`, `${PASS}\r`, `${PASS}\r`, `${PASS}\r`]);
+      const error = await askSetupAnswers(term, FRESH).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PromptAbort);
+      expect((error as PromptAbort).code).toBe("hash_failed");
+      expect((error as PromptAbort).message).not.toContain("exploded");
+      expect(term.text()).not.toContain("12 characters");
+      expect(term.text().split("passphrase: ").length).toBe(2);
+      expect(term.raw.at(-1)).toBe(false);
+    } finally {
+      hashSwitch.fail = false;
+    }
   });
 
   it("asks again on an invalid email naming the field, without the value", async () => {

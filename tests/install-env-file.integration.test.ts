@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -7,13 +8,19 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type EnvAnswers, type EnvFileIo, writeEnvFile } from "../src/install/env-file.js";
+import {
+  type EnvAnswers,
+  type EnvFileIo,
+  EnvValueError,
+  writeEnvFile,
+} from "../src/install/env-file.js";
 
 const posix = process.platform !== "win32";
 const fixedToken = ["fictional-test-token", "0123456789", "abcdefghij"].join("-");
@@ -164,4 +171,60 @@ describe("writeEnvFile", () => {
       await chmod(ro, 0o755);
     },
   );
+
+  it.runIf(posix)("refuses a .env symlink before reading it, and writes nothing", async () => {
+    const outside = path.join(dir, "outside.txt");
+    await writeFile(outside, "OTHER=1\n");
+    await symlink(outside, path.join(dir, ".env"));
+    const result = await writeEnvFile(dir, answers, { makeToken });
+    expect(result).toEqual({ ok: false, code: "project_not_writable" });
+    expect(await readFile(outside, "utf8")).toBe("OTHER=1\n");
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it.runIf(posix)("refuses a FIFO .env without blocking on it", async () => {
+    execFileSync("mkfifo", [path.join(dir, ".env")]);
+    const result = await writeEnvFile(dir, answers, { makeToken });
+    expect(result).toEqual({ ok: false, code: "project_not_writable" });
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it.runIf(posix)(
+    "narrows an unchanged .env wider than 0600, keeping bytes and mtime",
+    async () => {
+      const file = path.join(dir, ".env");
+      await writeEnvFile(dir, answers, { makeToken });
+      const before = await readFile(file, "utf8");
+      const old = new Date("2020-01-01T00:00:00Z");
+      await chmod(file, 0o644);
+      await utimes(file, old, old);
+      const result = await writeEnvFile(dir, answers, { makeToken });
+      expect(result).toEqual({ ok: true, changed: false });
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+      expect((await stat(file)).mtimeMs).toBe(old.getTime());
+      expect(await readFile(file, "utf8")).toBe(before);
+    },
+  );
+
+  it("returns project_not_writable when the rename hits a read-only file system", async () => {
+    const result = await writeEnvFile(dir, answers, {
+      makeToken,
+      io: {
+        async rename() {
+          throw codeError("EROFS");
+        },
+      },
+    });
+    expect(result).toEqual({ ok: false, code: "project_not_writable" });
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("throws an EnvValueError naming the key for a value it cannot write", async () => {
+    const error = await writeEnvFile(dir, { ...answers, authorName: "line\nbreak" }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(EnvValueError);
+    expect((error as EnvValueError).key).toBe("GIT_AUTHOR_NAME");
+    expect(await leftovers()).toEqual([]);
+  });
 });

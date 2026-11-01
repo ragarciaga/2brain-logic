@@ -536,8 +536,23 @@ describe("R7.3: nothing in the service deletes a vault file", () => {
     },
     {
       file: "install/env-file.ts",
-      line: 'import { open, readFile, rename, unlink } from "node:fs/promises";',
+      line: 'import { lstat, open, rename, unlink } from "node:fs/promises";',
       reason: "import for the temp file cleanup below",
+    },
+    {
+      file: "install/setup.ts",
+      line: 'import { type FileHandle, lchown, lstat, mkdir, open, stat, unlink } from "node:fs/promises";',
+      reason: "import for the lock cleanup below",
+    },
+    {
+      file: "install/setup.ts",
+      line: "if (lockPath !== undefined) await unlink(lockPath).catch(() => {});",
+      reason: "installer removes the secrets/.setup.lock file it created, never a vault file",
+    },
+    {
+      file: "install/setup.ts",
+      line: '"start the service with docker compose up -d --build, then run docker compose run --rm doctor";',
+      reason: "text of the final setup line (the docker --rm flag); it deletes nothing",
     },
     {
       file: "install/env-file.ts",
