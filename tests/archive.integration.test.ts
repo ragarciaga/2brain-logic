@@ -529,6 +529,16 @@ describe("R7.3: nothing in the service deletes a vault file", () => {
       reason:
         "installer rolls back the deploy_key.pub it just renamed when the private key rename fails, never a vault file",
     },
+    {
+      file: "install/env-file.ts",
+      line: 'import { open, readFile, rename, unlink } from "node:fs/promises";',
+      reason: "import for the temp file cleanup below",
+    },
+    {
+      file: "install/env-file.ts",
+      line: "if (ownsTemp) await unlink(temp).catch(() => {});",
+      reason: "installer .env temp file cleanup in the project directory, never in a vault",
+    },
   ];
 
   it("finds exactly the allowlisted delete primitives in src/**", () => {

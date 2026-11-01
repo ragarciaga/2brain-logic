@@ -157,4 +157,54 @@ describe("env file render", () => {
       expect(message).not.toContain("Brien");
     }
   });
+
+  it("refuses a backslash in a quoted value and keeps the value out of the message", () => {
+    const cases: [string, EnvAnswers][] = [
+      ["GIT_AUTHOR_NAME", { ...base, authorName: "Ana Ma\\ria" }],
+      ["OWNER_PASSPHRASE_HASH", { ...withUrl, passphraseHash: `${goodHash}\\x` }],
+    ];
+    for (const [key, answers] of cases) {
+      try {
+        render("", answers);
+        expect.unreachable();
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).toBe(`${key}: value cannot be written to .env`);
+        expect(message).not.toContain("Ma");
+        expect(message).not.toContain("scrypt");
+      }
+    }
+  });
+
+  describe("YAML-style lines", () => {
+    it("keeps a YAML-only token and rewrites the line in place as an assignment", () => {
+      const make = vi.fn(() => "other");
+      const out = render(`INGEST_TOKEN: ${fixedToken}\n`, base, make);
+      expect(make).not.toHaveBeenCalled();
+      expect(out.split("\n")[0]).toBe(`INGEST_TOKEN=${fixedToken}`);
+      expect(out.match(/^INGEST_TOKEN\b/gm)).toHaveLength(1);
+      expect(out).not.toMatch(/^\s*INGEST_TOKEN\s*:/m);
+      expect(parseEnv(out).INGEST_TOKEN).toBe(fixedToken);
+    });
+
+    it("reads quoted YAML values and the export form", () => {
+      const out = render("export GIT_AUTHOR_NAME : 'Ana Maria'\n", {
+        ...base,
+        authorName: undefined,
+      });
+      expect(out.split("\n")[0]).toBe("GIT_AUTHOR_NAME='Ana Maria'");
+    });
+
+    it("lets the last assignment win, whichever syntax it uses", () => {
+      const out = render("GIT_AUTHOR_NAME=A\nGIT_AUTHOR_NAME: B\n", {
+        ...base,
+        authorName: undefined,
+      });
+      expect(out.split("\n").slice(0, 2)).toEqual(["GIT_AUTHOR_NAME=A", "GIT_AUTHOR_NAME=B"]);
+    });
+
+    it("keeps an unmanaged YAML-style line byte for byte", () => {
+      expect(render("FOO: bar\n", base).startsWith("FOO: bar\n")).toBe(true);
+    });
+  });
 });
