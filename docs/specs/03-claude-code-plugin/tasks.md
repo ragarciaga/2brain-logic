@@ -332,7 +332,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 ## T23: Check secrets and note language in saved capture notes
 - Purpose: the owner confirms no planted secret reaches the vault and notes follow the `note_language` setting
 - Covers: R7.6, R7.7
-- Size: S
+- Size: S (a separate manual check with its own setup and its own rb:needs-local issue)
 - Depends on: T21
 - Files: docs/GUIDE-plugin.md
 - Verify: `[manual]` (reason: the content comes from the owner's subscription model, which no automated check may call, and needs the owner's MCP sign-in and vault remote; raised as an `rb:needs-local` issue with the exact steps): in a real session of at least `min_user_prompts` prompts, the owner pastes five fictional secret values given in docs/GUIDE-plugin.md (a private key block, `Authorization: Bearer <value>`, `API_KEY=<value>`, a `ghp_` token and `DB_PASSWORD=<value>`) next to real work with at least one decision; the capture log shows `saved` with at least one note path; for each of the five values `git log --all -p -S'<value>'` and `git grep -F '<value>'` in a fresh clone of the vault remote return nothing; then two more real sessions with `note_language` set to `es` and then `en` each log `saved`, and the prose of each note (summary and decisions) is in that language; any guide step that failed is corrected in docs/GUIDE-plugin.md
@@ -345,7 +345,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 ## T24: Check end-to-end timing and offline-server recovery
 - Purpose: the owner confirms a session note reaches the vault remote within minutes and an offline server only delays the capture, with no duplicate
 - Covers: R11.1, R11.3
-- Size: S
+- Size: S (a separate manual check with its own setup and its own rb:needs-local issue)
 - Depends on: T21
 - Files: docs/GUIDE-plugin.md
 - Verify: `[manual]` (reason: needs the owner's subscription login, MCP sign-in, running server and vault remote; raised as an `rb:needs-local` issue with the exact steps): the owner ends a real session of at least 3 prompts and notes the exit time; after `git fetch` in a vault clone, the commit adding that session's note (source id `claude-code:<session id>`) is on the remote with a commit time at most 5 minutes after exit; then with the server stopped (`docker compose stop`) the owner ends real session A of at least 3 prompts: the log shows `mcp_unavailable` for A and A's job file stays in the queue; the server is started again and real session B is ended before A reaches 3 attempts: the log shows `saved` for A and for B; in a fresh clone `git grep -l 'claude-code:<A session id>'` lists exactly one note and `git log --oneline -- <that path>` shows exactly one `2brain: add` commit; any guide step that failed is corrected in docs/GUIDE-plugin.md
