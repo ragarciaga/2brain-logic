@@ -168,3 +168,45 @@ describe("redactSecrets", () => {
     );
   });
 });
+
+describe("runner hardening", () => {
+  it("redacts ANTHROPIC_API_KEY", () => {
+    const key = ["sk", "-ant-", "Q".repeat(24)].join("");
+    expect(redactSecrets(`bad ${key} here`, { ANTHROPIC_API_KEY: key })).toBe(
+      "bad <redacted> here",
+    );
+  });
+
+  it("keeps a short git user name in a fix line", async () => {
+    const env = { ...BASE, VAULT_REMOTE: ["ssh", "://git@github.com/o/r.git"].join("") };
+    const { checks } = registry({ remote_reachable: { status: "fail", fix: "run git fetch" } });
+    const { out } = await run(checks, env);
+    expect(out).toContain("      fix: run git fetch");
+  });
+
+  it.each([
+    ["no fix", { status: "fail" }],
+    ["empty fix", { status: "fail", fix: "" }],
+    ["blank fix", { status: "fail", fix: "  " }],
+    ["numeric fix", { status: "fail", fix: 5 }],
+    ["undefined", undefined],
+    ["not an outcome", { ok: true }],
+  ])("prints UNEXPECTED_FIX for %s", async (_n, bad) => {
+    const { checks: base } = registry();
+    const odd: DoctorCheck = { id: "env", run: async () => bad as unknown as CheckOutcome };
+    const checks = base.map((c) => (c.id === "env" ? odd : c));
+    const { out, code } = await run(checks, BASE);
+    expect(out).toContain("fail  env");
+    expect(out).toContain(`      fix: ${UNEXPECTED_FIX}`);
+    expect(code).toBe(1);
+  });
+
+  it("skips the public checks for a blank PUBLIC_BASE_URL", async () => {
+    const { checks, stubs } = registry();
+    const { out } = await run(checks, { PUBLIC_BASE_URL: "  " });
+    for (const id of PUBLIC_CHECK_IDS) {
+      expect(out).toContain(`skip  ${id} (${SKIP_NOTE})`);
+      expect(stubs.get(id)?.calls.count).toBe(0);
+    }
+  });
+});
