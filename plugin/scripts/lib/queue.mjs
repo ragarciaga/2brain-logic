@@ -228,6 +228,7 @@ export function createQueue({ dataDir, now, log }) {
 }
 
 const LOCK_STALE_MS = 15 * 60000;
+const LOCK_SKEW_MS = 5 * 60000;
 
 /**
  * @param {unknown} err
@@ -256,16 +257,25 @@ function pidAlive(pid) {
 /**
  * The per-machine capture lock `capture.lock` (`{ pid, startedAt }`) in the data directory. Only
  * the worker takes it; the hook never waits on it. It is created exclusively (`wx`). A lock is
- * stale when its pid is dead or is our own, when `startedAt` is over 15 minutes old, or, for
- * content that does not parse, when the file is over 15 minutes old. A stale lock is replaced
- * while holding a `capture.lock.takeover` mutex, so two workers that find the same stale lock
- * cannot both win.
+ * stale when its pid is dead or is our own, when `startedAt` is over 15 minutes old or over 5
+ * minutes in the future (clock skew), or, for content that does not parse, when the file's mtime
+ * is over 15 minutes old or over 5 minutes in the future. A stale lock is replaced while holding a
+ * `capture.lock.takeover` mutex, so two workers that find the same stale lock cannot both win. A
+ * stale mutex (same age rules) is first renamed to a per-pid `.stale` name and checked again; if
+ * it turns out fresh (a live worker replaced it meanwhile) it is renamed back. That restore can
+ * overwrite a mutex a third worker created between the two renames; this needs a crashed mutex
+ * and three simultaneous workers and is accepted.
+ *
+ * `acquire()` returns true only when the lock is held. When the lock cannot be taken for a reason
+ * other than a running capture (a folder or unreadable file at the lock or mutex path, a missing
+ * data directory), it logs `lock_blocked` through the optional `log`.
  *
  * @param {{
  *   dataDir: string,
  *   now: () => number,
  *   pid?: number,
  *   isAlive?: (pid: number) => boolean,
+ *   log?: (sessionId: unknown, code: string, fields?: Record<string, unknown>) => void,
  *   fs?: Partial<{
  *     writeFileSync: typeof writeFileSync,
  *     readFileSync: typeof readFileSync,
@@ -276,7 +286,7 @@ function pidAlive(pid) {
  *   }>,
  * }} opts `now` returns epoch ms
  */
-export function createLock({ dataDir, now, pid = process.pid, isAlive = pidAlive, fs = {} }) {
+export function createLock({ dataDir, now, pid = process.pid, isAlive = pidAlive, log, fs = {} }) {
   const f = {
     writeFileSync,
     readFileSync,
@@ -291,6 +301,12 @@ export function createLock({ dataDir, now, pid = process.pid, isAlive = pidAlive
   const tmp = `${path}.${pid}.tmp`;
 
   const body = () => `${JSON.stringify({ pid, startedAt: new Date(now()).toISOString() })}\n`;
+
+  /** @param {number} ms epoch ms of a lock or mutex; true when older than the window or too far ahead */
+  function tooOld(ms) {
+    const age = now() - ms;
+    return age > LOCK_STALE_MS || -age > LOCK_SKEW_MS;
+  }
 
   /**
    * @returns {{ pid: number, startedAt: number } | { garbage: true, mtimeMs: number } | null}
@@ -323,10 +339,11 @@ export function createLock({ dataDir, now, pid = process.pid, isAlive = pidAlive
 
   /** @param {NonNullable<ReturnType<typeof read>>} lock */
   function isStale(lock) {
-    if ("garbage" in lock) return now() - lock.mtimeMs > LOCK_STALE_MS;
-    return lock.pid === pid || !isAlive(lock.pid) || now() - lock.startedAt > LOCK_STALE_MS;
+    if ("garbage" in lock) return tooOld(lock.mtimeMs);
+    return lock.pid === pid || !isAlive(lock.pid) || tooOld(lock.startedAt);
   }
 
+  /** @returns {boolean} false when the lock file already exists; other errors throw */
   function create() {
     try {
       f.writeFileSync(path, body(), { flag: "wx", mode: 0o600 });
@@ -342,41 +359,88 @@ export function createLock({ dataDir, now, pid = process.pid, isAlive = pidAlive
     return true;
   }
 
+  /** @returns {"held" | "busy" | "blocked"} */
   function takeOver() {
+    /** @type {{ mtimeMs: number, isFile: () => boolean } | null} */
+    let seen = null;
     try {
-      if (now() - f.lstatSync(mutex).mtimeMs > LOCK_STALE_MS) f.rmSync(mutex, { force: true });
-    } catch {
-      // no mutex file: the normal case
+      seen = f.lstatSync(mutex);
+    } catch (err) {
+      if (!hasCode(err, "ENOENT")) return "blocked";
+    }
+    if (seen !== null) {
+      if (!seen.isFile()) return "blocked";
+      if (tooOld(seen.mtimeMs)) {
+        const stale = `${mutex}.${pid}.stale`;
+        let moved = false;
+        try {
+          f.renameSync(mutex, stale);
+          moved = true;
+        } catch (err) {
+          if (!hasCode(err, "ENOENT")) return "blocked";
+        }
+        if (moved) {
+          let again = null;
+          try {
+            again = f.lstatSync(stale);
+          } catch {
+            // vanished: nothing to delete
+          }
+          if (again !== null && !tooOld(again.mtimeMs)) {
+            // a live worker replaced the mutex after we looked: give it back
+            try {
+              f.renameSync(stale, mutex);
+            } catch {
+              // best effort
+            }
+            return "busy";
+          }
+          f.rmSync(stale, { force: true });
+        }
+      }
     }
     try {
       f.writeFileSync(mutex, `${pid}\n`, { flag: "wx", mode: 0o600 });
     } catch (err) {
-      if (hasCode(err, "EEXIST")) return false;
-      throw err;
+      return hasCode(err, "EEXIST") ? "busy" : "blocked";
     }
     try {
       const current = read();
       if (current !== null) {
-        if (!isStale(current)) return false;
+        if (!isStale(current)) return "busy";
         f.rmSync(path, { force: true });
       }
-      return create();
+      return create() ? "held" : "busy";
     } finally {
       f.rmSync(mutex, { force: true });
     }
   }
 
+  /** @returns {"held" | "busy" | "blocked"} */
+  function attempt() {
+    if (create()) return "held";
+    const lock = read();
+    if (lock === null) return create() ? "held" : "busy";
+    if (!isStale(lock)) return "busy";
+    return takeOver();
+  }
+
   /** @returns {boolean} true when this process now holds the lock */
   function acquire() {
+    let outcome;
     try {
-      if (create()) return true;
-      const lock = read();
-      if (lock === null) return create();
-      if (!isStale(lock)) return false;
-      return takeOver();
+      outcome = attempt();
     } catch {
-      return false;
+      outcome = "blocked";
     }
+    if (outcome === "blocked") {
+      try {
+        log?.(undefined, "lock_blocked");
+      } catch {
+        // logging never breaks the worker
+      }
+    }
+    return outcome === "held";
   }
 
   /**

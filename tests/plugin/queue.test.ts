@@ -1,5 +1,6 @@
 import {
   existsSync,
+  lstatSync,
   lutimesSync,
   mkdirSync,
   mkdtempSync,
@@ -286,7 +287,8 @@ describe("createLock", () => {
     pid: number,
     isAlive: (pid: number) => boolean = () => true,
     fs?: Parameters<typeof createLock>[0]["fs"],
-  ) => createLock({ dataDir: dir, now: () => clock, pid, isAlive, fs });
+    log?: (sessionId: unknown, code: string) => void,
+  ) => createLock({ dataDir: dir, now: () => clock, pid, isAlive, fs, log });
 
   it("creates the file exclusively with pid and startedAt, and a second acquire fails", () => {
     const a = lock(1001);
@@ -365,6 +367,8 @@ describe("createLock", () => {
   it("removes a takeover mutex over 15 minutes old and refuses a fresh one", () => {
     planted(1001, 16 * MIN);
     writeFileSync(`${lockPath()}.takeover`, "x");
+    const fresh = NOW / 1000;
+    utimesSync(`${lockPath()}.takeover`, fresh, fresh);
     expect(lock(1002).acquire()).toBe(false);
     const t = (NOW - 16 * MIN) / 1000;
     utimesSync(`${lockPath()}.takeover`, t, t);
@@ -408,8 +412,121 @@ describe("createLock", () => {
     expect(existsSync(lockPath())).toBe(true);
   });
 
+  it("takes over a live lock dated over 5 minutes ahead and holds one dated 4 minutes ahead", () => {
+    planted(1001, -4 * MIN);
+    expect(lock(1002).acquire()).toBe(false);
+    planted(1001, -6 * MIN);
+    expect(lock(1002).acquire()).toBe(true);
+    expect(JSON.parse(readFileSync(lockPath(), "utf8")).pid).toBe(1002);
+  });
+
+  it("treats unparseable content dated over 5 minutes ahead as stale", () => {
+    plant("not json", -4 * MIN);
+    expect(lock(1002).acquire()).toBe(false);
+    plant("not json", -6 * MIN);
+    expect(lock(1002).acquire()).toBe(true);
+  });
+
+  it("returns false and logs one lock_blocked for a folder at capture.lock", () => {
+    mkdirSync(lockPath());
+    const log = vi.fn();
+    expect(lock(1002, () => true, undefined, log).acquire()).toBe(false);
+    expect(log.mock.calls).toStrictEqual([[undefined, "lock_blocked"]]);
+  });
+
+  it("returns false and logs one lock_blocked for a folder at the takeover mutex", () => {
+    planted(1001, 16 * MIN);
+    mkdirSync(`${lockPath()}.takeover`);
+    utimesSync(`${lockPath()}.takeover`, NOW / 1000, NOW / 1000);
+    const log = vi.fn();
+    expect(lock(1002, () => true, undefined, log).acquire()).toBe(false);
+    expect(log.mock.calls).toStrictEqual([[undefined, "lock_blocked"]]);
+  });
+
+  it("returns false and logs lock_blocked when reading the lock throws EACCES", () => {
+    planted(1001, MIN);
+    const log = vi.fn();
+    const denied = lock(
+      1002,
+      () => true,
+      {
+        readFileSync: (() => {
+          throw Object.assign(new Error("denied"), { code: "EACCES" });
+        }) as never,
+      },
+      log,
+    );
+    expect(denied.acquire()).toBe(false);
+    expect(log.mock.calls).toStrictEqual([[undefined, "lock_blocked"]]);
+  });
+
+  it("logs nothing for a live fresh lock or a fresh takeover mutex", () => {
+    const log = vi.fn();
+    planted(1001, MIN);
+    expect(lock(1002, () => true, undefined, log).acquire()).toBe(false);
+    planted(1001, 16 * MIN);
+    writeFileSync(`${lockPath()}.takeover`, "x");
+    utimesSync(`${lockPath()}.takeover`, NOW / 1000, NOW / 1000);
+    expect(lock(1002, () => true, undefined, log).acquire()).toBe(false);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("a mutex dated over 5 minutes ahead is replaced", () => {
+    planted(1001, 16 * MIN);
+    const m = `${lockPath()}.takeover`;
+    writeFileSync(m, "x");
+    const t = (NOW + 6 * MIN) / 1000;
+    utimesSync(m, t, t);
+    expect(lock(1002).acquire()).toBe(true);
+    expect(readdirSync(dir).filter((n) => n.startsWith("capture.lock."))).toStrictEqual([]);
+  });
+
+  it("does not let a worker that saw a stale mutex remove the fresh one of a live worker", () => {
+    planted(1001, 16 * MIN);
+    const m = `${lockPath()}.takeover`;
+    let aResult: boolean | undefined;
+    let aSeen = 0;
+    const realLstat = lstatSync;
+    const a = lock(1002, () => true, {
+      lstatSync: ((path: string) => {
+        if (path === m && ++aSeen === 1) {
+          return { mtimeMs: NOW - 16 * MIN, isFile: () => true } as never;
+        }
+        return realLstat(path);
+      }) as never,
+    });
+    let reads = 0;
+    const realRead = readFileSync;
+    const realWrite = writeFileSync;
+    const b = lock(1003, () => true, {
+      // the fake clock is older than the real file times, so date B's mutex by the fake clock
+      writeFileSync: ((path: string, data: string, opts: never) => {
+        realWrite(path, data, opts);
+        if (path === m) utimesSync(path, NOW / 1000, NOW / 1000);
+      }) as never,
+      readFileSync: ((path: string, enc: string) => {
+        const text = realRead(path, enc as never);
+        if (++reads === 2) aResult = a.acquire();
+        return text;
+      }) as never,
+    });
+    const bResult = b.acquire();
+    expect(aSeen).toBeGreaterThan(0);
+    expect([aResult, bResult].filter(Boolean)).toHaveLength(1);
+    expect(bResult).toBe(true);
+    expect(JSON.parse(readFileSync(lockPath(), "utf8")).pid).toBe(1003);
+    expect(readdirSync(dir).filter((n) => n.startsWith("capture.lock."))).toStrictEqual([]);
+  });
+
   it("returns false when the data directory does not exist", () => {
-    const missing = createLock({ dataDir: join(dir, "nope"), now: () => clock, pid: 1 });
+    const blocked = vi.fn();
+    const missing = createLock({
+      dataDir: join(dir, "nope"),
+      now: () => clock,
+      pid: 1,
+      log: blocked,
+    });
     expect(missing.acquire()).toBe(false);
+    expect(blocked.mock.calls).toStrictEqual([[undefined, "lock_blocked"]]);
   });
 });
