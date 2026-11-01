@@ -213,7 +213,7 @@ R11.16):
 | Step | Fireflies requests | Serves |
 |---|---|---|
 | `Poll state` reserves 1 request; if `used + 1 > daily_budget`, the poll ends with no request | 0 or 1 reserved | R11.13 |
-| GraphQL `transcripts(fromDate: now - 24 h, limit: 50)` returns ids and dates only | 1 | R11.10 |
+| GraphQL `transcripts(fromDate: now - 24 h, limit: 50)` returns ids and dates only; a failed list (not a rate limit) ends the execution failed with no other request (R11.19) | 1 | R11.10 |
 | `Poll state` computes `(listed + pending) - posted` and reserves 1 request per id while the budget allows; the rest join `pending` | 0 | R11.11, R11.13, R11.15 |
 | Per id: `transcript(id)` (up to 3 tries, each counted), calendar query, `POST /meetings` | 1 to 3 per id | R11.5 to R11.7, R11.13 |
 | `Poll state` (last node on every path): 200 or 201 into `posted`; 502, 503, fetch errors and unreached ids into `pending`; 4xx dropped from `pending` and recorded in `posted`, then `Stop and Error` when the round ends; 502 and 503 are posted again up to 3 times, 60 s apart, without using the Fireflies budget | 0 | R11.12, R11.15, R11.16 |
@@ -243,6 +243,7 @@ keep their mapping unchanged.
 | Invalid config or missing meeting type | per request | 503 `config_invalid` with key path | n8n: 3 retries, 60 s apart; owner fixes config | R8.5, R10.2, R10.3 |
 | Push fails | per request | 502 `push_pending` with commit | service: 3 retries 1, 2, 4 s (existing); n8n: 3 retries, 60 s apart | R8.4, R11.7 |
 | Fireflies or calendar API fails in n8n | per execution | the transcript is not posted; a fetch failure ends the execution failed when the round ends, a calendar failure stops at once; in poll mode the id stays pending | n8n: 3 tries, 5 s apart, then stop; next poll | R11.6, R11.15 |
+| Fireflies list request fails (not a rate limit) | per execution | no further Fireflies request, pending ids unchanged, execution fails at Source or calendar failed | none in the execution; next poll | R11.10, R11.19 |
 | Fireflies rate-limit error (429 or `too_many_requests`) | per execution | no further Fireflies request in that execution; unposted ids stay pending | none in the execution; next poll | R11.14, R11.15 |
 | Daily request budget reached | per poll | no Fireflies request; listed ids stay pending | next UTC day | R11.13, R11.15 |
 | Ingest answers 4xx to a polled transcript | per id | id dropped from pending and recorded in `posted` (not fetched again for 48 h), execution marked failed when the round ends | none (owner reads the execution) | R11.16 |

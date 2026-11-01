@@ -222,13 +222,14 @@ describe("Poll state: selection", () => {
     expect(direct[0].poll).toEqual({ next: "fetch", id: "a1", attempt: 1, queue: ids.slice(1) });
   });
 
-  it("a list that is not ok emits nothing and adds nothing", async () => {
+  it("a list that is not ok fails the poll and adds nothing", async () => {
     for (const list of [
       serverError,
       { statusCode: 200, body: { data: null } },
       { error: "x" },
     ] as Resp[]) {
       const r = await simulate({ state: fresh({ pending: {} }), list });
+      expect(r.events).toEqual(["list:", "failed:"]);
       expect(r.fetchCalls).toEqual([]);
       expect(r.state.pending).toEqual({});
     }
@@ -237,6 +238,7 @@ describe("Poll state: selection", () => {
   it("a non-2xx status is a failure even when the body looks good", async () => {
     const goodList = okList(["A"]) as { statusCode: number; body: unknown };
     const listed = await simulate({ list: { ...goodList, statusCode: 500 } });
+    expect(listed.events).toEqual(["list:", "failed:"]);
     expect(listed.fetchCalls).toEqual([]);
     expect(listed.state.pending).toEqual({});
     const goodFetch = okFetch("A") as { statusCode: number; body: unknown };
@@ -441,8 +443,20 @@ describe("Poll state: rate limit stop", () => {
       list: tooMany,
     });
     expect(r.listCalls).toBe(1);
+    expect(r.events).toEqual(["list:"]);
     expect(r.fetchCalls).toEqual([]);
     expect(sortedKeys(r.state.pending)).toEqual(["P"]);
+  });
+
+  it("list 200 with too_many_requests emits no stop", async () => {
+    const limited: Resp = {
+      statusCode: 200,
+      body: { errors: [{ message: "x", extensions: { code: "too_many_requests" } }] },
+    };
+    const r = await simulate({ list: limited });
+    expect(r.listCalls).toBe(1);
+    expect(r.events).toEqual(["list:"]);
+    expect(r.failed).toEqual([]);
   });
 
   it("an unrelated error code is not a rate limit", async () => {
@@ -453,6 +467,74 @@ describe("Poll state: rate limit stop", () => {
     const r = await simulate({ list: okList(["A"]), fetch: () => other });
     expect(r.fetchCalls).toHaveLength(3);
     expect(r.failed).toEqual(["A"]);
+  });
+});
+
+describe("Poll state: list failure", () => {
+  it("an error output item fails the poll", async () => {
+    const r = await simulate({ list: { error: "x" } });
+    expect(r.events).toEqual(["list:", "failed:"]);
+    expect(r.listCalls).toBe(1);
+    expect(r.fetchCalls).toEqual([]);
+  });
+
+  it.each([199, 300, 401, 403, 404, 500])(
+    "status %i fails the poll even with a good body",
+    async (statusCode) => {
+      const good = okList(["A"]) as { statusCode: number; body: unknown };
+      const r = await simulate({ list: { ...good, statusCode } });
+      expect(r.events.at(-1)).toBe("failed:");
+      expect(r.fetchCalls).toEqual([]);
+      expect(r.state.pending).toEqual({});
+    },
+  );
+
+  it.each([
+    { data: null },
+    { data: { transcripts: null } },
+    {},
+    { errors: [{ message: "x", extensions: { code: "forbidden" } }] },
+  ])("a 2xx without a transcripts list fails the poll: %j", async (body) => {
+    const r = await simulate({ list: { statusCode: 200, body } });
+    expect(r.events).toEqual(["list:", "failed:"]);
+  });
+
+  it("pending ids are kept and not fetched after a failed list", async () => {
+    const r = await simulate({ state: fresh({ pending: { P: ago(1) } }), list: serverError });
+    expect(r.fetchCalls).toEqual([]);
+    expect(sortedKeys(r.state.pending)).toEqual(["P"]);
+    expect((r.state.pending as Record<string, string>).P).toBe(ago(1));
+    expect(r.state.used).toBe(1);
+  });
+
+  it("the failed list is the only output", async () => {
+    const out = await runCodeNode(CODE, {
+      staticData: fresh(),
+      settings: settings(40),
+      input: [serverError],
+      matching: [{ poll: { next: "list" } }],
+    });
+    expect(out).toEqual([{ poll: { next: "failed" } }]);
+  });
+
+  it("a failed list at index 1 uses its own pairing", async () => {
+    const out = (await runCodeNode(CODE, {
+      staticData: fresh(),
+      settings: settings(40),
+      input: [okFetch("A"), serverError],
+      matching: [
+        { poll: { next: "fetch", id: "A", attempt: 1, queue: [] } },
+        { poll: { next: "list" } },
+      ],
+    })) as Out[];
+    expect(out.map((o) => `${o.poll.next}:${o.poll.id}`)).toEqual(["post:A", "failed:undefined"]);
+  });
+
+  it("an ok list never fails", async () => {
+    for (const ids of [[], ["A"]]) {
+      const r = await simulate({ list: okList(ids), post: () => answer(201) });
+      expect(r.events.some((e) => e.startsWith("failed"))).toBe(false);
+    }
   });
 });
 

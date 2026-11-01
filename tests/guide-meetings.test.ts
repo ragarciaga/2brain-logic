@@ -235,6 +235,16 @@ describe("docs/GUIDE-meetings.md", () => {
     expect(bound).toBeDefined();
     expect(body).toContain(`${bound} posts`);
     expect(body).toContain("`List transcripts`");
+    const rules = (
+      param(nodeByName(fireflies, "Poll route"), "rules") as { values: { outputKey: string }[] }
+    ).values;
+    const failedIdx = rules.findIndex((r) => r.outputKey === "failed");
+    expect(failedIdx).toBeGreaterThanOrEqual(0);
+    const target = fireflies.connections["Poll route"].main[failedIdx]?.[0]?.node ?? "";
+    expect(target).not.toBe("");
+    const listBullet = body.split(/\n- /).find((b) => b.includes("`List transcripts`")) ?? "";
+    expect(listBullet.replace(/\s+/g, " ")).toContain(`\`${target}\``);
+    expect(body).not.toContain("green executions");
     const finished = param(nodeByName(gemini, "Finished only"), "conditions") as {
       conditions: { rightValue: string }[];
     };
