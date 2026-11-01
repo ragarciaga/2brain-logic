@@ -13,11 +13,14 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { SshRemote } from "./answers.js";
+import type { PromptTerminal } from "./prompt.js";
 
 /**
  * SSH helpers for the installer. Binaries (ssh-keygen) run only through an injected runner, so unit
- * tests need none; ssh-keyscan output comes in as text. Host key checking is never relaxed; the only trust anchors are the constant below and
- * the key a human confirms for another host.
+ * tests need none; ssh-keyscan runs through an injected runner that captures stdout (`scanHostKey`),
+ * and `pinGithubHostKey` takes its output as text. Host key checking is never relaxed; the only
+ * trust anchors are the constant below and the key a human confirms for another host
+ * (`pinConfirmedHostKey`).
  */
 
 // Source: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
@@ -88,7 +91,7 @@ export type PinResult =
 
 /**
  * Pins github.com only when a scanned ed25519 key matches the published fingerprint. Other hosts
- * need a human confirmation and are not handled here.
+ * need a human confirmation: see `pinConfirmedHostKey`.
  */
 export function pinGithubHostKey(
   secretsDir: string,
@@ -169,6 +172,145 @@ export const execFileRunner: Runner = (cmd, args, opts) =>
       resolvePromise({ code: typeof code === "number" && code !== 0 ? code : 1 });
     });
   });
+
+export type CaptureResult = { code: number; stdout: string };
+export type CaptureRunner = (
+  cmd: string,
+  args: string[],
+  opts: { timeoutMs: number },
+) => Promise<CaptureResult>;
+
+/** Like `execFileRunner` but returns stdout (only on exit 0). Output is never logged. */
+export const execFileCaptureRunner: CaptureRunner = (cmd, args, opts) =>
+  new Promise((resolvePromise) => {
+    execFile(
+      cmd,
+      args,
+      { timeout: opts.timeoutMs, windowsHide: true, maxBuffer: 65536, encoding: "utf8" },
+      (error, stdout) => {
+        if (error === null) {
+          resolvePromise({ code: 0, stdout: typeof stdout === "string" ? stdout : "" });
+          return;
+        }
+        const code = (error as { code?: unknown }).code;
+        resolvePromise({ code: typeof code === "number" && code !== 0 ? code : 1, stdout: "" });
+      },
+    );
+  });
+
+const SCAN_TIMEOUT_MS = 10000;
+
+export type ScanResult =
+  | { ok: true; text: string }
+  | { ok: false; code: "host_unreachable"; message: string };
+
+const UNREACHABLE_MESSAGE =
+  "host_unreachable: no host key within 10 s. Fix: check the remote host name and port, and that the host accepts SSH from this machine";
+
+function unreachable(): { ok: false; code: "host_unreachable"; message: string } {
+  return { ok: false, code: "host_unreachable", message: UNREACHABLE_MESSAGE };
+}
+
+/** Fetches the ed25519 host key text with ssh-keyscan, with a 10 s timer of our own. */
+export async function scanHostKey(
+  remote: Pick<SshRemote, "host" | "port">,
+  run: CaptureRunner = execFileCaptureRunner,
+): Promise<ScanResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolvePromise) => {
+    timer = setTimeout(() => resolvePromise("timeout"), SCAN_TIMEOUT_MS);
+  });
+  try {
+    const outcome = await Promise.race([
+      run("ssh-keyscan", ["-t", "ed25519", "-p", String(remote.port), remote.host], {
+        timeoutMs: SCAN_TIMEOUT_MS,
+      }),
+      timeout,
+    ]);
+    if (outcome === "timeout" || outcome.code !== 0 || typeof outcome.stdout !== "string") {
+      return unreachable();
+    }
+    return { ok: true, text: outcome.stdout };
+  } catch {
+    return unreachable();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export type ConfirmedPinResult =
+  | { ok: true; line: string; fingerprint: string }
+  | { ok: false; code: "host_unreachable" | "host_key_rejected"; message: string };
+
+function rejected(reason: string): { ok: false; code: "host_key_rejected"; message: string } {
+  return { ok: false, code: "host_key_rejected", message: `host_key_rejected: ${reason}` };
+}
+
+async function readOneLine(term: PromptTerminal): Promise<string | null> {
+  let buffer = "";
+  for (;;) {
+    const newline = buffer.indexOf("\n");
+    if (newline >= 0) {
+      return buffer.slice(0, newline).replaceAll("\r", "");
+    }
+    const chunk = await term.read();
+    if (chunk === null) {
+      return null;
+    }
+    buffer += chunk;
+  }
+}
+
+/**
+ * Pins the ed25519 host key of a non-GitHub host, only after a human typed exactly `yes`
+ * (interactive) or `expected` equals the scanned fingerprint (non-interactive). Nothing is written
+ * on any other path. Messages never contain the typed text or the expected value.
+ */
+export async function pinConfirmedHostKey(
+  secretsDir: string,
+  remote: Pick<SshRemote, "host" | "port">,
+  confirm: { term: PromptTerminal } | { expected: string | undefined },
+  run: CaptureRunner = execFileCaptureRunner,
+): Promise<ConfirmedPinResult> {
+  if (remote.host === "github.com") {
+    throw new Error("pinConfirmedHostKey: github.com is pinned by pinGithubHostKey");
+  }
+  const scan = await scanHostKey(remote, run);
+  if (!scan.ok) {
+    return scan;
+  }
+  const byFingerprint = new Map<string, string>();
+  for (const key of parseKeyscan(scan.text)) {
+    try {
+      byFingerprint.set(fingerprintSha256(key), key);
+    } catch {
+      // A malformed blob is ignored and never printed.
+    }
+  }
+  if (byFingerprint.size === 0) {
+    return unreachable();
+  }
+  if (byFingerprint.size > 1) {
+    return rejected("the host offered more than one ed25519 key");
+  }
+  const [[fingerprint, key]] = [...byFingerprint] as [[string, string]];
+
+  let confirmed: boolean;
+  if ("term" in confirm) {
+    const name = remote.port === 22 ? remote.host : `[${remote.host}]:${remote.port}`;
+    confirm.term.write(`${name} ssh-ed25519 fingerprint ${fingerprint}\n`);
+    confirm.term.write("Type yes to pin this host key: ");
+    confirmed = (await readOneLine(confirm.term)) === "yes";
+  } else {
+    confirmed = confirm.expected !== undefined && confirm.expected === fingerprint;
+  }
+  if (!confirmed) {
+    return rejected("the host key was not confirmed");
+  }
+  const line = knownHostsLine(remote, key);
+  writeKnownHosts(secretsDir, line);
+  return { ok: true, line, fingerprint };
+}
 
 function lstatOrNull(path: string): Stats | null {
   try {
