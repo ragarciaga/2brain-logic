@@ -58,10 +58,36 @@ export function validateAuthorEmail(value: string): AnswerResult<string> {
 
 const NAME_EMPTY_RULE = "must not be empty";
 const NAME_CONTROL_RULE = "must be a single line with no control characters";
+const NAME_FORMAT_RULE = "must not contain direction-control or zero-width characters";
+const FORMAT_CHAR_RE = /[\u202a-\u202e\u2066-\u2069\u061c\u200b-\u200f\ufeff]/;
+const NAME_ENV_RULE =
+  "cannot be stored in the .env file: no apostrophe together with $, a double quote or a backslash, and a backslash only in a name of letters, digits and . _ @ + : / -";
+const BARE_NAME_RE = /^[A-Za-z0-9_.@+:/\\-]+$/;
+
+/**
+ * True when a name can be written to the .env file in one of its forms: bare, single quoted or
+ * double quoted. An apostrophe with `$`, `"` or a backslash fits no form, and a backslash fits
+ * only the bare form. A newline never fits. Shared by the prompt and the non-interactive flags.
+ */
+export function isEnvWritableName(value: string): boolean {
+  if (value.includes("\n") || value.includes("\r")) {
+    return false;
+  }
+  if (value.includes("'") && /[$"\\]/.test(value)) {
+    return false;
+  }
+  if (value.includes("\\") && !BARE_NAME_RE.test(value)) {
+    return false;
+  }
+  return true;
+}
+
 const NameSchema = z
   .string({ error: NAME_EMPTY_RULE })
-  .min(1, { error: NAME_EMPTY_RULE })
-  .refine((v) => !hasControlChar(v), { error: NAME_CONTROL_RULE });
+  .refine((v) => v.trim().length > 0, { error: NAME_EMPTY_RULE })
+  .refine((v) => !hasControlChar(v), { error: NAME_CONTROL_RULE })
+  .refine((v) => !FORMAT_CHAR_RE.test(v), { error: NAME_FORMAT_RULE })
+  .refine(isEnvWritableName, { error: NAME_ENV_RULE });
 
 export function validateAuthorName(value: string): AnswerResult<string> {
   return run(NameSchema, "author name", value, NAME_EMPTY_RULE);
@@ -138,17 +164,20 @@ const HOST = `(${LABEL}(?:\\.${LABEL})*)`;
 const SCP_RE = new RegExp(`^${USER}@${HOST}:(\\S+)$`);
 const SSH_RE = new RegExp(`^ssh://${USER}@${HOST}(?::([0-9]{1,5}))?/(\\S+)$`);
 
+const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
+
 function refuse(): SshRemoteResult {
   return { ok: false, code: "remote_not_ssh" };
 }
 
 /**
  * Accepts only `user@host:path` (port 22) and `ssh://user@host[:port]/path`. Regexes, not
- * `new URL`. A password, token, IPv6 literal or leading `-` in user or host is refused, and every
+ * `new URL`. Only printable ASCII (0x21 to 0x7e) is accepted, so a bidi, zero-width or control
+ * character cannot hide in the path. A password, token, IPv6 literal or leading `-` in user or host is refused, and every
  * refusal is the same fixed object, so no part of the input can leak.
  */
 export function parseSshRemote(input: string): SshRemoteResult {
-  if (typeof input !== "string" || input.length > 2048) {
+  if (typeof input !== "string" || input.length > 2048 || !PRINTABLE_ASCII_RE.test(input)) {
     return refuse();
   }
   const scp = SCP_RE.exec(input);
