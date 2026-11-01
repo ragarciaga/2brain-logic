@@ -89,7 +89,7 @@ sign-in needs these as well:
 - `/revoke`
 - `/.well-known/`
 
-The proxy configuration itself is not covered here. Set `TRUST_PROXY_HOPS` to exactly the number of
+Ready-made Caddy and nginx configurations are in the Proxy section of [INSTALL.md](INSTALL.md). Set `TRUST_PROXY_HOPS` to exactly the number of
 proxies between the client and the service. Too high, and a client can choose the address the
 service uses for its limits. Too low, and everyone behind the proxy shares one address and one
 limit. With no proxy in front (clients connect directly), leave it at `0`.
