@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHECK_IDS } from "../src/install/doctor.js";
 import { SETUP_USAGE } from "../src/install/setup.js";
+import { type ScanFinding, scanOwnerData } from "./plugin/helpers/plugin-scan.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const read = (name: string): string => readFileSync(resolve(ROOT, name), "utf8");
@@ -248,5 +249,91 @@ describe("docs/INSTALL.md", () => {
 
   it("has no em dash", () => {
     expect(guide).not.toContain(EM_DASH);
+  });
+});
+
+const readme = read("README.md");
+
+/** Hosts the guides may name besides example.com: product and stack documentation hosts. */
+const ALLOWED_HOSTS = new Set([
+  "github.com",
+  "docs.github.com",
+  "nodejs.org",
+  "www.typescriptlang.org",
+  "typescriptlang.org",
+  "hono.dev",
+  "zod.dev",
+  "docs.claude.com",
+  "vitest.dev",
+  "biomejs.dev",
+  "docs.docker.com",
+  "docs.n8n.io",
+  "claude.ai",
+  "claude.com",
+  "chatgpt.com",
+  // Not domains: the loopback address and the Compose service name of this product.
+  "127.0.0.1",
+  "brain",
+]);
+
+function hostOf(finding: ScanFinding): string {
+  if (finding.rule === "email") return finding.match.slice(finding.match.indexOf("@") + 1);
+  if (finding.rule === "url-host") return finding.match.replace(/^https?:\/\//i, "");
+  return finding.match;
+}
+
+/** scanOwnerData minus the allowed product hosts and the git SSH user. */
+function ownerDataFindings(text: string): ScanFinding[] {
+  return scanOwnerData(text).filter((f) => {
+    if (!["email", "url-host", "hostname"].includes(f.rule)) return true;
+    if (f.rule === "email" && f.match === "git@github.com") return false;
+    return f.rule === "email" || !ALLOWED_HOSTS.has(hostOf(f).toLowerCase());
+  });
+}
+
+describe("README.md install (R6.5)", () => {
+  const install = section(readme, "Install");
+
+  it("has an Install section linking docs/INSTALL.md", () => {
+    expect(install).not.toBe("");
+    expect(install).toMatch(/\[[^\]]+\]\((?:\.\/)?docs\/INSTALL\.md\)/);
+  });
+
+  it("uses setup in the Install section, not cp", () => {
+    expect(install).toContain("docker compose run --rm setup");
+    expect(install).not.toContain("cp .env.example .env");
+  });
+
+  it("drops the early-version warning", () => {
+    expect(readme).not.toContain("throwaway");
+    expect(readme).not.toContain("real n8n flows");
+  });
+});
+
+describe("owner data and em dash (R6.6)", () => {
+  for (const [name, text] of [
+    ["README.md", readme],
+    ["docs/INSTALL.md", guide],
+  ] as const) {
+    it(`${name} has no owner data`, () => {
+      expect(ownerDataFindings(text)).toEqual([]);
+    });
+    it(`${name} has no em dash`, () => {
+      expect(text).not.toContain(EM_DASH);
+    });
+  }
+
+  it("the filter still catches owner data", () => {
+    expect(ownerDataFindings("li@acme.org").map((f) => f.rule)).toEqual(["email", "hostname"]);
+    expect(ownerDataFindings("https://brain.test/x").map((f) => f.rule)).toContain("url-host");
+    expect(ownerDataFindings("Carla").map((f) => f.rule)).toEqual(["person-name"]);
+    expect(ownerDataFindings("user@github.com").map((f) => f.rule)).toContain("email");
+    expect(ownerDataFindings("see example.org").map((f) => f.rule)).toEqual(["hostname"]);
+  });
+
+  it("the filter allows the product hosts and the git SSH user", () => {
+    expect(ownerDataFindings("git@github.com:x/y.git")).toEqual([]);
+    expect(ownerDataFindings("claude.ai")).toEqual([]);
+    expect(ownerDataFindings("https://brain.example.com")).toEqual([]);
   });
 });
