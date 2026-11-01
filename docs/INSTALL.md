@@ -71,8 +71,8 @@ does not know:
 docker compose run --rm setup --non-interactive --help
 ```
 
-It prints one line in this form (without the first two words if you run `node dist/cli.js setup`
-directly) and exits with code 2:
+It prints one line in this form and exits with code 2. In the usage text, `node dist/cli.js setup`
+is what `docker compose run --rm setup` runs inside the container:
 
 ```text
 setup: missing_answers: usage: node dist/cli.js setup [--project-dir <dir>] [--vault-dir <dir>] | node dist/cli.js setup --non-interactive --remote <git-ssh-url> --author-name <name> --author-email <email> [--public-base-url <url> (--passphrase-stdin | --keep-passphrase)] [--host-fingerprint <SHA256:...>]
