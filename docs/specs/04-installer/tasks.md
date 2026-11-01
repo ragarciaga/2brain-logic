@@ -74,7 +74,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/prompt.ts, tests/install-prompt.test.ts
 - Verify: `npm test -- tests/install-prompt.test.ts`; `npm run typecheck`; `npm run lint`; with a scripted io: case "prompt order" asks vault remote, author name, author email, public base URL, proxy hop count, keep current passphrase (only when a hash exists), passphrase, repeat, Docker network name, in that order; with an empty base URL the hop count and passphrase prompts are not asked; every prompt but the passphrase shows the current or default value in brackets; case "hidden input": the scripted output stream receives none of the passphrase characters and raw mode is set and restored (also on error); the passphrase is passed to `hashPassphrase` (src/auth/owner.ts, imported, unchanged) and the returned answers hold only the hash; mismatched entries or one shorter than 12 characters re-ask with the field and rule message; an invalid email re-asks naming `author email`; case "re-asks a non-SSH remote": on a terminal an https remote is refused with `remote_not_ssh` and asked again, and the second (SSH) answer is accepted
 - Issue: #150
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -86,7 +86,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/prompt.ts, tests/install-noninteractive.test.ts
 - Verify: `npm test -- tests/install-noninteractive.test.ts`; `npm run typecheck`; `npm run lint`; `readNonInteractive(argv, stdin)` returns answers or a result `{ code, exitCode, fields }` and takes no writer, io or file API, so it cannot write; it maps `--remote`, `--author-name`, `--author-email`, `--public-base-url`, `--trust-proxy-hops` (default 1 with a base URL, 0 without), `--passphrase-stdin`, `--keep-passphrase`, `--n8n-network`, `--host-fingerprint`; the required flags are `--remote`, `--author-name` and `--author-email`; the passphrase comes only from stdin with `--passphrase-stdin` (read once, hashed through `hashPassphrase`, answers hold only the hash), and a `--passphrase` flag or any unknown flag is a usage error with exit code 2; case "missing answers": without `--remote` and `--author-email` the result is `missing_answers` with exit code 2 naming `remote` and `author-email` and not `author-name`; a base URL with neither `--passphrase-stdin` nor `--keep-passphrase` is `missing_answers` naming `passphrase`; case "invalid answer": a bad email gives exit code 1 `invalid_answer` naming the field and rule, not the value; a non-SSH remote gives `remote_not_ssh` with exit code 1 and no part of the input in the result; both failure results are returned before the passphrase is read from stdin (case "no stdin read on failure")
 - Issue: #151
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -110,7 +110,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/ssh.ts, tests/install-ssh-confirm.test.ts
 - Verify: `npm test -- tests/install-ssh-confirm.test.ts`; `npm run typecheck`; `ssh-keyscan` runs through an injected runner with argument array `["-t", "ed25519", "-p", <port>, <host>]` and a 10 s timeout; case "typed yes pins": the scripted io shows the fingerprint and pins on `yes`; case "anything else rejects": `y`, `no` and empty give `host_key_rejected` with no known_hosts; case "non-interactive fingerprint": `--host-fingerprint` equal to the seen one pins, a different one gives `host_key_rejected`; case "keyscan timeout": a runner that never resolves gives `host_unreachable` with a fix line after the 10 s timer (fake timers) and no known_hosts
 - Issue: #153
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -122,7 +122,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/ssh.ts, tests/install-keygen.test.ts, tests/install-keygen.integration.test.ts
 - Verify: `npm test -- tests/install-keygen.test.ts tests/install-keygen.integration.test.ts`; `npm run typecheck`; unit: with an existing `secrets/deploy_key` the runner is not called (case "keeps existing key"); a runner failure gives `keygen_failed` and removes partial `deploy_key` and `deploy_key.pub` (case "cleans partial key"); integration (real `ssh-keygen`, skipped when the binary is absent and on Windows): `ensureDeployKey` creates `secrets/` 0700, `deploy_key` 0600 and `deploy_key.pub` with type `ssh-ed25519` and comment `2brain deploy key`, and `ssh-keygen -y -P "" -f deploy_key` succeeds (no passphrase)
 - Issue: #154
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -134,7 +134,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/vault-bootstrap.ts, src/cli.ts, tests/install-bootstrap.integration.test.ts, tests/cli.integration.test.ts
 - Verify: `npm test -- tests/install-bootstrap.integration.test.ts tests/cli.integration.test.ts`; `npm run typecheck`; `npm run lint`; src/cli.ts exports the `init-vault` copy function (`initVault`) with no behavior change and bootstrap learns which files were copied from its `copied <path>` output lines through an injected `CliIo`; the existing `init-vault` cases (never overwrites, lists copied and skipped files) pass unchanged; integration against an empty bare fixture repo: `bootstrapVault` clones it into an empty vault dir (case "clones when no clone"), copies the template, stages only the copied files, makes one commit with message `2brain: seed vault template` and the configured author name and email, and pushes it so the bare repo's `main` points at that commit even when the clone's default branch is not `main` (case "seeds empty remote"); case "clone failure codes": a missing remote path gives `remote_unreachable`, a stubbed runner failing with exit 128 and `Permission denied` gives `remote_auth_failed`, each with a fix line, no commit, and no git stderr marker in the result or output
 - Issue: #155
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -147,7 +147,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/vault-bootstrap.ts, tests/install-bootstrap-existing.integration.test.ts
 - Verify: `npm test -- tests/install-bootstrap-existing.integration.test.ts`; `npm run typecheck`; case "fills missing template files": a remote with one note and no `.2brain/config.yaml` gets one commit `2brain: seed vault template` adding only template files, the note unchanged, pushed to the current branch; case "valid config is a no-op": a vault with a valid config has the same HEAD, no new commit and a clean `git status` after bootstrap; case "invalid config": a config failing `loadVaultConfig` gives `config_invalid` naming `.2brain/config.yaml` and the key path, no commit; case "origin mismatch": a clone of another bare repo gives `vault_remote_mismatch` and the clone's HEAD, files and remote config are unchanged
 - Issue: #156
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -159,7 +159,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/vault-bootstrap.ts, tests/install-bootstrap-push.integration.test.ts
 - Verify: `npm test -- tests/install-bootstrap-push.integration.test.ts`; `npm run typecheck`; with a bare fixture repo whose `pre-receive` hook exits 1 (POSIX, skipped on Windows): bootstrap gives `push_refused` with the deploy key write access fix and the local seed commit is kept; after removing the hook, a re-run pushes that same commit (bare `main` equals the earlier local HEAD) and makes no new commit; case "re-run goes through the existing-vault path": the re-run starts from an existing clone with a valid config and a clone ahead of origin, pushes it, and T11's "valid config is a no-op" case still passes when the clone is level with origin; no git stderr text (a marker echoed by the hook) appears in the result or the output
 - Issue: #157
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -184,7 +184,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/doctor.ts, tests/install-doctor.test.ts
 - Verify: `npm test -- tests/install-doctor.test.ts`; `npm run typecheck`; `npm run lint`; with stubbed checks: case "order" runs and prints `env`, `env_file`, `secrets`, `network`, `remote_reachable`, `remote_pushable`, `vault_config`, `ingest_health`, `mcp_internal`, `proxy_metadata`, `proxy_mcp` in that order, each line `pass  <id>`, `fail  <id>` followed by `      fix: <line>`, or `skip  <id> (<note>)`, and a summary `doctor: <n> failed, <n> passed, <n> skipped`; a failing check does not stop the next one; exit code 0 when none failed, 1 when any failed; case "skip without base URL": with `PUBLIC_BASE_URL` empty the last three are `skip` with the note `PUBLIC_BASE_URL is empty: claude.ai cannot connect` and their probes are never called; case "no secrets": planted `INGEST_TOKEN`, `OWNER_PASSPHRASE_HASH` and a `VAULT_REMOTE` with a `user:pass@` part never appear in the output, even when a check's fix or error text contains them (the runner prints only fixed strings, ids, codes and paths)
 - Issue: #159
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -196,7 +196,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/doctor.ts, tests/install-doctor-local.test.ts
 - Verify: `npm test -- tests/install-doctor-local.test.ts`; `npm run typecheck`; case "env names variables": an environment missing `INGEST_TOKEN` and with a bad `PUBLIC_BASE_URL` fails `env` naming both variables and containing neither value; `env_file` fails for a missing `.env` and for modes 0640 and 0604, passes for 0600 (POSIX, skipped on Windows); `secrets` fails when `deploy_key` or `known_hosts` is missing or has group or other bits, passes at 0600; case "network": an injected resolver that rejects for `brain` fails `network` with a fix holding `docker network create <N8N_NETWORK>` and `docker compose up -d`; a resolving stub passes
 - Issue: #160
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -208,7 +208,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/doctor.ts, tests/install-doctor-git.integration.test.ts
 - Verify: `npm test -- tests/install-doctor-git.integration.test.ts`; `npm run typecheck`; against bare fixture repos: `remote_reachable` passes on a live remote and fails on a missing path, and fails after a 15 s timeout with an injected hanging runner (fake timers); `remote_pushable` passes on a writable remote and fails with the write access fix when the bare repo's `pre-receive` hook exits 1 (POSIX, skipped on Windows); `vault_config` fails for a missing clone and for an invalid `.2brain/config.yaml` naming the file and key path, passes for a valid one; case "git checks change nothing": after running `remote_reachable`, `remote_pushable` and `vault_config`, a recursive snapshot (paths, contents, modes, mtimes) of the project dir, `secrets/` and the clone (including `.git`), plus the bare repo's refs, is identical to the one taken before
 - Issue: #161
-- Status: todo
+- Status: done
 
 ### Decision log
 
@@ -220,7 +220,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 - Files: src/install/doctor.ts, tests/install-doctor-http.integration.test.ts
 - Verify: `npm test -- tests/install-doctor-http.integration.test.ts`; `npm run typecheck`; against local servers: `ingest_health` passes on 200 `{"ok":true}` and fails on 500 and on no answer within 5 s; `mcp_internal` and `proxy_metadata` pass against the real public MCP app (src/mcp/app.ts) whose metadata issuer equals `PUBLIC_BASE_URL`; `proxy_metadata` fails with the INSTALL.md Proxy section fix for another issuer, a 500, a 302 to an `http://` URL (redirect not followed) and an injected fetch that throws a TLS error; `proxy_mcp` passes when `/mcp` without a token answers 401 (the real app) and fails for 200 and 404 with a fix listing `/mcp`, `/authorize`, `/token`, `/register`, `/revoke` and `/.well-known/`; `proxy_metadata` and `proxy_mcp` pass cases use an injected fetch that maps the https `PUBLIC_BASE_URL` origin onto a local server running the real public app (`createPublicApp`); `mcp_internal` fails on a non-200 answer and on an issuer that differs from `PUBLIC_BASE_URL`
 - Issue: #162
-- Status: todo
+- Status: done
 
 ### Decision log
 
