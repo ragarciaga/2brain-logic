@@ -353,6 +353,25 @@ describe("D2: every meeting path is checked before file work", () => {
   });
 });
 
+describe("D2: the plain path is checked too", () => {
+  it("a Windows-unsafe area gives 400 unsafe_path and writes nothing", async () => {
+    pushFiles(fixture, {
+      ".2brain/config.yaml": readFileSync(CONFIG_TEMPLATE, "utf8").replace(
+        "areas: [personal, work]",
+        () => "areas: [wo:rk]",
+      ),
+    });
+    const head = remoteHead();
+    const response = await post(makeApp(), firefliesBody());
+    expect(response.status).toBe(400);
+    expect(response.json).toEqual({ ok: false, error: "unsafe_path" });
+    expect(remoteHead()).toBe(head);
+    expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(head);
+    expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+    expect(existsSync(join(fixture.vaultDir, "wo:rk"))).toBe(false);
+  });
+});
+
 describe("the other note is rewritten safely", () => {
   /** A scrubber that runs `hook` when the version path is checked (after the candidate scan). */
   function hooked(hook: () => void): Scrubber {
