@@ -46,7 +46,8 @@ The Fireflies workflow has two more values, described in the next sections.
 ## Fireflies: poll or webhook mode
 
 The Fireflies workflow ships in poll mode: `Poll schedule` is on and `Fireflies webhook` is
-disabled. Poll mode works on every plan. Use webhook mode only if your plan offers webhooks.
+disabled. Poll mode needs only an API key, so it should work on any plan that allows API access.
+Use webhook mode only if your plan offers webhooks.
 
 Run one mode only. The executions of a workflow share its static data without locking, so two
 triggers at once can overwrite each other's state.
@@ -96,12 +97,16 @@ In this order:
 
 ## Activate the workflows
 
-Activate both workflows instead of running them by hand. The workflows keep their state (posted and
-pending ids, and the daily count) in n8n static data, which n8n keeps only for active workflows.
-Check this in the n8n documentation for your version.
+Activate both workflows instead of running them by hand. Activation is what makes the schedules
+run.
 
-Do not import a workflow again over a running one. Re-importing loses that state, and repeated
-meetings then answer `already_stored` and still use budget.
+The Fireflies workflow keeps its state (posted and pending ids, and the daily count) in n8n static
+data, which n8n keeps only for active workflows. Check this in the n8n documentation for your
+version. Do not import that workflow again over a running one. Re-importing loses the state, and
+repeated meetings then answer `already_stored` and still use budget.
+
+The Gemini workflow keeps no state. Each poll posts every conference record of the last 24 hours
+again, and the repeats answer `already_stored`.
 
 ## Google Meet: Workspace edition and Meet REST API
 
@@ -154,7 +159,8 @@ meetings:
 
 If the `sources` list of your config is not empty, add `fireflies` and `gemini`, the `value` of each
 entry under `meetings.sources`. Otherwise meeting posts get a 503 `config_invalid` answer, while
-other writes keep working. An empty `sources` list needs no change.
+other writes keep working. A 503 looks like an ingest outage, so check this first when only
+meetings fail. An empty `sources` list needs no change.
 
 ## Skips and retries
 
@@ -164,12 +170,18 @@ other writes keep working. An empty `sources` list needs no change.
 - Answers 502 and 503 are posted again 3 times, 60 seconds apart, so 4 posts in all. After that the
   Fireflies poll keeps the id pending, and the Gemini workflow posts it again on a later poll while
   the record is inside the 24 hour window.
-- A 4xx answer fails the execution at `Ingest refused`. The Fireflies workflow records the id and
-  does not fetch it again for 48 hours. The Gemini workflow repeats the failure on every poll for 24
+- A 4xx answer fails the execution at `Ingest refused`. The Fireflies workflow records the id as
+  posted and does not fetch it again: it stays recorded for 48 hours, which is longer than its 24
+  hour list window, and the webhook is not sent twice. To recover that meeting, fix the cause and
+  add the meeting to the vault by hand. The Gemini workflow repeats the failure on every poll for 24
   hours.
-- Calls to the source and to the calendar get 3 tries, 5 seconds apart, then the execution ends at
+- Only the transcript fetch and the calendar calls of Fireflies, and the Meet and calendar calls of
+  Gemini, get 3 tries, 5 seconds apart, then the execution ends at
   `Source or calendar failed` (Fireflies) or `Meet or calendar failed` (Gemini). The Fireflies poll
   keeps the id pending.
+- A failed Fireflies list request (`List transcripts`) is not retried. The execution ends without
+  an error, so a wrong API key gives green executions that ingest nothing. When nothing arrives,
+  open the output of `List transcripts` in the n8n execution.
 - A rate-limit error stops the Fireflies requests of that execution. The ids stay pending.
 - The Gemini workflow posts only transcripts in the state `FILE_GENERATED`.
 

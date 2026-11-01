@@ -171,6 +171,23 @@ describe("docs/GUIDE-meetings.md", () => {
     expect(lists).toBe(24);
   });
 
+  it("states the Gemini poll interval from its template", () => {
+    const rule = param(nodeByName(gemini, "Poll schedule"), "rule") as {
+      interval: { minutesInterval: number }[];
+    };
+    const minutes = rule.interval[0]?.minutesInterval;
+    expect(minutes).toBe(60);
+    expect(section(guide, "Google Meet: Workspace edition and Meet REST API")).toContain(
+      `every ${minutes} minutes`,
+    );
+  });
+
+  it("says the Gemini workflow keeps no state", () => {
+    const code = JSON.stringify(gemini.nodes);
+    expect(code).not.toContain("getWorkflowStaticData");
+    expect(section(guide, "Activate the workflows")).toMatch(/Gemini workflow keeps no state/);
+  });
+
   it("explains webhook mode from the template", () => {
     const hook = nodeByName(fireflies, "Fireflies webhook");
     expect(hook.disabled).toBe(true);
@@ -204,6 +221,20 @@ describe("docs/GUIDE-meetings.md", () => {
       expect(stops.length).toBeGreaterThan(0);
       for (const s of stops) expect(body, s.name).toContain(`\`${s.name}\``);
     }
+    const retryWait = nodeByName(fireflies, "Retry wait").parameters as {
+      amount: number;
+      unit: string;
+    };
+    expect(`${retryWait.amount} ${retryWait.unit}`).toBe("5 seconds");
+    expect(body).toContain(`${retryWait.amount} ${retryWait.unit}`);
+    const retryPost = String(
+      param(nodeByName(gemini, "Retry post"), "conditions") &&
+        JSON.stringify(param(nodeByName(gemini, "Retry post"), "conditions")),
+    );
+    const bound = /post_try < (\d+)/.exec(retryPost)?.[1];
+    expect(bound).toBeDefined();
+    expect(body).toContain(`${bound} posts`);
+    expect(body).toContain("`List transcripts`");
     const finished = param(nodeByName(gemini, "Finished only"), "conditions") as {
       conditions: { rightValue: string }[];
     };
