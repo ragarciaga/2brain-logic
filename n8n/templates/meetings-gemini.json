@@ -1,0 +1,666 @@
+{
+  "name": "2brain meetings: Gemini",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 60
+            }
+          ]
+        }
+      },
+      "name": "Poll schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "calendar-id",
+              "name": "calendar_id",
+              "value": "primary",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://meet.googleapis.com/v2/conferenceRecords",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "pageSize",
+              "value": "100"
+            },
+            {
+              "name": "filter",
+              "value": "={{ 'end_time>=\"' + new Date(Date.now() - 24 * 3600000).toISOString() + '\"' }}"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}"
+            }
+          }
+        }
+      },
+      "name": "List conference records",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "name": "Google Meet"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-records",
+              "leftValue": "={{ ($json.conferenceRecords ?? []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has records",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "conferenceRecords",
+        "options": {}
+      },
+      "name": "Split records",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://meet.googleapis.com/v2/' + $json.name + '/transcripts' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "pageSize",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}"
+            }
+          }
+        }
+      },
+      "name": "List transcripts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "name": "Google Meet"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-transcripts",
+              "leftValue": "={{ ($json.transcripts ?? []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has transcripts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "transcripts",
+        "options": {}
+      },
+      "name": "Split transcripts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "finished-state",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "FILE_GENERATED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Finished only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Loop transcripts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://meet.googleapis.com/v2/' + $('Split records').item.json.name + '/participants' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "pageSize",
+              "value": "250"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}"
+            }
+          }
+        }
+      },
+      "name": "Participants",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        0
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "name": "Google Meet"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://meet.googleapis.com/v2/' + $('Loop transcripts').item.json.name + '/entries' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "pageSize",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}"
+            }
+          }
+        }
+      },
+      "name": "Transcript entries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        0
+      ],
+      "credentials": {
+        "googleOAuth2Api": {
+          "name": "Google Meet"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent($('Settings').first().json.calendar_id) + '/events' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "singleEvents",
+              "value": "true"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            },
+            {
+              "name": "timeMin",
+              "value": "={{ new Date(Date.parse($('Split records').item.json.startTime.replace(/\\.(\\d+)/, (m, f) => '.' + f.slice(0, 3).padEnd(3, '0'))) - 30 * 60000).toISOString() }}"
+            },
+            {
+              "name": "timeMax",
+              "value": "={{ new Date(Date.parse($('Split records').item.json.endTime.replace(/\\.(\\d+)/, (m, f) => '.' + f.slice(0, 3).padEnd(3, '0'))) + 30 * 60000).toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Calendar events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://brain:3000/meetings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source: \"gemini\", conference: $('Split records').item.json, transcript: $('Loop transcripts').item.json, participants: $('Participants').all().flatMap(p => p.json.participants ?? []), entries: $('Transcript entries').all().flatMap(p => p.json.transcriptEntries ?? []), calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: $('Settings').first().json.calendar_id })) }) }}",
+        "options": {}
+      },
+      "name": "Post meeting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "2brain ingest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "errorMessage": "Meet or calendar request failed after 3 tries"
+      },
+      "name": "Meet or calendar failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Poll schedule": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "List conference records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List conference records": {
+      "main": [
+        [
+          {
+            "node": "Has records",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Meet or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has records": {
+      "main": [
+        [
+          {
+            "node": "Split records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split records": {
+      "main": [
+        [
+          {
+            "node": "List transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List transcripts": {
+      "main": [
+        [
+          {
+            "node": "Has transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Meet or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has transcripts": {
+      "main": [
+        [
+          {
+            "node": "Split transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split transcripts": {
+      "main": [
+        [
+          {
+            "node": "Finished only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finished only": {
+      "main": [
+        [
+          {
+            "node": "Loop transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop transcripts": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Participants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Participants": {
+      "main": [
+        [
+          {
+            "node": "Transcript entries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Meet or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcript entries": {
+      "main": [
+        [
+          {
+            "node": "Calendar events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Meet or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar events": {
+      "main": [
+        [
+          {
+            "node": "Post meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Meet or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post meeting": {
+      "main": [
+        [
+          {
+            "node": "Loop transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

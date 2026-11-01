@@ -80,3 +80,37 @@ export function paths(t: N8nTemplate, from: string, to: string): string[][] {
 export function pathsAvoiding(t: N8nTemplate, from: string, to: string, via: string): string[][] {
   return paths(t, from, to).filter((p) => !p.includes(via));
 }
+
+export interface N8nEvalContext {
+  /** The current item's `$json`. */
+  json?: unknown;
+  /** Output of other nodes by name. An array means one item per element. */
+  nodes?: Record<string, unknown>;
+  /** Index of the current item, used by `$(name).item`. */
+  index?: number;
+  /** The HTTP response, as `$response` in pagination expressions. */
+  response?: unknown;
+}
+
+/** Evaluates an n8n `={{ ... }}` expression with a fake `$`, `$json` and `$response`. */
+export function evalN8n(expr: string, ctx: N8nEvalContext = {}): unknown {
+  const m = /^=\{\{\s*([\s\S]*?)\s*\}\}$/.exec(expr);
+  if (!m) throw new Error("not an expression");
+  const nodes = ctx.nodes ?? {};
+  const index = ctx.index ?? 0;
+  const itemsOf = (name: string): unknown[] => {
+    const value = nodes[name];
+    return Array.isArray(value) ? value : [value];
+  };
+  const dollar = (name: string) => ({
+    isExecuted: name in nodes,
+    first: () => ({ json: itemsOf(name)[0] }),
+    item: { json: Array.isArray(nodes[name]) ? itemsOf(name)[index] : nodes[name] },
+    all: () => itemsOf(name).map((json) => ({ json })),
+  });
+  return new Function("$", "$json", "$response", `return (${m[1]});`)(
+    dollar,
+    ctx.json,
+    ctx.response,
+  );
+}
