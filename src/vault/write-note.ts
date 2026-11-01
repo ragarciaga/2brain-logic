@@ -244,7 +244,8 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
  * Create the single write path into the vault, for creating a note (`write`), for setting
  * properties of an existing one (`patch`), for moving one to the archive folder (`archive`), and for a meeting
  * recording (`writeMeeting`, in src/vault/write-meeting.ts: it skips short or empty recordings with
- * one log line, answers `already_stored` for a known source id, and otherwise stores the note at
+ * one log line, answers `already_stored` for a known source id (only for a note tracked at HEAD,
+ * after pushing a waiting commit), and otherwise stores the note at
  * a new path: look for the other version of the meeting and, on a match, name the note next to it
  * and link both in one commit `2brain: add meeting <path> (version of <other path>)`; a taken path
  * gets ` HH-MM`, and a path still taken is `NoteExistsError`; scrub once, validate the scrubbed
@@ -375,6 +376,15 @@ export function createNoteWriter({
   async function pushOrPending(path: string): Promise<void> {
     const outcome = await pushWithRetry(root, { push: git.push, sleep });
     if (!outcome.pushed) throw new PushPendingError(path, outcome.commit, outcome.exitCode);
+  }
+
+  /** A stored meeting answers `already_stored` only when HEAD tracks it and nothing waits to push. */
+  async function deliverStored(path: string): Promise<void> {
+    if (!(await trackedAtHead(root, path))) throw new NoteExistsError();
+    const pending = await pushIfAhead(root, { push: git.push, sleep });
+    if (pending !== undefined && !pending.pushed) {
+      throw new PushPendingError(path, pending.commit, pending.exitCode);
+    }
   }
 
   async function writeOne(note: NoteInput): Promise<WriteResult> {
@@ -773,6 +783,7 @@ export function createNoteWriter({
           scrubber,
           refuseSecretPath,
           rejectInvalid,
+          deliverStored,
           createMeetingNote,
         }),
       ),

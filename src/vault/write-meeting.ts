@@ -40,6 +40,12 @@ export interface MeetingWriterDeps {
   /** Throw the error that maps a failed validation verdict. */
   rejectInvalid: (verdict: Exclude<FrontmatterVerdict, { ok: true }>) => never;
   /**
+   * Run for a note that already holds the source id: refuse one that HEAD does not track
+   * (`NoteExistsError`), push a commit waiting locally, and throw `PushPendingError` when the
+   * push does not land.
+   */
+  deliverStored: (path: string) => Promise<void>;
+  /**
    * Create the file, commit it with the message (together with `link`, when given), push; returns
    * the commit.
    */
@@ -196,7 +202,9 @@ async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
 
 /**
  * The meeting write, run inside the writer's queue slot. Order: pull and load the config, check
- * the meeting setup, skip short or empty recordings, look the source id up, and for a new one: pick
+ * the meeting setup, skip short or empty recordings, look the source id up (a known id answers
+ * `already_stored` only for a note tracked at HEAD, else `NoteExistsError`, after pushing a waiting
+ * commit; `PushPendingError` when it does not land), and for a new one: pick
  * the calendar event, route the area, then look for the other version of the meeting among the
  * stored meeting notes (`matchVersion`: same calendar event or enough overlap, other source, no
  * `versions` yet). With a match the new note is `<other base> (<source label>).md` in the other
@@ -233,7 +241,10 @@ export async function writeMeetingInSlot(
   const id = `${cfg.meetings.sources[input.source].value}:${input.sourceId}`;
   const head = await deps.git.headSha(deps.root);
   const found = await deps.sourceIndex.lookup(deps.root, head, cfg.properties.source_id, id);
-  if (found !== undefined) return { ok: true, path: found, commit: null, already_stored: true };
+  if (found !== undefined) {
+    await deps.deliverStored(found);
+    return { ok: true, path: found, commit: null, already_stored: true };
+  }
 
   const event = pickEvent(input.calendarEvents, input.start, input.end);
   const routedArea = routeArea(event, input, cfg);
