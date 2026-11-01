@@ -29,11 +29,12 @@ const COMMAND_TAGS = [
 ];
 
 /** Every character a reader may treat as a line break. */
-const LINE_BREAK = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
-const LINE_BREAK_ALL = new RegExp(LINE_BREAK.source, "g");
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control line breaks is the point
+const LINE_BREAK = /\r\n|[\n\r\v\f\u001c-\u001e\u0085\u2028\u2029]/;
+export const LINE_BREAK_ALL = new RegExp(LINE_BREAK.source, "g");
 const NAME_UNSAFE = /[\p{Cc}\u2028\u2029]/gu;
 
-const LABEL_LINE = /^(?:USER:|ASSISTANT:|TOOL |RESULT:|\[\d+ characters left out\])/;
+export const LABEL_LINE = /^(?:USER:|ASSISTANT:|TOOL |RESULT:|\[\d+ characters left out\])/;
 
 /**
  * Makes transcript text safe to place after a label: every continuation line gets two
@@ -41,7 +42,7 @@ const LABEL_LINE = /^(?:USER:|ASSISTANT:|TOOL |RESULT:|\[\d+ characters left out
  * @param {string} text
  * @returns {string}
  */
-function indent(text) {
+export function indent(text) {
   return text.replace(LINE_BREAK_ALL, "\n  ");
 }
 
@@ -59,7 +60,22 @@ function firstLine(text) {
   return capped.length < line.length || more ? `${capped} [...]` : capped;
 }
 
-const HEREDOC = /(?<!<)<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/g;
+// `<<` with no `<` next to it, optional `-`, optional blanks, then a quoted or bare word.
+const HEREDOC =
+  /(?<!<)<<(?!<)(-?)[ \t]*(?:\$'((?:[^'\\\n]|\\.)*)'|'([^'\n]*)'|"([^"\n]*)"|((?:\\.|[^\s;&|<>()\\'"])+))?/g;
+
+/**
+ * The terminator word of a heredoc match, or null when no readable word follows `<<`.
+ * @param {RegExpMatchArray} m
+ * @returns {string | null}
+ */
+function heredocWord(m) {
+  if (m[2] !== undefined) return m[2].replace(/\\(.)/g, "$1");
+  if (m[3] !== undefined) return m[3];
+  if (m[4] !== undefined) return m[4];
+  if (m[5] !== undefined) return m[5].replace(/\\(.)/g, "$1");
+  return null;
+}
 
 /**
  * Keeps every line of a shell command, but replaces heredoc bodies (up to and including the
@@ -80,7 +96,12 @@ function commandText(command) {
     }
     kept.push(`${line} [heredoc body left out]`);
     for (const m of found) {
-      const word = m[2] ?? m[3] ?? m[4] ?? "";
+      const word = heredocWord(m);
+      if (word === null) {
+        // No readable terminator: drop everything after the marker.
+        i = lines.length;
+        break;
+      }
       const dash = m[1] === "-";
       i += 1;
       while (i < lines.length) {
@@ -151,9 +172,8 @@ export function cutDigest(text) {
   const head = takeStart(text, HEAD);
   const tail = takeEnd(text, TAIL);
   const omitted = text.length - head.length - tail.length;
-  // A tail that starts mid-line must not look like a builder line.
-  const safeTail =
-    LABEL_LINE.test(tail) && text[text.length - tail.length - 1] !== "\n" ? `  ${tail}` : tail;
+  // A tail that starts mid-line is always indented, whatever it starts with.
+  const safeTail = text[text.length - tail.length - 1] !== "\n" ? `  ${tail}` : tail;
   return `${head}\n[${omitted} characters left out]\n${safeTail}`;
 }
 
