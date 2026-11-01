@@ -280,13 +280,27 @@ export async function commitPaths(
 /** Upper bound for a command that talks to a remote during setup and doctor. */
 export const REMOTE_TIMEOUT_MS = 15_000;
 
-/** Clone `remote` into `dir` unconditionally (setup). */
+/** Upper bound for the setup clone: a large vault can take far longer than a ls-remote. */
+export const CLONE_TIMEOUT_MS = 120_000;
+
+/** Clone `remote` into `dir` unconditionally (setup). A timed-out clone fails with `GitError("clone", null)`. */
 export async function cloneInto(
   remote: string,
   dir: string,
   env: Record<string, string> = {},
+  timeoutMs: number = CLONE_TIMEOUT_MS,
 ): Promise<void> {
-  await runGit(process.cwd(), ["clone", "--", remote, dir], env);
+  await runGit(process.cwd(), ["clone", "--", remote, dir], env, { timeoutMs });
+}
+
+/** True when the repository has at least one commit on any ref. */
+export async function hasCommits(dir: string): Promise<boolean> {
+  return (await runGit(dir, ["rev-list", "-n", "1", "--all"])) !== "";
+}
+
+/** The checked-out branch name; fails with `GitError` on a detached HEAD. */
+export async function currentBranch(dir: string): Promise<string> {
+  return runGit(dir, ["symbolic-ref", "--short", "HEAD"]);
 }
 
 /** Branch names on `remote`, without the `refs/heads/` prefix. */
