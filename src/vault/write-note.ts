@@ -4,6 +4,7 @@ import { dirname, resolve, sep } from "node:path";
 import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
 import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../git/sync.js";
+import type { MeetingInput, MeetingOk } from "../meetings/types.js";
 import { parseNote, stringifyNote } from "./frontmatter.js";
 import type { NoteArchive, NoteInput, NotePatch } from "./note-schema.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./scrub/index.js";
 import { createSourceIndex, type SourceIndex, sourceIdKey } from "./source-index.js";
 import { validateFrontmatter } from "./validate.js";
+import { writeMeetingInSlot } from "./write-meeting.js";
 
 export class NoteExistsError extends Error {
   constructor() {
@@ -167,6 +169,8 @@ export interface VaultWriter extends NoteWriter {
    * the call and does not block the queue.
    */
   withPulled<T>(fn: (state: PulledState) => Promise<T>): Promise<T>;
+  /** A meeting write on the same queue as `write`: skips, `already_stored`, or (T10) the store. */
+  writeMeeting(input: MeetingInput): Promise<MeetingOk>;
 }
 
 export interface NoteWriterOptions {
@@ -286,7 +290,9 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
 
 /**
  * Create the single write path into the vault, for creating a note (`write`), for setting
- * properties of an existing one (`patch`) and for moving one to the archive folder (`archive`). All
+ * properties of an existing one (`patch`) for moving one to the archive folder (`archive`) and for a meeting
+ * recording (`writeMeeting`, in src/vault/write-meeting.ts: it skips short or empty recordings with
+ * one log line, and answers `already_stored` for a known source id). All
  * run on one queue (they share one working tree) and share the same steps: refuse a path that matches a scrub rule (`UnsafePathError`, before any git
  * work), pull with rebase (on a rebase conflict the sync in src/git/sync.ts keeps both versions:
  * the remote one at its path, the local one as `<name> (conflict YYYY-MM-DD).md`, scrubbed like
@@ -713,6 +719,8 @@ export function createNoteWriter({
     write: (note) => enqueue(() => writeOne(note)),
     patch: (input) => enqueue(() => patchOne(input)),
     archive: (input) => enqueue(() => archiveOne(input)),
+    writeMeeting: (input) =>
+      enqueue(() => writeMeetingInSlot(input, { root, git, sourceIndex, log, syncAndLoadConfig })),
     withPulled: (fn) =>
       enqueue(async () => {
         let stale = false;

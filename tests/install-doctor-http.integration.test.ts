@@ -74,6 +74,7 @@ const deps: McpServerDeps = {
     patch: async () => ({ path: "x.md", commit: "abc" }),
     archive: async () => ({ path: "archive/x.md", commit: "abc" }),
     withPulled: (fn) => fn({ stale: false }),
+    writeMeeting: async () => ({ ok: true, commit: null, skipped: "too_short" }),
   },
   config: { vaultDir: "/nonexistent-vault" },
 };
