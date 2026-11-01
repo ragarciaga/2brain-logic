@@ -5,7 +5,8 @@ import type { CalendarEvent } from "./types.js";
 
 // Names a meeting note: `<folder>/YYYY-MM-DD · <title>.md` (docs/specs/05-meetings/design.md).
 // Pure: the event and the area arrive as plain values. The title is external input, so it is
-// cleaned and scrubbed here; the writer's NotePath and path-secret checks still run later.
+// cleaned and scrubbed here; the NotePath and path-secret checks of `writeMeetingInSlot`
+// (src/vault/write-meeting.ts) still run on every final path.
 
 const MAX_PATH = 255;
 const MAX_NAME_BYTES = 255; // one file name component, in UTF-8 bytes
@@ -66,7 +67,16 @@ function scrubHit(text: string): boolean {
 /** A cleaned, cut text that is non-empty and not a scrub hit (raw or cleaned), else "". */
 function safeText(raw: string, maxLen: number, maxBytes: number): string {
   const cleaned = cut(cleanTitle(raw), maxLen, maxBytes);
-  if (cleaned === "" || scrubHit(raw) || scrubHit(cleaned)) return "";
+  // An invisible format character (U+200B and the like) can split a secret so no rule sees it in
+  // `raw`, yet cleaning replaces it with a space. Scrub the raw text without them too.
+  if (
+    cleaned === "" ||
+    scrubHit(raw) ||
+    scrubHit(raw.replace(/\p{Cf}/gu, "")) ||
+    scrubHit(cleaned)
+  ) {
+    return "";
+  }
   return cleaned;
 }
 

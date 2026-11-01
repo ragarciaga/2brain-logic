@@ -88,7 +88,7 @@ function cleanUrl(raw: string | undefined): string | undefined {
 /**
  * Frontmatter of a meeting note, in the design order: the canonical keys under the owner's names,
  * then the meeting keys under the configured names. Absent values are left out, never null.
- * `versions` is added by the writer (T11).
+ * `versions` is added by the writer (`writeMeetingInSlot`) when it links a second version.
  */
 export function meetingFrontmatter(
   input: MeetingInput,
