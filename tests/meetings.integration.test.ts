@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadVaultConfig } from "../src/config/vault-config.js";
@@ -125,6 +125,40 @@ describe("POST /meetings stores a note", () => {
     expect(stored(path).data.participants).toEqual(["ana ruiz", "Bo Chen", "carol@example.com"]);
   });
 
+  it("R6.3: a symlinked entry in the person folder gives no link", async () => {
+    mkdirSync(join(fixture.vaultDir, "people"));
+    writeFileSync(join(fixture.vaultDir, "people", "Ana Ruiz.md"), "x\n");
+    const outside = join(fixture.root, "outside-person");
+    writeFileSync(outside, "x\n");
+    symlinkSync(outside, join(fixture.vaultDir, "people", "Bo Chen.md"));
+    const response = await post(makeApp(), fixtureBody("fireflies-basic.json"));
+    expect(response.status).toBe(201);
+    const { path } = (await response.json()) as { path: string };
+    expect(stored(path).data.participants).toEqual([
+      "[[Ana Ruiz]]",
+      "Bo Chen",
+      "carol@example.com",
+    ]);
+  });
+
+  it("a path that matches a scrub rule is refused: no file, no commit", async () => {
+    const { value } = fixtureSecret();
+    // The area name is the only part of the path the title cleanup does not scrub.
+    pushFiles(fixture, {
+      ".2brain/config.yaml": `areas:\n  - ${value}\n`,
+    });
+    const before = git(fixture.remote, ["rev-parse", "main"]);
+    const response = await post(makeApp(), fixtureBody("fireflies-basic.json"));
+    const raw = await response.text();
+    expect(response.status).toBe(400);
+    expect(JSON.parse(raw)).toEqual({ ok: false, error: "unsafe_path" });
+    expect(raw).not.toContain(value);
+    expect(git(fixture.remote, ["rev-parse", "main"])).toBe(before);
+    expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(before);
+    expect(existsSync(join(fixture.vaultDir, value))).toBe(false);
+    expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
+  });
+
   it("R6.5: one scrub, one validation, and the stored file is valid", async () => {
     const response = await post(makeApp(), fixtureBody("gemini-basic.json"));
     expect(response.status).toBe(201);
@@ -159,5 +193,13 @@ describe("POST /meetings stores a note", () => {
     expect(git(fixture.remote, ["log", "-1", "--format=%B", "main"])).not.toContain(value);
     expect(git(fixture.remote, ["show", `main:${result.path}`])).not.toContain(value);
     expect(logs.join("\n")).not.toContain(value);
+
+    // The validated frontmatter is the scrubbed one, not the input.
+    const call = vi
+      .mocked(validate.validateFrontmatter)
+      .mock.calls.find((c) => c[1] === result.path);
+    const validated = JSON.stringify(call?.[0]);
+    expect(validated).not.toContain(value);
+    expect(validated).toContain(`[REDACTED:${rule}]`);
   });
 });
