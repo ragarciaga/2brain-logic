@@ -61,22 +61,18 @@ const NAME_CONTROL_RULE = "must be a single line with no control characters";
 const NAME_FORMAT_RULE = "must not contain direction-control or zero-width characters";
 const FORMAT_CHAR_RE = /[\u202a-\u202e\u2066-\u2069\u061c\u200b-\u200f\ufeff]/;
 const NAME_ENV_RULE =
-  "cannot be stored in the .env file: no apostrophe together with $, a double quote or a backslash, and a backslash only in a name of letters, digits and . _ @ + : / -";
-const BARE_NAME_RE = /^[A-Za-z0-9_.@+:/\\-]+$/;
+  "cannot be stored in the .env file: no backslash, and no apostrophe together with $ or a double quote";
 
 /**
  * True when a name can be written to the .env file in one of its forms: bare, single quoted or
- * double quoted. An apostrophe with `$`, `"` or a backslash fits no form, and a backslash fits
- * only the bare form. A newline never fits. Shared by the prompt and the non-interactive flags.
+ * double quoted. A backslash fits no form, an apostrophe together with `$` or `"` fits no form, and
+ * a newline never fits. Shared by the prompt and the non-interactive flags.
  */
 export function isEnvWritableName(value: string): boolean {
-  if (value.includes("\n") || value.includes("\r")) {
+  if (value.includes("\n") || value.includes("\r") || value.includes("\\")) {
     return false;
   }
-  if (value.includes("'") && /[$"\\]/.test(value)) {
-    return false;
-  }
-  if (value.includes("\\") && !BARE_NAME_RE.test(value)) {
+  if (value.includes("'") && /[$"]/.test(value)) {
     return false;
   }
   return true;

@@ -1,3 +1,4 @@
+import { parseArgs } from "node:util";
 import { hashPassphrase } from "../auth/owner.js";
 import {
   type AnswerError,
@@ -13,9 +14,11 @@ import {
 } from "./answers.js";
 
 /**
- * The installer's interactive question flow. It talks to an injected terminal, validates every
- * answer with the validators in answers.ts, and asks again until the answer is valid. It writes no
- * file. No typed value (above all the passphrase) reaches an output or an error message.
+ * The installer's two ways to collect setup answers: the interactive question flow and the
+ * non-interactive flags. The interactive flow talks to an injected terminal, validates every answer
+ * with the validators in answers.ts, and asks again until the answer is valid. The flags are parsed
+ * by `readNonInteractive`, which reads the passphrase only from stdin. Neither writes a file. No
+ * typed or passed value (above all the passphrase) reaches an output or an error message.
  */
 
 export interface PromptTerminal {
@@ -397,4 +400,181 @@ export async function askSetupAnswers(
     validateNetworkName,
   );
   return answers;
+}
+
+export type NonInteractiveAnswers = PromptAnswers & {
+  hostFingerprint?: string;
+  projectDir?: string;
+  vaultDir?: string;
+};
+
+export type NonInteractiveResult =
+  | { ok: true; answers: NonInteractiveAnswers }
+  | {
+      ok: false;
+      code: "usage" | "missing_answers" | "invalid_answer" | "remote_not_ssh";
+      exitCode: 1 | 2;
+      fields: string[];
+      rule?: string;
+    };
+
+const STDIN_LIMIT_BYTES = 1024;
+const FINGERPRINT_RE = /^SHA256:[A-Za-z0-9+/]{43}$/;
+const FINGERPRINT_RULE = "must be SHA256: followed by 43 base64 characters";
+
+const STRING_OPTIONS = [
+  "remote",
+  "author-name",
+  "author-email",
+  "public-base-url",
+  "trust-proxy-hops",
+  "n8n-network",
+  "host-fingerprint",
+  "project-dir",
+  "vault-dir",
+] as const;
+
+const USAGE: NonInteractiveResult = { ok: false, code: "usage", exitCode: 2, fields: [] };
+
+function invalid(field: string, rule: string): NonInteractiveResult {
+  return { ok: false, code: "invalid_answer", exitCode: 1, fields: [field], rule };
+}
+
+/** Exactly one line of at most 1024 bytes of valid UTF-8, without its trailing line break. */
+function decodePassphrase(bytes: Uint8Array): string | undefined {
+  if (bytes.byteLength > STDIN_LIMIT_BYTES) {
+    return undefined;
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+  if (text.endsWith("\r\n")) {
+    text = text.slice(0, -2);
+  } else if (text.endsWith("\n")) {
+    text = text.slice(0, -1);
+  }
+  return /[\r\n]/.test(text) ? undefined : text;
+}
+
+/**
+ * Maps the setup flags to answers. Validates every answer before it reads stdin, so a failed run
+ * never consumes the passphrase. The passphrase comes only from stdin and only its hash is kept.
+ * No argv token, parser message or stdin byte is placed in a result. Reads and writes no file.
+ */
+export async function readNonInteractive(
+  argv: readonly string[],
+  readStdin: () => Promise<Uint8Array>,
+): Promise<NonInteractiveResult> {
+  const options: Record<string, { type: "string" | "boolean" }> = {
+    "passphrase-stdin": { type: "boolean" },
+    "keep-passphrase": { type: "boolean" },
+    "non-interactive": { type: "boolean" },
+  };
+  for (const name of STRING_OPTIONS) {
+    options[name] = { type: "string" };
+  }
+  let values: Record<string, string | boolean | undefined>;
+  try {
+    const parsed = parseArgs({
+      args: [...argv],
+      options,
+      strict: true,
+      allowPositionals: false,
+      tokens: true,
+    });
+    const seen = new Set<string>();
+    for (const token of parsed.tokens ?? []) {
+      if (token.kind === "option") {
+        if (seen.has(token.name)) {
+          return USAGE;
+        }
+        seen.add(token.name);
+      }
+    }
+    values = parsed.values;
+  } catch {
+    return USAGE;
+  }
+  const str = (name: string): string | undefined => {
+    const v = values[name];
+    return typeof v === "string" ? v : undefined;
+  };
+  const stdinFlag = values["passphrase-stdin"] === true;
+  const keepFlag = values["keep-passphrase"] === true;
+  if (stdinFlag && keepFlag) {
+    return USAGE;
+  }
+
+  const remote = str("remote");
+  const authorName = str("author-name");
+  const authorEmail = str("author-email");
+  const baseUrlRaw = str("public-base-url") ?? "";
+  const withUrl = baseUrlRaw !== "";
+
+  const missing: string[] = [];
+  if (remote === undefined) missing.push("remote");
+  if (authorName === undefined) missing.push("author-name");
+  if (authorEmail === undefined) missing.push("author-email");
+  if (withUrl && !stdinFlag && !keepFlag) missing.push("passphrase");
+  if (
+    missing.length > 0 ||
+    remote === undefined ||
+    authorName === undefined ||
+    authorEmail === undefined
+  ) {
+    return { ok: false, code: "missing_answers", exitCode: 2, fields: missing };
+  }
+
+  if (!parseSshRemote(remote).ok) {
+    return { ok: false, code: "remote_not_ssh", exitCode: 1, fields: ["remote"] };
+  }
+  const name = validateAuthorName(authorName);
+  if (!name.ok) return invalid("author-name", name.error.rule);
+  const email = validateAuthorEmail(authorEmail);
+  if (!email.ok) return invalid("author-email", email.error.rule);
+  const url = validatePublicBaseUrl(baseUrlRaw);
+  if (!url.ok) return invalid("public-base-url", url.error.rule);
+  const hops = validateHopCount(str("trust-proxy-hops") ?? (url.value === "" ? "0" : "1"));
+  if (!hops.ok) return invalid("trust-proxy-hops", hops.error.rule);
+  const network = validateNetworkName(str("n8n-network") ?? "n8n");
+  if (!network.ok) return invalid("n8n-network", network.error.rule);
+  const fingerprint = str("host-fingerprint");
+  if (fingerprint !== undefined && !FINGERPRINT_RE.test(fingerprint)) {
+    return invalid("host-fingerprint", FINGERPRINT_RULE);
+  }
+
+  const answers: NonInteractiveAnswers = {
+    remote,
+    authorName: name.value,
+    authorEmail: email.value,
+    publicBaseUrl: url.value,
+    trustProxyHops: hops.value,
+    keepPassphrase: false,
+    n8nNetwork: network.value,
+  };
+  if (fingerprint !== undefined) answers.hostFingerprint = fingerprint;
+  const projectDir = str("project-dir");
+  if (projectDir !== undefined) answers.projectDir = projectDir;
+  const vaultDir = str("vault-dir");
+  if (vaultDir !== undefined) answers.vaultDir = vaultDir;
+
+  if (url.value !== "") {
+    if (keepFlag) {
+      answers.keepPassphrase = true;
+    } else if (stdinFlag) {
+      const passphrase = decodePassphrase(await readStdin());
+      if (passphrase === undefined) {
+        return invalid("passphrase", "must be one line of at most 1024 bytes of UTF-8");
+      }
+      try {
+        answers.passphraseHash = await hashPassphrase(passphrase);
+      } catch {
+        return invalid("passphrase", PASSPHRASE_LENGTH_RULE);
+      }
+    }
+  }
+  return { ok: true, answers };
 }
