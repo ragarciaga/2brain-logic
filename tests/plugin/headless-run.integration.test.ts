@@ -156,12 +156,40 @@ describe("runCapture", () => {
     expect(out).toStrictEqual({ ok: false, code: "not_configured" });
   });
 
-  it("returns claude_not_found when the data dir is missing (spawn ENOENT)", async () => {
+  it("returns headless_failed, not claude_not_found, when the data dir is missing", async () => {
     const fake = installFakeClaude({ result: good });
     const out = await runCapture(
       { settings, env: fake.env, paths: { ...paths, dataDir: join(root, "nope") }, input: "i" },
       { home: emptyHome },
     );
+    expect(out).toStrictEqual({ ok: false, code: "headless_failed", exit: null });
+  });
+
+  it("returns claude_not_found when the found file cannot be executed (spawn ENOENT)", async () => {
+    const fake = installFakeClaude({ result: good });
+    writeFileSync(join(fake.binDir, "claude"), "#!/nonexistent/interpreter\n");
+    const out = await runCapture(
+      { settings, env: fake.env, paths, input: "i" },
+      { home: emptyHome },
+    );
     expect(out).toStrictEqual({ ok: false, code: "claude_not_found" });
+  });
+
+  it("resolves a relative CLAUDE_CONFIG_DIR against the data dir", async () => {
+    const data = mkdtempSync(join(root, "data-"));
+    mkdirSync(join(data, "rel"));
+    writeFileSync(join(data, "rel", "settings.json"), '{"apiKeyHelper":"x"}');
+    const fake = installFakeClaude({ result: good });
+    const out = await runCapture(
+      {
+        settings,
+        env: { ...fake.env, CLAUDE_CONFIG_DIR: "rel" },
+        paths: { ...paths, dataDir: data },
+        input: "i",
+      },
+      { home: emptyHome },
+    );
+    expect(out).toStrictEqual({ ok: false, code: "api_helper_present" });
+    expect(fake.runs()).toHaveLength(0);
   });
 });

@@ -171,6 +171,15 @@ export function checkApiHelper({ home, env, cwd }, opts = {}) {
   }
 }
 
+/** @param {string} dir */
+function cwdExists(dir) {
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Default run limit of one capture, in milliseconds. */
 export const DEFAULT_TIMEOUT_MS = 600000;
 const MAX_STDOUT = 1024 * 1024;
@@ -237,6 +246,19 @@ export function resolveClaude(env, opts = {}) {
   return null;
 }
 
+/**
+ * Absolute path of a System32 program on win32. A relative or missing SystemRoot in `env` falls
+ * back to C:\Windows, so nothing resolves against the current directory.
+ * @param {Record<string, string | undefined>} env
+ * @param {string} name
+ * @returns {string}
+ */
+function system32(env, name) {
+  const root = lookup(env, "SYSTEMROOT", true);
+  const base = typeof root === "string" && path.win32.isAbsolute(root) ? root : "C:\\Windows";
+  return path.win32.join(base, "System32", name);
+}
+
 const CMD_META = /[()[\]%!^"`<>&|;, *?]/g;
 
 /**
@@ -288,6 +310,15 @@ function isPathList(value) {
   return Array.isArray(value) && value.length <= 50 && value.every(isPath);
 }
 
+/** result.schema.json, read once; null when it is missing or corrupt (every result then fails). */
+const RESULT_SCHEMA = (() => {
+  try {
+    return JSON.parse(readFileSync(fileURLToPath(SCHEMA_URL), "utf8"));
+  } catch {
+    return null;
+  }
+})();
+
 /**
  * Checks a `structured_output` against result.schema.json at runtime (the model is not trusted)
  * and returns a fresh object with only the schema keys, or null.
@@ -296,7 +327,14 @@ function isPathList(value) {
  */
 function validateResult(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const schema = JSON.parse(readFileSync(fileURLToPath(SCHEMA_URL), "utf8"));
+  const schema = RESULT_SCHEMA;
+  if (
+    schema === null ||
+    !Array.isArray(schema.required) ||
+    !Array.isArray(schema.properties?.status?.enum)
+  ) {
+    return null;
+  }
   /** @type {string[]} */
   const required = schema.required;
   const keys = Object.keys(value);
@@ -340,7 +378,8 @@ function validateResult(value) {
  * resolves `claude` on PATH, spawns it without a shell (input on stdin only), kills the whole
  * process tree after `timeoutMs`, and validates the `structured_output` of the JSON answer.
  * The outcome never carries stdout or stderr text. Residual risks: managed settings are not
- * checked, and vault paths in a valid result reach the caller (the log strips control characters).
+ * checked, a Console API-key login stored by Claude Code itself (its credential store) is not
+ * detected, and vault paths in a valid result reach the caller (the log strips control characters).
  * @param {{ settings: Settings, env: Record<string, string | undefined>, paths: Paths, input: string }} job
  * @param {{
  *   platform?: string,
@@ -363,7 +402,13 @@ export function runCapture({ settings, env, paths, input }, deps = {}) {
   /** @type {(exit: number | null) => CaptureOutcome} */
   const failed = (exit) => ({ ok: false, code: "headless_failed", exit });
 
-  const inv = buildInvocation(settings, env, paths, { platform });
+  /** @type {ReturnType<typeof buildInvocation>} */
+  let inv;
+  try {
+    inv = buildInvocation(settings, env, paths, { platform });
+  } catch {
+    return Promise.resolve(failed(null));
+  }
   if ("error" in inv) return Promise.resolve({ ok: false, code: inv.error });
   if (
     checkApiHelper({ home: deps.home ?? homedir(), env: inv.env, cwd: inv.cwd }, { platform }) !==
@@ -383,12 +428,11 @@ export function runCapture({ settings, env, paths, input }, deps = {}) {
     );
     const line = cmdLine(found.file, compact);
     if (line === null) return Promise.resolve(failed(null));
-    const root = lookup(inv.env, "SYSTEMROOT", true);
     const comspec = lookup(inv.env, "COMSPEC", true);
     command =
       typeof comspec === "string" && path.win32.isAbsolute(comspec)
         ? comspec
-        : path.win32.join(typeof root === "string" ? root : "C:\\Windows", "System32", "cmd.exe");
+        : system32(inv.env, "cmd.exe");
     args = ["/d", "/s", "/c", `"${line}"`];
     verbatim = true;
   }
@@ -435,9 +479,10 @@ export function runCapture({ settings, env, paths, input }, deps = {}) {
       try {
         if (win) {
           doExecFile(
-            "taskkill",
+            system32(inv.env, "taskkill.exe"),
             ["/pid", String(pid), "/T", "/F"],
             {
+              cwd: inv.cwd,
               shell: false,
               windowsHide: true,
             },
@@ -462,7 +507,11 @@ export function runCapture({ settings, env, paths, input }, deps = {}) {
 
     child.on("error", (err) => {
       const code = /** @type {NodeJS.ErrnoException} */ (err).code;
-      finish(code === "ENOENT" ? { ok: false, code: "claude_not_found" } : failed(null));
+      finish(
+        code === "ENOENT" && cwdExists(inv.cwd)
+          ? { ok: false, code: "claude_not_found" }
+          : failed(null),
+      );
     });
     child.stdin?.on("error", () => {});
     child.stdin?.end(input);
@@ -480,16 +529,15 @@ export function runCapture({ settings, env, paths, input }, deps = {}) {
     child.on("close", (code) => {
       if (timedOut) return finish({ ok: false, code: "timeout" });
       if (overflow || code !== 0) return finish(failed(typeof code === "number" ? code : null));
-      let parsed;
+      let result = null;
       try {
-        parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (parsed !== null && typeof parsed === "object") {
+          result = validateResult(parsed.structured_output);
+        }
       } catch {
-        return finish(failed(code));
+        result = null;
       }
-      const result =
-        parsed !== null && typeof parsed === "object"
-          ? validateResult(parsed.structured_output)
-          : null;
       finish(result === null ? failed(code) : { ok: true, result });
     });
     timer = setTimeout(() => {

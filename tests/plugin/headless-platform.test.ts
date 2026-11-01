@@ -150,9 +150,9 @@ describe("runCapture platform handling", () => {
     const p = h.run();
     await vi.waitFor(() => expect(h.execFile).toHaveBeenCalled());
     expect(h.execFile.mock.calls[0]?.slice(0, 3)).toStrictEqual([
-      "taskkill",
+      "C:\\Windows\\System32\\taskkill.exe",
       ["/pid", "4242", "/T", "/F"],
-      { shell: false, windowsHide: true },
+      { cwd: join(root, "data"), shell: false, windowsHide: true },
     ]);
     expect(h.kill).not.toHaveBeenCalled();
     h.child.emit("close", null);
@@ -161,17 +161,60 @@ describe("runCapture platform handling", () => {
     expect(h.calls[0]?.opts).toMatchObject({ detached: false, windowsVerbatimArguments: false });
   });
 
+  it.each([
+    ["relative", "rel\\win"],
+    ["missing", undefined],
+  ])(
+    "kills with an absolute taskkill under C:\\Windows for a %s SystemRoot",
+    async (_n, sysRoot) => {
+      const env: Record<string, string> = { Path: "C:\\b" };
+      if (sysRoot) env.SystemRoot = sysRoot;
+      const h = harness("win32", ["C:\\b\\claude.exe"], env, { timeoutMs: 5 });
+      const p = h.run();
+      await vi.waitFor(() => expect(h.execFile).toHaveBeenCalled());
+      expect(h.execFile.mock.calls[0]?.[0]).toBe("C:\\Windows\\System32\\taskkill.exe");
+      h.child.emit("close", null);
+      await p;
+    },
+  );
+
+  it("uses an absolute SystemRoot for taskkill and cmd.exe, and a relative ComSpec falls back", async () => {
+    const h = harness(
+      "win32",
+      ["C:\\a\\claude.cmd"],
+      {
+        Path: "C:\\a",
+        SystemRoot: "D:\\Win",
+        ComSpec: "cmd.exe",
+      },
+      { timeoutMs: 5 },
+    );
+    const p = h.run();
+    await vi.waitFor(() => expect(h.execFile).toHaveBeenCalled());
+    expect(h.execFile.mock.calls[0]?.[0]).toBe("D:\\Win\\System32\\taskkill.exe");
+    expect(h.calls[0]?.command).toBe("D:\\Win\\System32\\cmd.exe");
+    h.child.emit("close", null);
+    await p;
+  });
+
   it("returns claude_not_found without spawning when nothing is on PATH", async () => {
     const h = harness("win32", [], { Path: "C:\\b" });
     expect(await h.run()).toStrictEqual({ ok: false, code: "claude_not_found" });
     expect(h.spawn).not.toHaveBeenCalled();
   });
 
-  it("returns claude_not_found on a spawn ENOENT", async () => {
+  it("returns claude_not_found on a spawn ENOENT when the cwd exists", async () => {
     const h = harness("linux", ["/bin/claude"], { PATH: "/bin" });
-    const p = h.run();
+    const p = h.run({ pluginRoot: root, dataDir: root });
     h.child.emit("error", Object.assign(new Error("x"), { code: "ENOENT" }));
     expect(await p).toStrictEqual({ ok: false, code: "claude_not_found" });
+  });
+
+  it("returns headless_failed on a spawn ENOENT when the cwd is missing", async () => {
+    const h = harness("linux", ["/bin/claude"], { PATH: "/bin" });
+    const p = h.run({ pluginRoot: root, dataDir: join(root, "missing") });
+    h.child.emit("error", Object.assign(new Error("x"), { code: "ENOENT" }));
+    expect(await p).toStrictEqual({ ok: false, code: "headless_failed", exit: null });
   });
 
   it("returns headless_failed on another spawn error", async () => {
