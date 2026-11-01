@@ -299,7 +299,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T23, T24), ea
 ## T24: Install from scratch and run doctor on the reference install (manual check)
 - Purpose: the owner confirms the brief's success signal: a third party installs following only the docs and saves a note from claude.ai, and doctor is all green on the reference server
 - Covers: R6.7, R6.8
-- Size: S
+- Size: S (a separate manual check on a fresh host, filed as its own rb:needs-local issue)
 - Depends on: T22, T23
 - Files: docs/INSTALL.md
 - Verify: `[manual]` (reasons: R6.7 needs a fresh host, a domain, a proxy and a claude.ai account, run once before release; R6.8 needs the owner's server; raised as an `rb:needs-local` issue that needs the owner's host, with the exact steps): (1) on a fresh Linux host with n8n and a proxy, following only README.md and docs/INSTALL.md, a tester runs setup, adds the deploy key, starts the service, adds the proxy snippet, connects claude.ai and saves a note, and `git log` in a fresh clone of their vault repository shows that note's commit; every step the tester had to guess is corrected in docs/INSTALL.md; (2) on the reference install, after `git pull` and `docker compose up -d --build`, `docker compose run --rm doctor` prints `pass` for all eleven checks and exits 0
