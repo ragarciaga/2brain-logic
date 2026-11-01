@@ -384,6 +384,7 @@ export interface GitApi {
   unstageFile: typeof unstageFile;
   moveFile: typeof moveFile;
   commitPaths: typeof commitPaths;
+  addPaths: typeof addPaths;
 }
 
 export const defaultGit: GitApi = {
@@ -394,4 +395,5 @@ export const defaultGit: GitApi = {
   unstageFile,
   moveFile,
   commitPaths,
+  addPaths,
 };

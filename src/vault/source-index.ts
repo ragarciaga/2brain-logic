@@ -33,7 +33,7 @@ export function sourceIdKey(value: unknown): string | undefined {
 }
 
 /** Read only the frontmatter block of a file, or undefined when there is none inside the cap. */
-async function readFrontmatterBlock(file: string, cap: number): Promise<string | undefined> {
+export async function readFrontmatterBlock(file: string, cap: number): Promise<string | undefined> {
   const handle = await open(file, "r");
   try {
     const chunks: Buffer[] = [];
