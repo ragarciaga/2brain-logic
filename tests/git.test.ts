@@ -1,7 +1,16 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { commitFile, ensureClone, headSha, runGit, unstageFile } from "../src/git/index.js";
+import {
+  classifyRemoteError,
+  commitFile,
+  ensureClone,
+  GitError,
+  headSha,
+  runGit,
+  unstageFile,
+} from "../src/git/index.js";
 import { createGitFixture, type GitFixture, git, TEST_AUTHOR } from "./helpers/git-fixture.js";
 
 let fixture: GitFixture;
@@ -62,5 +71,72 @@ describe("literal pathspecs", () => {
   it("runGit keeps literal pathspecs even when the caller asks for globbing", async () => {
     await runGit(fixture.vaultDir, ["add", "--", "[ab].md"], { GIT_LITERAL_PATHSPECS: "0" });
     expect(git(fixture.vaultDir, ["diff", "--cached", "--name-only"])).toBe("[ab].md");
+  });
+});
+
+describe("remote error mapping", () => {
+  const remote = "ssh://git@host.invalid/x.git";
+
+  /** A fake ssh command: writes `text` to stderr and exits 255, or sleeps when `sleepMs` is set. */
+  function fakeSsh(name: string, text: string, sleepMs = 0): Record<string, string> {
+    const script = join(fixture.root, name);
+    const body = sleepMs
+      ? `setTimeout(() => {}, ${sleepMs});\n`
+      : `process.stderr.write(${JSON.stringify(text)});\nprocess.exit(255);\n`;
+    writeFileSync(script, body);
+    return { GIT_SSH_COMMAND: `node "${script}"` };
+  }
+
+  async function failure(run: Promise<unknown>): Promise<unknown> {
+    try {
+      await run;
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected a rejection");
+  }
+
+  it("maps exit 128 permission denied to remote_auth_failed", async () => {
+    const env = fakeSsh("denied.mjs", "Permission denied (publickey).");
+    const err = await failure(runGit(fixture.root, ["ls-remote", remote], env));
+    expect(err).toBeInstanceOf(GitError);
+    expect((err as GitError).exitCode).toBe(128);
+    expect((err as GitError).permissionDenied).toBe(true);
+    expect(classifyRemoteError(err)).toBe("remote_auth_failed");
+  });
+
+  it("maps a refused connection at exit 128 to remote_unreachable", async () => {
+    const env = fakeSsh("refused.mjs", "Connection refused");
+    const err = await failure(runGit(fixture.root, ["ls-remote", remote], env));
+    expect((err as GitError).exitCode).toBe(128);
+    expect((err as GitError).permissionDenied).toBe(false);
+    expect(classifyRemoteError(err)).toBe("remote_unreachable");
+  });
+
+  it("maps timeout to remote_unreachable", { timeout: 10_000 }, async () => {
+    const env = fakeSsh("sleep.mjs", "", 3000);
+    const err = await failure(runGit(fixture.root, ["ls-remote", remote], env, { timeoutMs: 200 }));
+    expect((err as GitError).exitCode).toBeNull();
+    expect(classifyRemoteError(err)).toBe("remote_unreachable");
+  });
+
+  it("GitError message holds only subcommand and exit code", async () => {
+    const mark = `MARK-${randomBytes(6).toString("hex")}`;
+    const env = fakeSsh("mark.mjs", `Permission denied (publickey). ${mark}`);
+    const err = (await failure(runGit(fixture.root, ["ls-remote", remote], env))) as GitError;
+    expect(err.permissionDenied).toBe(true);
+    for (const text of [err.message, err.stack ?? "", String(err), JSON.stringify(err)]) {
+      expect(text).not.toContain(mark);
+    }
+  });
+
+  it("legacy constructor keeps its behavior", () => {
+    const err = new GitError("push", 128);
+    expect(err.permissionDenied).toBe(false);
+    expect(err.message).toBe("git push failed (exit 128)");
+  });
+
+  it("classifyRemoteError returns null for a non-GitError", () => {
+    expect(classifyRemoteError(new Error("x"))).toBeNull();
   });
 });
