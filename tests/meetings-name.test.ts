@@ -148,6 +148,44 @@ describe("fallbacks", () => {
     expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
     expect(r.path).not.toContain("ghp_");
   });
+  it.each([...'<>:"/\\|?*[]#^', "\u0000", "\n", "\u007f"])(
+    "a secret split by the forbidden character %j gives the untitled name",
+    (ch) => {
+      const secret = scrubTitle(6);
+      const split = `${secret.slice(0, 12)}${ch}${secret.slice(12)}`;
+      // Raw, cleaned (the character becomes a space) and without invisible characters: no hit.
+      expect(scrub(split).hits.size).toBe(0);
+      expect(scrub(cleanTitle(split)).hits.size).toBe(0);
+      expect(scrub(split.replace(/\p{Cf}/gu, "")).hits.size).toBe(0);
+      const r = meetingPath({ id: "e", title: split } as never, START, "work", cfg());
+      expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
+      expect(r.path).not.toContain("ghp_");
+      expect(r.path).not.toContain(secret.slice(-8));
+    },
+  );
+  it("a labeled secret split by an invisible character in its label gives the untitled name", () => {
+    const title = ["pass", String.fromCodePoint(0x200b), "word: ", "hunter", "2xyz"].join("");
+    const formatless = title.replace(/\p{Cf}/gu, "");
+    const noForbidden = title.replace(/[<>:"/\\|?*[\]#^\p{Cc}\p{Cf}]+/gu, "");
+    expect(scrub(title).hits.size).toBe(0);
+    expect(scrub(cleanTitle(title)).hits.size).toBe(0);
+    expect(scrub(noForbidden).hits.size).toBe(0);
+    // Only the check without invisible characters sees this secret.
+    expect(scrub(formatless).hits.size).toBeGreaterThan(0);
+    const r = meetingPath({ id: "e", title } as never, START, "work", cfg());
+    expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
+    expect(r.path).not.toContain("hunter");
+  });
+  it("an OAuth access token title gives the untitled name", () => {
+    const fixture = JSON.parse(readFileSync("tests/fixtures/scrub/positive.json", "utf8")) as {
+      text: { rule: string; parts: string[] }[];
+    };
+    const title = fixture.text.find((f) => f.rule === "google_oauth_access_token")?.parts.join("");
+    expect(title).toBeDefined();
+    const r = meetingPath({ id: "e", title } as never, START, "work", cfg());
+    expect(r.base).toBe("2026-10-30 · Untitled meeting 22-30");
+    expect(r.path).not.toContain("Ab1Cd2");
+  });
   it("a title that only matches the scrubber after cleaning gives the untitled name", () => {
     const card = ["4111", "1111", "1111", "1111"].join("/");
     const bearer = `Bearer\n${"abcdEFGH"}${"1234ijkl"}MNOP5678`;

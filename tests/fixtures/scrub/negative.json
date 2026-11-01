@@ -321,6 +321,38 @@
     {
       "rule": "labeled_secret",
       "parts": ["sort_", "key: ", "alphabetical"]
+    },
+    {
+      "rule": "google_oauth_access_token",
+      "parts": ["ya", "29.", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbC"]
+    },
+    {
+      "rule": "google_oauth_access_token",
+      "parts": ["xya", "29.", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbCd"]
+    },
+    {
+      "rule": "google_oauth_access_token",
+      "parts": ["ya", "29", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbCd"]
+    },
+    {
+      "rule": "google_oauth_refresh_token",
+      "parts": ["1/", "/", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbC"]
+    },
+    {
+      "rule": "google_oauth_refresh_token",
+      "parts": ["a1/", "/", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbCd"]
+    },
+    {
+      "rule": "google_oauth_client_secret",
+      "parts": ["GOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p"]
+    },
+    {
+      "rule": "google_oauth_client_secret",
+      "parts": ["goc", "spx-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8"]
+    },
+    {
+      "rule": "google_oauth_client_secret",
+      "parts": ["XGOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8"]
     }
   ],
   "frontmatter": [

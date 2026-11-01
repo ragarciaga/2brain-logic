@@ -46,7 +46,7 @@ const negative = readJson<FixtureFile<TextNegative, FrontmatterFixture>>("negati
 const ibanExamples = readJson<Record<string, string[]>>("iban-examples.json");
 
 const RULE_IDS =
-  "private_key aws_access_key_id github_token slack_token anthropic_key openai_key google_api_key stripe_secret_key jwt bearer labeled_secret iban card_number".split(
+  "private_key aws_access_key_id github_token slack_token anthropic_key openai_key google_api_key google_oauth_access_token google_oauth_refresh_token google_oauth_client_secret stripe_secret_key jwt bearer labeled_secret iban card_number".split(
     " ",
   );
 
@@ -85,7 +85,7 @@ function ruleById(id: string): ScrubRule {
 }
 
 describe("rule list (R4.2)", () => {
-  it("has exactly the 13 rules, in order, with unique ids and global patterns", () => {
+  it("has exactly the 16 rules, in order, with unique ids and global patterns", () => {
     expect(SCRUB_RULES.map((rule) => rule.id)).toEqual(RULE_IDS);
     expect(new Set(SCRUB_RULES.map((rule) => rule.id)).size).toBe(RULE_IDS.length);
     for (const rule of SCRUB_RULES) {
@@ -1694,6 +1694,13 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["IBAN compact runs", repeat(iban.replace(/ /g, ""))],
     ["sk- run", `sk-${repeat("a")}`],
     ["gh_ run", `gh${"p_"}${repeat("a")}`],
+    ["access token prefix runs", repeat(join("ya", "29."))],
+    ["access token prefix then a", `${join("ya", "29.")}${repeat("a")}`],
+    ["access token dotted tails", `${join("ya", "29.")}${"a".repeat(40)}${repeat(".a")}`],
+    ["refresh token prefix runs", repeat(join("1/", "/"))],
+    ["refresh token prefix then a", `${join("1/", "/")}${repeat("a")}`],
+    ["client secret prefix runs", repeat(join("GOC", "SPX-"))],
+    ["client secret prefix then a", `${join("GOC", "SPX-")}${repeat("a")}`],
   ];
 
   it.each(inputs)("%s", (_name, input) => {

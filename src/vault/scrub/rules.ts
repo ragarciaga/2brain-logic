@@ -582,6 +582,18 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
     pattern: new RegExp(`${LB}AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])`, "g"),
   },
   {
+    id: "google_oauth_access_token",
+    pattern: new RegExp(`${LB}ya29\\.[A-Za-z0-9_-]{40,}(?:\\.[A-Za-z0-9_-]+)*`, "g"),
+  },
+  {
+    id: "google_oauth_refresh_token",
+    pattern: new RegExp(`${LB}1//[A-Za-z0-9_-]{40,}`, "g"),
+  },
+  {
+    id: "google_oauth_client_secret",
+    pattern: new RegExp(`${LB}GOCSPX-[A-Za-z0-9_-]{24,}`, "g"),
+  },
+  {
     id: "stripe_secret_key",
     pattern: new RegExp(`${LB}(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}`, "g"),
   },

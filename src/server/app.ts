@@ -2,7 +2,7 @@ import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { ingestTokenAuth } from "../auth/ingest-token.js";
-import { parseMeetingBody } from "../meetings/schema.js";
+import { parseMeetingBody, secretSourceIdIssue } from "../meetings/schema.js";
 import type { MeetingInput, MeetingOk } from "../meetings/types.js";
 import { mapFireflies } from "../sources/fireflies/map.js";
 import { mapGemini } from "../sources/gemini/map.js";
@@ -157,6 +157,10 @@ export function createApp({
       let input: MeetingInput;
       try {
         const parsed = parseMeetingBody(body.value);
+        const secretId = secretSourceIdIssue(parsed);
+        if (secretId !== undefined) {
+          return c.json({ ok: false, error: "invalid_body", issues: [secretId] }, 400);
+        }
         input =
           parsed.source === "fireflies"
             ? mapFireflies(parsed)

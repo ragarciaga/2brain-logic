@@ -142,8 +142,10 @@ I scheduled.
   forbids (`<>:"/\|?*[]#^` and control characters) in a title with one space, collapse spaces, trim leading
   and trailing spaces and dots, and cut the title so the full path stays within 255 characters.
   `[unit]`
-- R4.5 If the cleaned title is empty or matches a scrub rule, then the system shall use the
-  untitled name of R4.3. `[unit]`
+- R4.5 If the cleaned title is empty, or a scrub rule matches the cleaned title, the source
+  title, the source title without its invisible format characters, or the source title with every
+  character of the R4.4 forbidden class removed, then the system shall use the untitled name of
+  R4.3. `[unit]`
 - R4.6 If the chosen path already holds a note of another meeting, then the system shall add the
   local start time ` HH-MM` to the title, and if that path is also taken, respond 409
   `note_exists` and write nothing. `[integration]`
@@ -217,6 +219,9 @@ retried without duplicates or changed transcripts.
   the file and key path, and write nothing. `[integration]`
 - R8.6 If a scrub rule matches in the transcript, title or participants, then the system shall
   store the redacted text and return `redactions` with rule names and counts only. `[integration]`
+- R8.7 If the scrub rules change the source id of the payload (`transcript.id` for Fireflies,
+  `transcript.name` for Gemini), then the system shall respond 400 `invalid_body` naming that field
+  path without its value, run no git command, and write nothing. `[unit]`
 
 ## R9: Zero LLM calls
 As the owner, I want meeting ingest to cost nothing per meeting, so that the USD 20 cap is never
@@ -386,7 +391,7 @@ Answered by the owner on 2026-11-01 (cost questions):
 ## Verification summary
 | Tag | Count |
 |---|---|
-| unit | 53 |
+| unit | 54 |
 | integration | 16 |
 | e2e | 0 |
 | eval | 0 |

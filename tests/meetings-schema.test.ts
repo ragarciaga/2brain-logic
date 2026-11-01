@@ -6,6 +6,7 @@ import {
   GEMINI_FINISHED_STATE,
   httpsUrl,
   parseMeetingBody,
+  secretSourceIdIssue,
   TranscriptNotReadyError,
 } from "../src/meetings/schema.js";
 
@@ -286,6 +287,35 @@ describe("string field caps (1000 characters)", () => {
   it.each(cases)("%s: 1000 passes, 1001 is rejected", (_name, build, path) => {
     expect(() => parseMeetingBody(build(ok))).not.toThrow();
     expect(paths(rejection(build(over)))).toContain(path);
+  });
+});
+
+describe("secretSourceIdIssue (R8.7)", () => {
+  const ghToken = ["gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"].join("");
+  const card = ["4111", "1111", "1111", "1111"].join("");
+  const oauthSecret = ["GOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9S"].join("");
+
+  it("names transcript.id for a Fireflies id holding a token or a card number", () => {
+    for (const id of [ghToken, card]) {
+      const issue = secretSourceIdIssue(parseMeetingBody(fireflies({ id })));
+      expect(issue?.path).toBe("transcript.id");
+    }
+  });
+  it("names transcript.name for a Gemini name holding a client secret", () => {
+    const name = `conferenceRecords/c1/transcripts/${oauthSecret}`;
+    const body = gemini({ transcript: { name, state: GEMINI_FINISHED_STATE } });
+    expect(secretSourceIdIssue(parseMeetingBody(body))?.path).toBe("transcript.name");
+  });
+  it("gives undefined for ordinary ids", () => {
+    expect(secretSourceIdIssue(parseMeetingBody(fireflies()))).toBeUndefined();
+    expect(secretSourceIdIssue(parseMeetingBody(gemini()))).toBeUndefined();
+  });
+  it("the message holds no part of the value", () => {
+    const issue = secretSourceIdIssue(parseMeetingBody(fireflies({ id: ghToken })));
+    const text = JSON.stringify(issue);
+    expect(text).not.toContain("ghp_");
+    expect(text).not.toContain(ghToken.slice(-8));
+    expect(text).not.toContain("github");
   });
 });
 

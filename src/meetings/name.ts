@@ -64,15 +64,21 @@ function scrubHit(text: string): boolean {
   return scrub(text).hits.size > 0;
 }
 
-/** A cleaned, cut text that is non-empty and not a scrub hit (raw or cleaned), else "". */
+/**
+ * A cleaned, cut text that is non-empty and not a scrub hit, else "". The raw text, the raw text
+ * without invisible format characters, the raw text with every forbidden character removed, and
+ * the cleaned text are all checked.
+ */
 function safeText(raw: string, maxLen: number, maxBytes: number): string {
   const cleaned = cut(cleanTitle(raw), maxLen, maxBytes);
   // An invisible format character (U+200B and the like) can split a secret so no rule sees it in
-  // `raw`, yet cleaning replaces it with a space. Scrub the raw text without them too.
+  // `raw`, yet cleaning replaces it with a space. Any forbidden character can split a secret the
+  // same way, so scrub the raw text without them too.
   if (
     cleaned === "" ||
     scrubHit(raw) ||
     scrubHit(raw.replace(/\p{Cf}/gu, "")) ||
+    scrubHit(raw.replace(FORBIDDEN_RUN, "")) ||
     scrubHit(cleaned)
   ) {
     return "";
