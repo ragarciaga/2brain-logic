@@ -265,7 +265,7 @@ Fireflies and Gemini is an import and a credential mapping, on the Fireflies pla
 - R11.5 Both templates shall query the calendar for events from 30 minutes before the recording
   start to 30 minutes after its end, and pass them as delivered. `[unit]`
 - R11.6 If the calendar or source API call fails after 3 tries, other than a Fireflies rate-limit
-  error (R11.14), then the template shall stop that execution without calling the ingest route,
+  error (R11.14) or a failed Fireflies list request (R11.19), then the template shall stop that execution without calling the ingest route,
   so no meeting is ever named without its calendar. `[unit]`
 - R11.7 When the ingest route answers 502 or 503, the template shall retry the post 3 times with
   waits of at least 60 seconds, relying on R8.1 for safety. `[unit]`
@@ -309,6 +309,10 @@ Fireflies and Gemini is an import and a credential mapping, on the Fireflies pla
   template shall read one real conference record and its transcript entries with no billing
   account or paid API attached to that project. `[manual]` (reason: the Workspace edition and the
   Cloud project belong to the owner and are checked by the owner)
+- R11.19 If the Fireflies list request fails (an error output, an HTTP status outside 2xx other
+  than the rate limit of R11.14, or a 2xx body without a transcripts list), then the Fireflies
+  template shall make no further Fireflies request in that execution, without retrying (R11.10),
+  keep the pending ids unchanged, and mark that execution as failed. `[unit]`
 
 ## R12: Meetings guide
 As a third-party owner, I want one guide for connecting meetings, so that I can do it without
@@ -382,7 +386,7 @@ Answered by the owner on 2026-11-01 (cost questions):
 ## Verification summary
 | Tag | Count |
 |---|---|
-| unit | 52 |
+| unit | 53 |
 | integration | 16 |
 | e2e | 0 |
 | eval | 0 |

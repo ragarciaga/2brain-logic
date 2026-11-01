@@ -178,6 +178,7 @@ describe("meetings-fireflies template", () => {
     ]);
     expect(reachable(t, "Source or calendar failed").size).toBe(0);
     expect(reachable(t, "Ingest refused").size).toBe(0);
+    expect(nodeByName(t, "Source or calendar failed").parameters?.errorMessage).toContain("list");
   });
 
   it("the helper catches an error edge to the post", () => {

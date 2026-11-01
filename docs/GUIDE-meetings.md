@@ -179,9 +179,10 @@ meetings fail. An empty `sources` list needs no change.
   Gemini, get 3 tries, 5 seconds apart, then the execution ends at
   `Source or calendar failed` (Fireflies) or `Meet or calendar failed` (Gemini). The Fireflies poll
   keeps the id pending.
-- A failed Fireflies list request (`List transcripts`) is not retried. The execution ends without
-  an error, so a wrong API key gives green executions that ingest nothing. When nothing arrives,
-  open the output of `List transcripts` in the n8n execution.
+- A failed Fireflies list request (`List transcripts`) is not retried. The execution fails at
+  `Source or calendar failed` and makes no other Fireflies request; pending ids wait for the next
+  poll. A wrong API key shows up as failed executions: open the output of `List transcripts`. A
+  rate-limit answer is not a failure (next bullet).
 - A rate-limit error stops the Fireflies requests of that execution. The ids stay pending.
 - The Gemini workflow posts only transcripts in the state `FILE_GENERATED`.
 
