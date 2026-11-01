@@ -221,7 +221,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 
 ## T17: Record ingest answers in the poll state and retry posts on 502 and 503
 - Purpose: a safe repeat counts as posted, a refused transcript shows as a failed execution, and a busy or misconfigured service is retried without duplicates
-- Covers: R11.7, R11.12, R11.16
+- Covers: R11.7, R11.12, R11.16, R11.19
 - Size: M
 - Depends on: T15, T16
 - Files: n8n/templates/meetings-fireflies.json, n8n/templates/meetings-gemini.json, tests/n8n-poll-state.test.ts, tests/n8n-templates.test.ts
@@ -230,6 +230,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Status: done
 
 ### Decision log
+- 2026-11-01: R11.19 (a failed Fireflies list request fails the execution) was added by #233 task 1 (PR #242) and is recorded here because it is the same poll-state answer path.
 - 2026-11-01: post retries are 3 retries (4 posts) 60 s apart; a 4xx answer removes the id from `pending` and also records it in `posted`, so a refused id is not fetched again for 48 h; the Fireflies round is serial and any stop is emitted when the round ends.
 
 ## T18: Write the meetings guide and link it from the install guide
