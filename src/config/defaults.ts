@@ -33,4 +33,26 @@ export const DEFAULT_VAULT_CONFIG: VaultConfig = {
     review: { value: "review", folder: "reviews" },
     session: { value: "session", folder: "{area}/sessions" },
   },
+  meetings: {
+    timezone: "UTC",
+    min_minutes: 5,
+    untitled_label: "Untitled meeting",
+    unknown_speaker_label: "Speaker",
+    default_area: null,
+    area_rules: [],
+    sources: {
+      fireflies: { value: "fireflies", label: "Fireflies" },
+      gemini: { value: "gemini", label: "Gemini" },
+    },
+    properties: {
+      start: "start",
+      end: "end",
+      duration: "duration_minutes",
+      participants: "participants",
+      calendar_event: "calendar_event",
+      source_title: "source_title",
+      source_url: "source_url",
+      versions: "versions",
+    },
+  },
 };

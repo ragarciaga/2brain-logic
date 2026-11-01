@@ -35,3 +35,27 @@ types:
   daily: { value: daily, folder: daily }
   review: { value: review, folder: reviews }
   session: { value: session, folder: "{area}/sessions" }
+
+# Meeting settings. Recordings of min_minutes or less are skipped. Dates and times use the zone.
+# A default_area of null means the first area. Each area rule has a domain or a calendar, not both.
+# Source values are stored in the source property; labels name extra versions of a meeting.
+meetings:
+  timezone: UTC
+  min_minutes: 5
+  untitled_label: "Untitled meeting"
+  unknown_speaker_label: "Speaker"
+  default_area: null
+  area_rules: []
+  sources:
+    fireflies: { value: fireflies, label: "Fireflies" }
+    gemini: { value: gemini, label: "Gemini" }
+  # Canonical meeting property on the left, the name your notes use on the right.
+  properties:
+    start: start
+    end: end
+    duration: duration_minutes
+    participants: participants
+    calendar_event: calendar_event
+    source_title: source_title
+    source_url: source_url
+    versions: versions

@@ -57,6 +57,8 @@ describe("loadVaultConfig defaults", () => {
     first.areas.push("mutated");
     first.vault.archive_folder = "mutated";
     first.properties.type = "mutated";
+    first.meetings.area_rules.push({ area: "mutated", domain: "mutated" });
+    first.meetings.properties.start = "mutated";
     expect(await loadVaultConfig(dir)).toStrictEqual(snapshot);
     expect(DEFAULT_VAULT_CONFIG).toStrictEqual(snapshot);
   });
@@ -68,6 +70,9 @@ describe("loadVaultConfig defaults", () => {
     first.types.meeting = { value: "mutated" };
     first.sources.push("mutated");
     first.areas.push("mutated");
+    first.meetings.area_rules.push({ area: "mutated", domain: "mutated" });
+    first.meetings.properties.start = "mutated";
+    first.meetings.sources.gemini.label = "mutated";
     expect(await loadVaultConfig(dir)).toStrictEqual(snapshot);
     expect(DEFAULT_VAULT_CONFIG).toStrictEqual(snapshot);
   });
@@ -140,6 +145,7 @@ describe("loadVaultConfig mappings", () => {
         meeting: { value: "call", folder: "{area}/calls", immutable_body: true },
         note: { value: "scribble" },
       },
+      meetings: DEFAULT_VAULT_CONFIG.meetings,
     });
   });
 
