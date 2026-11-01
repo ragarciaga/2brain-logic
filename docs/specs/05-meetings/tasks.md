@@ -227,7 +227,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T19, T20), ea
 - Files: n8n/templates/meetings-fireflies.json, n8n/templates/meetings-gemini.json, tests/n8n-poll-state.test.ts, tests/n8n-templates.test.ts
 - Verify: `npm test -- tests/n8n-poll-state.test.ts tests/n8n-templates.test.ts`; `npm run typecheck`; `npm run lint`; `Poll state` runs as the last node on every path of the Fireflies template (checked over the connection graph); cases: "already stored counts as posted" (a 200 `already_stored` answer moves the id into `posted`); "201 counts as posted"; "4xx drop" (a 400 or 409 answer removes the id from `pending` and routes to a `Stop and Error` node); "502 and 503 stay pending" (after the post retries the id stays in `pending`); for both templates the post node retries only on 502 and 503, 3 times, with a wait of at least 60 seconds between tries, and a 4xx answer is not retried
 - Issue: #212
-- Status: todo
+- Status: done
 
 ### Decision log
 - 2026-11-01: post retries are 3 retries (4 posts) 60 s apart; a 4xx answer removes the id from `pending` and also records it in `posted`, so a refused id is not fetched again for 48 h; the Fireflies round is serial and any stop is emitted when the round ends.
