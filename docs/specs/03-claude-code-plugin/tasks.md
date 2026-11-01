@@ -106,6 +106,7 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 - `lastDate` uses the local calendar date (injectable `opts.timeZone`), since the note date is the owner's day, not the UTC day.
 - `opts.fromPrompt` is where T8's prompt offset is applied, so R4.6 "capture only the new part" has an owner; T15 passes T8's offset through.
 - Round 1: the reviewer's proposal to add R4.6 to Covers was not applied (it would make 5 criteria, over the limit of 4); R4.6 stays covered by T8 and is wired in T15.
+- T9 hardening (issue #97): U+001C to U+001E count as line breaks; a mid-line tail after the cut is always indented, whatever it starts with; heredoc parsing accepts `<<1`, `<<.END`, `<< -EOF`, `<<$'EOF'` and several heredocs per command, and a `<<` with no readable word drops the rest of the command.
 
 ## T7: Build the progress reader and the pre-scrub
 - Purpose: the capture gets a bounded, read-only copy of the project's progress file, and never sees secret-shaped strings from it or from the digest
@@ -148,6 +149,8 @@ Manual criteria are grouped by what the owner runs in one sitting (T21 to T26, e
 - Project segment sanitizing (replace F1 NotePath-unsafe characters with `-`) added at review: design.md says only "last segment of cwd", and an unsafe name would fail save_note on every retry until gave_up. This is consistent with F1 path rules and is not a new behavior decision.
 - The worker never resolves the session folder (R8.10, no vault access). Per design.md, the headless session joins the file name to the folder it gets from vault_info.
 - Round 1: Depends narrowed from T6, T7, T8 to T3, T7 (buildInput takes plain values; T15 does the wiring).
+- Progress keeps its header line, but its body is scrubbed and indented, so no progress or transcript text starts a column-0 line that looks like a header, separator or label; this supersedes "unchanged" in Verify, "T9 only places the string" in the T7 log and "(T9 places this string unchanged)" in the T7 Verify. Digest lines that are not T6 builder labels are indented too.
+- `buildInput` throws `Error("invalid_field:<name>")` for an invalid header field, including a null `lastDate`; T15 must catch it, log it and drop the job. `NOT_CONFIGURED` is exported and compared by constant. The design.md parenthetical about joining the file name to the folder is not placed in the input; capture.md (T14) explains it.
 
 ## T10: Build the SessionEnd hook
 - Purpose: exiting Claude Code stores the event and returns at once, silently, and never captures a capture run

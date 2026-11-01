@@ -8,6 +8,7 @@ const NAME = "[A-Za-z_][A-Za-z0-9_.-]{0,63}";
  * @property {string} id
  * @property {RegExp} pattern global regex
  * @property {(...args: any[]) => string} replace replacer; returns the match unchanged to skip it
+ * @property {(text: string) => string} [run] custom pass used instead of pattern and replace
  */
 
 /** Counts replacements made by the rule currently running. */
@@ -110,6 +111,48 @@ function keepAndRedact(match, ...args) {
 }
 
 /**
+ * The part of an assignment before its value: `--name `, `--name=` or `name"?: `. Scanning only
+ * the head keeps the scan linear and lets a non-secret label ("USER:", "Note:") be skipped without
+ * hiding an assignment that follows it.
+ */
+const ASSIGNMENT_HEAD = new RegExp(
+  `${LEFT}(?:--(?<n1>${NAME})(?:[ \\t]{1,20}|[ \\t]{0,20}[:=](?!=)[ \\t]{0,20})|(?<n2>${NAME})(?:\\\\?["'])?[ \\t]{0,20}[:=](?!=)[ \\t]{0,20})`,
+  "g",
+);
+const ASSIGNMENT_VALUE = new RegExp(
+  `(?:${ESCAPED_VALUE}|"[^"\\r\\n]*"?|'[^'\\r\\n]*'?|[^\\s"']+)`,
+  "y",
+);
+
+/**
+ * Redacts the value of every secret-named assignment. A non-secret name is skipped past its head
+ * only, so `USER: API_KEY=v` and `a: b: TOKEN=v` still reach the inner assignment.
+ * @param {string} text
+ * @returns {string}
+ */
+function redactAssignments(text) {
+  const head = new RegExp(ASSIGNMENT_HEAD.source, "g");
+  const valueRe = new RegExp(ASSIGNMENT_VALUE.source, "y");
+  let out = "";
+  let last = 0;
+  head.lastIndex = 0;
+  for (let m = head.exec(text); m !== null; m = head.exec(text)) {
+    const start = m.index + m[0].length;
+    if (!secretName(m.groups?.n1 ?? m.groups?.n2 ?? "")) continue;
+    valueRe.lastIndex = start;
+    const v = valueRe.exec(text);
+    if (v === null) continue;
+    head.lastIndex = start + v[0].length;
+    const next = redactValue(v[0]);
+    if (next === null) continue;
+    hits++;
+    out += text.slice(last, start) + next;
+    last = start + v[0].length;
+  }
+  return out + text.slice(last);
+}
+
+/**
  * Fixed, ordered list. Every quantifier before a required token is bounded, or runs over a class
  * that excludes what follows it. Most rules start with a one-character left lookbehind;
  * private_key and url_userinfo have none (their fixed opening text is the boundary). A hostile
@@ -177,22 +220,10 @@ export const RULES = Object.freeze([
   }),
   Object.freeze({
     id: "assignment",
-    pattern: new RegExp(
-      `${LEFT}(?:--(?<n1>${NAME})(?:[ \\t]{1,20}|[ \\t]{0,20}[:=](?!=)[ \\t]{0,20})|(?<n2>${NAME})(?:\\\\?["'])?[ \\t]{0,20}[:=](?!=)[ \\t]{0,20})(?<v>${ESCAPED_VALUE}|"[^"\\r\\n]*"?|'[^'\\r\\n]*'?|[^\\s"']+)`,
-      "g",
-    ),
-    /** @param {...any} args */
-    replace: (...args) => {
-      const match = /** @type {string} */ (args[0]);
-      const groups = /** @type {Record<string, string | undefined>} */ (args[args.length - 1]);
-      const name = groups.n1 ?? groups.n2 ?? "";
-      const value = groups.v ?? "";
-      if (!secretName(name)) return match;
-      const next = redactValue(value);
-      if (next === null) return match;
-      hits++;
-      return match.slice(0, match.length - value.length) + next;
-    },
+    pattern: ASSIGNMENT_HEAD,
+    /** @param {string} match */
+    replace: (match) => match,
+    run: redactAssignments,
   }),
 ]);
 
@@ -206,7 +237,7 @@ export function preScrub(text) {
   let count = 0;
   for (const rule of RULES) {
     hits = 0;
-    out = out.replace(rule.pattern, rule.replace);
+    out = rule.run ? rule.run(out) : out.replace(rule.pattern, rule.replace);
     count += hits;
   }
   return { text: out, count };
