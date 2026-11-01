@@ -68,7 +68,7 @@ export function isPassphraseHashFormat(value: string): boolean {
  * The public base URL is an origin: https, or http only for loopback (`localhost`, `127.0.0.1`).
  * A path, query, fragment or userinfo is rejected, not stripped.
  */
-function isAllowedBaseUrl(value: string): boolean {
+export function isAllowedBaseUrl(value: string): boolean {
   if (value.includes("?") || value.includes("#") || value.includes("@")) {
     return false;
   }
