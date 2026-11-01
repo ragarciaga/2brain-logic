@@ -333,7 +333,7 @@ describe("rollback resets the index", () => {
     await expectBothAtHead(GM_PATH);
   });
 
-  it("headSha failing in the rollback still resets the index", async () => {
+  it("headSha failing twice in the rollback still resets the index (worktree may stay dirty)", async () => {
     await post(makeApp(), firefliesBody());
     const before = headNow();
     let armed = false;
@@ -353,6 +353,37 @@ describe("rollback resets the index", () => {
     expect(second.status).toBe(500);
     expect(staged()).toBe("");
     expect(headNow()).toBe(before);
+  });
+
+  it("headSha failing once in the rollback still restores the worktree and the next request links", async () => {
+    await post(makeApp(), firefliesBody());
+    let armed = false;
+    let failed = false;
+    const failing = makeApp({
+      git: {
+        commitPaths: () => {
+          armed = true;
+          return Promise.reject(new Error("boom"));
+        },
+        headSha: (dir) => {
+          if (armed && !failed) {
+            failed = true;
+            return Promise.reject(new Error("head failed"));
+          }
+          return defaultGit.headSha(dir);
+        },
+      },
+    });
+    const second = await post(failing, geminiBody());
+    expect(second.status).toBe(500);
+    expect(failed).toBe(true);
+    expect(staged()).toBe("");
+    expect(status()).toBe("");
+    expect(file(FF_PATH)).toBe(gitRaw(fixture.vaultDir, ["show", `HEAD:${FF_PATH}`]));
+    expect(existsSync(join(fixture.vaultDir, GM_PATH))).toBe(false);
+    const again = await post(makeApp(), geminiBody());
+    expect(again.status).toBe(201);
+    expect(again.json.linked).toBe(FF_PATH);
   });
 
   it("a landed commit keeps both paths", async () => {

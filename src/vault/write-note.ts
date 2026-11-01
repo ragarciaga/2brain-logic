@@ -586,10 +586,17 @@ export function createNoteWriter({
       // step on its own, then the original error is rethrown.
       await resetIndexEntry(path);
       if (link !== undefined) await resetIndexEntry(link.path);
-      const moved = await git.headSha(root).then(
-        (now) => now !== head,
-        () => true,
-      );
+      // One retry on the read: a transient failure must not skip the worktree restore. Only when
+      // both reads fail is HEAD treated as moved.
+      let moved = true;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          moved = (await git.headSha(root)) !== head;
+          break;
+        } catch {
+          // retried once, then HEAD counts as moved
+        }
+      }
       if (!moved) {
         try {
           await unlink(target).catch((e: NodeJS.ErrnoException) => {
