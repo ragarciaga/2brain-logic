@@ -1,12 +1,26 @@
 # 2brain-logic
 
 A self-feeding second brain. Meetings, emails, ideas and AI work sessions land as Markdown notes
-in an Obsidian vault stored in Git. This repository is the service that writes them: today a
-walking skeleton with one thin slice (`GET /health`, `POST /notes`, `PATCH /notes` and `POST /notes/archive`) from HTTP to a pushed commit. It also serves an optional public MCP endpoint (`<PUBLIC_BASE_URL>/mcp`) behind OAuth, so AI clients can search and write the vault; see [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
+in an Obsidian vault stored in Git. This repository is the service that writes them: it has the ingest routes (`GET /health`, `POST /notes`, `PATCH /notes` and `POST /notes/archive`), the `setup` and `doctor` commands, and the Claude Code plugin. It also serves an optional public MCP endpoint (`<PUBLIC_BASE_URL>/mcp`) behind OAuth, so AI clients can search and write the vault; see [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
 
 Product context: [docs/brief.md](docs/brief.md). Decisions: [docs/adr/](docs/adr/).
 
+## Install
+
+Docker Engine, Compose 2.24.0 or newer and git are the only things the host needs.
+
+```bash
+docker network create n8n          # once, unless n8n already runs on a network of that name
+docker compose run --rm setup      # asks for the vault remote and writes .env
+docker compose up -d --build
+docker compose run --rm doctor
+```
+
+The full path, with the deploy key, the proxy and the first note, is in [docs/INSTALL.md](docs/INSTALL.md).
+
 ## Run locally
+
+This is the development path without Docker; installs follow [Install](#install).
 
 Requires Node 24 (see `.nvmrc`), git, and a Git repository that holds your vault.
 
@@ -136,11 +150,6 @@ pulls, rebases and pushes the pending commit with its own. A push that never lan
 502 with the local commit id; the commit stays in the vault and is pushed by the next write. The
 body and the log carry no remote URL.
 
-> **Do not connect real n8n flows to `/notes` yet.** The endpoint requires the ingest token
-> ([ADR 0010](docs/adr/0010-ingest-bearer-token.md)) and scrubs secrets on create and a retry of
-> the same request is idempotent, and a rebase conflict keeps both versions, and a failed push
-> is retried, but this is still an early version. Use it only with a throwaway vault.
-
 SSH remotes: pin the host key in `known_hosts` and never use `StrictHostKeyChecking=no`.
 
 ## Configuration
@@ -186,11 +195,9 @@ files. It does not run git: commit and push the result yourself.
 
 ## Docker
 
-```bash
-cp .env.example .env            # set the variables above
-docker network create n8n       # once, unless n8n already runs on a network of that name
-docker compose up --build
-```
+Create `.env` with `setup` (see [Install](#install)), then run `docker compose up -d --build`.
+`setup` and `doctor` are Compose services under the `tools` profile, so they do not start with
+`docker compose up`.
 
 The service joins the external network named by `N8N_NETWORK` (default `n8n`) and publishes no
 ports, so only containers on that network can reach it, including the public MCP app on
