@@ -274,6 +274,14 @@ describe("R4.11, R4.12: proxy_metadata", () => {
     expect((await proxy("proxy_metadata", port).run()).status).toBe("fail");
   });
 
+  it.each([500, 203])("fails on %i even when the body holds the right issuer", async (status) => {
+    const port = await stub({ ...metadata(ORIGIN), status });
+    expect(await proxy("proxy_metadata", port).run()).toEqual({
+      status: "fail",
+      fix: FIX_PROXY_METADATA,
+    });
+  });
+
   it("fails on a redirect to http and does not follow it", async () => {
     const hits = { n: 0 };
     const target = createServer((_req, res) => {
