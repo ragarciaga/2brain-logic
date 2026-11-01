@@ -211,6 +211,18 @@ three failed checks, once a 15 second start period has passed.
 
 To set the passphrase hash, put HTTPS in front of the service and add `<PUBLIC_BASE_URL>/mcp` in claude.ai, Claude Code or Codex or ChatGPT, follow [docs/GUIDE-mcp.md](docs/GUIDE-mcp.md).
 
+## Claude Code plugin
+
+To save your Claude Code sessions to the vault, install the plugin:
+
+```text
+/plugin marketplace add <path or Git URL of this repository>
+/plugin install 2brain@2brain-logic
+```
+
+Then connect the `brain` server and set your area. The full steps, settings and troubleshooting are
+in [docs/GUIDE-plugin.md](docs/GUIDE-plugin.md).
+
 ## Develop
 
 ```bash

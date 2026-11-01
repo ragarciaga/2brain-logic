@@ -44,7 +44,7 @@ describe("docs/GUIDE-mcp.md", () => {
     "TRUST_PROXY_HOPS",
     "<PUBLIC_BASE_URL>/mcp",
     "invalid_target",
-    "claude mcp add --transport http",
+    "claude mcp add --scope user --transport http brain <PUBLIC_BASE_URL>/mcp",
     "custom connector",
     "Codex",
     "ChatGPT",
@@ -73,6 +73,14 @@ describe("docs/GUIDE-mcp.md", () => {
     expect(guide).toContain("seven tools");
     expect(guide).not.toContain("six tools");
     expect(guide).toMatch(/- `vault_info`: read only;/);
+  });
+
+  it("shows the Claude Code block at user scope, then the headless reason", () => {
+    const block =
+      "```bash\nclaude mcp add --scope user --transport http brain <PUBLIC_BASE_URL>/mcp\n```";
+    const at = guide.indexOf(block);
+    expect(at).toBeGreaterThan(-1);
+    expect(guide.slice(at + block.length)).toContain("headless");
   });
 
   it("says there is no delete tool", () => {

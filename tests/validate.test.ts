@@ -121,6 +121,16 @@ describe("validateFrontmatter: source", () => {
     expect(check({ ...goodFm, source: "anything" }).ok).toBe(true);
   });
 
+  it("accepts claude-code with an empty allow-list and rejects it with a list that omits it", () => {
+    expect(check({ ...goodFm, source: "claude-code" }).ok).toBe(true);
+    const c = config((x) => {
+      x.sources = ["mail"];
+    });
+    expect(check({ ...goodFm, source: "claude-code" }, goodPath, c)).toStrictEqual(
+      invalid([], ["source"]),
+    );
+  });
+
   it("rejects an empty or non-string source whatever the allow-list", () => {
     expect(check({ ...goodFm, source: "" })).toStrictEqual(invalid([], ["source"]));
     expect(check({ ...goodFm, source: 7 })).toStrictEqual(invalid([], ["source"]));

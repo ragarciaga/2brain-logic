@@ -9,7 +9,7 @@ MCP server.
 Add this repository as a marketplace, then install the plugin:
 
 ```
-/plugin marketplace add <this repository>
+/plugin marketplace add <path or Git URL of this repository>
 /plugin install 2brain@2brain-logic
 ```
 
@@ -18,3 +18,6 @@ To try it from a local checkout without installing:
 ```
 claude --plugin-dir plugin
 ```
+
+Connection, settings, troubleshooting and how to turn capture off are in the
+[guide](../docs/GUIDE-plugin.md).
