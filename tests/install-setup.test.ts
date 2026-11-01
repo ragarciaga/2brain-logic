@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { link, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -499,6 +500,21 @@ describe("file ownership and the privilege drop (D2)", () => {
     expect(await runSetup(nonInteractiveArgs(), b.io, b.deps)).toBe(0);
     expect(b.seen.lchown.some((l) => l.includes("deploy_key.x"))).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "as root: a FIFO planted as known_hosts is refused without blocking or a chown",
+    async () => {
+      const secrets = join(project, "secrets");
+      await mkdir(secrets);
+      execFileSync("mkfifo", [join(secrets, "known_hosts")]);
+      const h = harness({ uid: 0 });
+      expect(await runSetup(nonInteractiveArgs(), h.io, h.deps)).toBe(1);
+      expect(h.err).toEqual(["setup: keygen_failed: secrets/known_hosts is not a plain file"]);
+      expect(h.seen.lchown.some((l) => l.includes("known_hosts"))).toBe(false);
+      expect(h.proc.state.calls).toEqual([]);
+      expect(existsSync(join(secrets, ".setup.lock"))).toBe(false);
+    },
+  );
 
   it("not root: no chown and no drop", async () => {
     const h = harness({ uid: 1234 });
