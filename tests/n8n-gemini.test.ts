@@ -222,10 +222,11 @@ describe("meetings-gemini template", () => {
 
   it("loop", () => {
     const loop = t.connections["Loop transcripts"].main;
-    expect(loop[0]).toEqual([]);
+    expect(loop[0]).toEqual([{ node: "Refused", type: "main", index: 0 }]);
     expect(loop[1]).toEqual([{ node: "Participants", type: "main", index: 0 }]);
     expect(nodeByName(t, "Loop transcripts").parameters).toMatchObject({ batchSize: 1 });
-    expect(t.connections[POST].main[0]).toEqual([
+    expect(t.connections[POST].main).toEqual([[{ node: "Retry post", type: "main", index: 0 }]]);
+    expect(t.connections["Retry post"].main[1]).toEqual([
       { node: "Loop transcripts", type: "main", index: 0 },
     ]);
     expect(nodeByName(t, "Transcript entries").executeOnce).toBe(true);
@@ -246,8 +247,12 @@ describe("meetings-gemini template", () => {
       expect(errorReach.has(FAILED)).toBe(true);
     }
     expect(pathsAvoiding(t, "Poll schedule", POST, CALENDAR)).toEqual([]);
-    expect(nodesByType(t, "n8n-nodes-base.stopAndError")).toHaveLength(1);
+    expect(nodesByType(t, "n8n-nodes-base.stopAndError").map((n) => n.name)).toEqual([
+      FAILED,
+      "Ingest refused",
+    ]);
     expect(reachable(t, FAILED).size).toBe(0);
+    expect(reachable(t, "Ingest refused").size).toBe(0);
     const bad: N8nTemplate = structuredClone(t);
     bad.connections.Participants.main[1] = [{ node: POST, type: "main", index: 0 }];
     expect(reachable(bad, "Participants", 1).has(POST)).toBe(true);

@@ -280,8 +280,8 @@ Fireflies and Gemini is an import and a credential mapping, on the Fireflies pla
   interval (default 60 minutes) and make exactly one Fireflies list request per poll, for
   transcripts dated in the last 24 hours. `[unit]`
 - R11.11 When a poll lists transcripts, the Fireflies template shall fetch only the listed or
-  pending ids that it has not already posted with a 200 or 201 answer in the last 48 hours, one
-  fetch request per id. `[unit]`
+  pending ids that the ingest route has not answered with 200, 201 or a 4xx code in the last 48
+  hours, one fetch request per id. `[unit]`
 - R11.12 When the ingest route answers 200 `already_stored` for a polled transcript, the Fireflies
   template shall count it as posted, so a repeat delivery changes nothing in the vault (R8.1).
   `[unit]`
@@ -297,8 +297,9 @@ Fireflies and Gemini is an import and a credential mapping, on the Fireflies pla
   template shall keep its id pending and fetch it in a later poll, even after it leaves the
   24-hour list window. `[unit]`
 - R11.16 If the ingest route answers a 4xx code for a polled transcript, then the Fireflies
-  template shall drop its id from the pending ids and mark that execution as failed, so the owner
-  sees it in the n8n executions list. `[unit]`
+  template shall drop its id from the pending ids, record it as answered so it is not fetched
+  again for 48 hours, and mark that execution as failed, so the owner sees it in the n8n
+  executions list. `[unit]`
 - R11.17 When the Fireflies template runs for one day of the owner's usual meetings on the
   owner's current Fireflies plan, the Fireflies API requests counted by the template shall stay at
   or below the daily budget and Fireflies shall return no rate-limit error. `[manual]` (reason:
