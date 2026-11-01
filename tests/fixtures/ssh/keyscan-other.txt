@@ -1,0 +1,3 @@
+# Public key of a throwaway pair generated for this test; the private half was discarded.
+# fingerprint value: SHA256:bDMUpweNPl+hOqU4AGZf/z5+8DYODm3qVd80rpVtei4 (computed with node:crypto, ssh-keygen was not available)
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPf657c3skhATaBY1yz3T67YMlz9oZ11+O+BHRuvh/7S
