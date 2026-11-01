@@ -4,6 +4,7 @@ import { type CliIo, initVault, TEMPLATE_DIR } from "../cli.js";
 import { CONFIG_FILE, ConfigInvalidError, loadVaultConfig } from "../config/vault-config.js";
 import {
   addPaths,
+  CLONE_TIMEOUT_MS,
   classifyRemoteError,
   cloneInto,
   commitPaths,
@@ -163,7 +164,7 @@ export async function bootstrapVault(
   let localCommits: boolean;
   try {
     if (!(await exists(join(opts.vaultDir, ".git")))) {
-      await deps.cloneInto(opts.remote, opts.vaultDir, env);
+      await deps.cloneInto(opts.remote, opts.vaultDir, env, CLONE_TIMEOUT_MS);
     }
   } catch (error) {
     return remoteFailure(error);

@@ -1,7 +1,9 @@
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CLONE_TIMEOUT_MS,
   classifyRemoteError,
   cloneInto,
   currentBranch,
@@ -34,8 +36,21 @@ function commitLocal(): void {
 }
 
 describe("installer git functions", () => {
-  it("cloneInto fails with GitError and a null exit code when the timeout hits", async () => {
-    const err = await cloneInto(fixture.remote, join(fixture.root, "slow"), {}, 1).catch((e) => e);
+  it("CLONE_TIMEOUT_MS is 120 seconds", () => {
+    expect(CLONE_TIMEOUT_MS).toBe(120_000);
+  });
+
+  it("cloneInto fails with GitError and a null exit code when the transport hangs", async () => {
+    // A fake ssh that sleeps: the clone cannot finish before the timeout kills it.
+    const dir = mkdtempSync(join(tmpdir(), "2brain-fakessh-"));
+    const script = join(dir, "hang.sh");
+    writeFileSync(script, "#!/bin/sh\nexec sleep 3\n");
+    const err = await cloneInto(
+      "ssh://git@example.com/vault.git",
+      join(fixture.root, "slow"),
+      { GIT_SSH_COMMAND: `sh ${script}` },
+      200,
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(GitError);
     expect(err.exitCode).toBeNull();
     expect(classifyRemoteError(err)).toBe("remote_unreachable");

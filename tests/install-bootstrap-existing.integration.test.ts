@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TEMPLATE_DIR } from "../src/cli.js";
 import { ConfigInvalidError } from "../src/config/vault-config.js";
-import { cloneInto } from "../src/git/index.js";
+import { CLONE_TIMEOUT_MS, cloneInto } from "../src/git/index.js";
 import {
   type BootstrapDeps,
   bootstrapVault,
@@ -68,6 +68,21 @@ function counting(): { deps: BootstrapDeps; calls: { ls: number; push: number; i
 }
 
 describe("bootstrapVault on an existing vault", () => {
+  it("passes the clone timeout explicitly", async () => {
+    const seen: unknown[] = [];
+    await bootstrapVault(
+      { remote: fixture.remote, vaultDir: fixture.vaultDir, author: AUTHOR },
+      {
+        ...defaultBootstrapDeps,
+        cloneInto: async (remote, dir, env, timeoutMs) => {
+          seen.push(timeoutMs);
+          await cloneInto(remote, dir, env);
+        },
+      },
+    );
+    expect(seen).toEqual([CLONE_TIMEOUT_MS]);
+  });
+
   it.each(["main", "trunk"])("fills missing template files (remote branch %s)", async (branch) => {
     pushFiles({ "notes/a.md": "note\n", "inbox/README.md": "custom\n" }, branch);
     if (branch !== "main") git(fixture.remote, ["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
