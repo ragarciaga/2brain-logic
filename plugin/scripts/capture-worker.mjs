@@ -1,4 +1,12 @@
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildDigest } from "./lib/digest.mjs";
@@ -12,6 +20,41 @@ import { decide, readState } from "./lib/state.mjs";
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+/**
+ * Reads the transcript through a descriptor: no blocking open, no followed symlink, and the open
+ * file must be a regular file.
+ * @param {string} path
+ * @returns {string}
+ */
+function readRegular(path) {
+  const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(path, flags);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * The env of the capture run: no TWOBRAIN_AREA (any letter case on win32), so the child never
+ * sees an area other than the one of the job.
+ * @param {Record<string, string | undefined>} env
+ * @returns {Record<string, string | undefined>}
+ */
+function withoutArea(env) {
+  const win = process.platform === "win32";
+  /** @type {Record<string, string | undefined>} */
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === "__proto__") continue;
+    if ((win ? key.toUpperCase() : key) === "TWOBRAIN_AREA") continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 const POLL_MS = 250;
 const SETTLE_MS = 2000;
 const MAX_WAIT_MS = 10000;
@@ -24,7 +67,7 @@ const MAX_WAIT_MS = 10000;
  * @property {Record<string, string | undefined>} env
  * @property {() => number} now epoch ms
  * @property {(ms: number) => Promise<void>} sleep
- * @property {{ stat: (path: string) => { size: number, isFile: () => boolean }, readFile: (path: string) => string }} [fs]
+ * @property {{ stat?: (path: string) => { size: number, isFile: () => boolean }, readFile?: (path: string) => string }} [fs]
  * @property {(job: {
  *   settings: import("./lib/settings.mjs").Settings,
  *   env: Record<string, string | undefined>,
@@ -40,7 +83,7 @@ const MAX_WAIT_MS = 10000;
  * Returns false when the file is gone or is not a regular file.
  *
  * @param {string} path
- * @param {NonNullable<WorkerDeps["fs"]>} fs
+ * @param {{ stat: (path: string) => { size: number, isFile: () => boolean } }} fs
  * @param {() => number} now
  * @param {(ms: number) => Promise<void>} sleep
  * @returns {Promise<boolean>}
@@ -72,9 +115,9 @@ async function settle(path, fs, now, sleep) {
  */
 export async function runWorker(deps) {
   const { dataDir, pluginRoot, settings, env, now, sleep } = deps;
-  const fs = deps.fs ?? {
-    stat: (/** @type {string} */ p) => statSync(p),
-    readFile: (/** @type {string} */ p) => readFileSync(p, "utf8"),
+  const fs = {
+    stat: deps.fs?.stat ?? ((/** @type {string} */ p) => lstatSync(p)),
+    readFile: deps.fs?.readFile ?? readRegular,
   };
   const runner = deps.runner ?? runCapture;
   const log = deps.log ?? createLog({ dataDir, now }).log;
@@ -163,7 +206,12 @@ export async function runWorker(deps) {
         }
         throw err;
       }
-      const outcome = await runner({ settings, env, paths: { pluginRoot, dataDir }, input });
+      const outcome = await runner({
+        settings,
+        env: withoutArea(env),
+        paths: { pluginRoot, dataDir },
+        input,
+      });
       if (outcome.ok) {
         // T16 handles the result; until then a result counts as an attempt.
         safeLog(sessionId, "capture_ok");
