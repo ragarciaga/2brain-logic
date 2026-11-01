@@ -14,7 +14,7 @@ import { runCapture } from "./lib/headless.mjs";
 import { buildInput, NOT_CONFIGURED, resolveArea } from "./lib/input.mjs";
 import { createLog } from "./lib/log.mjs";
 import { readProgress } from "./lib/progress.mjs";
-import { createQueue } from "./lib/queue.mjs";
+import { createLock, createQueue } from "./lib/queue.mjs";
 import { readSettings } from "./lib/settings.mjs";
 import { decide, readState, recordCapture } from "./lib/state.mjs";
 
@@ -91,6 +91,7 @@ const MAX_WAIT_MS = 10000;
  *   input: string,
  * }) => Promise<import("./lib/headless.mjs").CaptureOutcome>} [runner]
  * @property {ReturnType<typeof createQueue>} [queue]
+ * @property {ReturnType<typeof createLock>} [lock] per-machine capture lock
  * @property {(sessionId: unknown, code: string, fields?: Record<string, unknown>) => void} [log]
  */
 
@@ -138,6 +139,7 @@ export async function runWorker(deps) {
   const runner = deps.runner ?? runCapture;
   const log = deps.log ?? createLog({ dataDir, now }).log;
   const queue = deps.queue ?? createQueue({ dataDir, now, log });
+  const lock = deps.lock ?? createLock({ dataDir, now });
 
   /** @type {(sessionId: unknown, code: string, fields?: Record<string, unknown>) => void} */
   const safeLog = (sessionId, code, fields) => {
@@ -190,112 +192,137 @@ export async function runWorker(deps) {
     }
   };
 
-  queue.sweep();
-  const jobs = queue.list();
-  let lastTrigger = -1;
-  jobs.forEach((j, i) => {
-    if (j.data.event.reason !== "logout") lastTrigger = i;
-  });
-  for (const [i, job] of jobs.entries()) {
-    const event = job.data.event;
-    const sessionId = event.session_id;
-    try {
-      if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId)) {
-        safeLog(undefined, "invalid_field");
-        queue.remove(job);
-        continue;
-      }
-      // a logout job waits until a newer job of another kind is queued
-      if (event.reason === "logout" && i > lastTrigger) continue;
-      const area = resolveArea(
-        {},
-        { area: typeof job.data.area === "string" ? job.data.area : "" },
-      );
-      if (area === NOT_CONFIGURED) {
-        safeLog(sessionId, "not_configured");
-        continue;
-      }
-      const path = event.transcript_path;
-      let lines = null;
-      if (typeof path === "string" && isAbsolute(path)) {
+  const drain = async () => {
+    queue.sweep();
+    // jobs queued while the lock is held are handled in the same run
+    /** @type {Set<string>} */
+    const handled = new Set();
+    for (;;) {
+      const jobs = queue.list().filter((j) => !handled.has(j.name));
+      let lastTrigger = -1;
+      jobs.forEach((j, i) => {
+        if (j.data.event.reason !== "logout") lastTrigger = i;
+      });
+      let count = 0;
+      for (const [i, job] of jobs.entries()) {
+        // a long drain must never look stale to another worker
+        if (!lock.refresh()) return;
+        const event = job.data.event;
+        const sessionId = event.session_id;
         try {
-          if (await settle(path, fs, now, sleep)) lines = fs.readFile(path).split("\n");
+          handled.add(job.name);
+          count++;
+          if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId)) {
+            safeLog(undefined, "invalid_field");
+            queue.remove(job);
+            continue;
+          }
+          // a logout job waits until a newer job of another kind is queued
+          if (event.reason === "logout" && i > lastTrigger) {
+            handled.delete(job.name);
+            count--;
+            continue;
+          }
+          const area = resolveArea(
+            {},
+            { area: typeof job.data.area === "string" ? job.data.area : "" },
+          );
+          if (area === NOT_CONFIGURED) {
+            safeLog(sessionId, "not_configured");
+            continue;
+          }
+          const path = event.transcript_path;
+          let lines = null;
+          if (typeof path === "string" && isAbsolute(path)) {
+            try {
+              if (await settle(path, fs, now, sleep)) lines = fs.readFile(path).split("\n");
+            } catch {
+              lines = null;
+            }
+          }
+          if (lines === null) {
+            safeLog(sessionId, "transcript_missing");
+            queue.remove(job);
+            continue;
+          }
+          let digest = buildDigest(lines);
+          if (digest.userPrompts < settings.min_user_prompts) {
+            safeLog(sessionId, "skipped_trivial");
+            queue.remove(job);
+            continue;
+          }
+          const decision = decide(readState(dataDir), {
+            sessionId,
+            lineage: digest.lineage,
+            userPrompts: digest.userPrompts,
+            minUserPrompts: settings.min_user_prompts,
+          });
+          if (decision.action === "skipped_duplicate") {
+            safeLog(sessionId, "skipped_duplicate");
+            queue.remove(job);
+            continue;
+          }
+          const prompts = digest.userPrompts;
+          const lineage = digest.lineage;
+          if (decision.fromPrompt > 0)
+            digest = buildDigest(lines, { fromPrompt: decision.fromPrompt });
+          const cwd = event.cwd;
+          const progress = readProgress(cwd);
+          /** @type {string} */
+          let input;
+          try {
+            input = buildInput({
+              area,
+              language: settings.note_language,
+              lastDate: digest.lastDate,
+              cwd: cwd ?? "",
+              sessionId: decision.idForName,
+              sourceId: decision.sourceId,
+              part: decision.part,
+              progress,
+              digest: digest.text,
+            });
+          } catch (err) {
+            if (err instanceof Error && err.message.startsWith("invalid_field:")) {
+              safeLog(sessionId, "invalid_field");
+              queue.remove(job);
+              continue;
+            }
+            throw err;
+          }
+          const outcome = await runner({
+            settings,
+            env: withoutArea(env),
+            paths: { pluginRoot, dataDir },
+            input,
+          });
+          if (outcome.ok) {
+            handleResult(job, sessionId, outcome.result, decision, prompts, lineage);
+          } else if (outcome.code === "api_helper_present") {
+            safeLog(sessionId, outcome.code);
+            queue.remove(job);
+          } else if (outcome.code === "not_configured") {
+            safeLog(sessionId, outcome.code);
+          } else if (outcome.code === "headless_failed") {
+            safeLog(sessionId, outcome.code, { exit: outcome.exit });
+            queue.recordAttempt(job);
+          } else {
+            safeLog(sessionId, outcome.code);
+            queue.recordAttempt(job);
+          }
         } catch {
-          lines = null;
+          safeLog(sessionId, "worker_error");
         }
       }
-      if (lines === null) {
-        safeLog(sessionId, "transcript_missing");
-        queue.remove(job);
-        continue;
-      }
-      let digest = buildDigest(lines);
-      if (digest.userPrompts < settings.min_user_prompts) {
-        safeLog(sessionId, "skipped_trivial");
-        queue.remove(job);
-        continue;
-      }
-      const decision = decide(readState(dataDir), {
-        sessionId,
-        lineage: digest.lineage,
-        userPrompts: digest.userPrompts,
-        minUserPrompts: settings.min_user_prompts,
-      });
-      if (decision.action === "skipped_duplicate") {
-        safeLog(sessionId, "skipped_duplicate");
-        queue.remove(job);
-        continue;
-      }
-      const prompts = digest.userPrompts;
-      const lineage = digest.lineage;
-      if (decision.fromPrompt > 0) digest = buildDigest(lines, { fromPrompt: decision.fromPrompt });
-      const cwd = event.cwd;
-      const progress = readProgress(cwd);
-      /** @type {string} */
-      let input;
-      try {
-        input = buildInput({
-          area,
-          language: settings.note_language,
-          lastDate: digest.lastDate,
-          cwd: cwd ?? "",
-          sessionId: decision.idForName,
-          sourceId: decision.sourceId,
-          part: decision.part,
-          progress,
-          digest: digest.text,
-        });
-      } catch (err) {
-        if (err instanceof Error && err.message.startsWith("invalid_field:")) {
-          safeLog(sessionId, "invalid_field");
-          queue.remove(job);
-          continue;
-        }
-        throw err;
-      }
-      const outcome = await runner({
-        settings,
-        env: withoutArea(env),
-        paths: { pluginRoot, dataDir },
-        input,
-      });
-      if (outcome.ok) {
-        handleResult(job, sessionId, outcome.result, decision, prompts, lineage);
-      } else if (outcome.code === "api_helper_present") {
-        safeLog(sessionId, outcome.code);
-        queue.remove(job);
-      } else if (outcome.code === "not_configured") {
-        safeLog(sessionId, outcome.code);
-      } else if (outcome.code === "headless_failed") {
-        safeLog(sessionId, outcome.code, { exit: outcome.exit });
-        queue.recordAttempt(job);
-      } else {
-        safeLog(sessionId, outcome.code);
-        queue.recordAttempt(job);
-      }
-    } catch {
-      safeLog(sessionId, "worker_error");
+      if (count === 0) return;
     }
+  };
+
+  if (!lock.acquire()) return;
+  try {
+    await drain();
+  } finally {
+    lock.release();
   }
 }
 
@@ -313,8 +340,12 @@ if (isMain()) {
   try {
     const queueDir = process.argv[2];
     if (queueDir && isAbsolute(queueDir) && basename(queueDir) === "queue") {
+      const dataDir = dirname(queueDir);
+      const lock = createLock({ dataDir, now: Date.now });
+      process.once("exit", () => lock.release());
       await runWorker({
-        dataDir: dirname(queueDir),
+        lock,
+        dataDir,
         pluginRoot: resolve(SCRIPTS_DIR, ".."),
         settings: readSettings(process.env),
         env: process.env,

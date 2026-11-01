@@ -60,7 +60,8 @@ function isJobFile(v) {
 }
 
 /**
- * Job store under the plugin data directory (queue/ and failed/).
+ * Job store under the plugin data directory (queue/ and failed/). The per-machine
+ * `capture.lock` next to them is managed by `createLock`.
  *
  * @param {{
  *   dataDir: string,
@@ -224,4 +225,187 @@ export function createQueue({ dataDir, now, log }) {
   }
 
   return { enqueue, list, recordAttempt, remove, sweep };
+}
+
+const LOCK_STALE_MS = 15 * 60000;
+
+/**
+ * @param {unknown} err
+ * @param {string} code
+ */
+function hasCode(err, code) {
+  return (
+    typeof err === "object" && err !== null && /** @type {{ code?: unknown }} */ (err).code === code
+  );
+}
+
+/**
+ * Default liveness check: signal 0 answers, or EPERM (alive, owned by someone else).
+ * @param {number} pid
+ * @returns {boolean}
+ */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return hasCode(err, "EPERM");
+  }
+}
+
+/**
+ * The per-machine capture lock `capture.lock` (`{ pid, startedAt }`) in the data directory. Only
+ * the worker takes it; the hook never waits on it. It is created exclusively (`wx`). A lock is
+ * stale when its pid is dead or is our own, when `startedAt` is over 15 minutes old, or, for
+ * content that does not parse, when the file is over 15 minutes old. A stale lock is replaced
+ * while holding a `capture.lock.takeover` mutex, so two workers that find the same stale lock
+ * cannot both win.
+ *
+ * @param {{
+ *   dataDir: string,
+ *   now: () => number,
+ *   pid?: number,
+ *   isAlive?: (pid: number) => boolean,
+ *   fs?: Partial<{
+ *     writeFileSync: typeof writeFileSync,
+ *     readFileSync: typeof readFileSync,
+ *     renameSync: typeof renameSync,
+ *     rmSync: typeof rmSync,
+ *     lstatSync: typeof lstatSync,
+ *     chmodSync: typeof chmodSync,
+ *   }>,
+ * }} opts `now` returns epoch ms
+ */
+export function createLock({ dataDir, now, pid = process.pid, isAlive = pidAlive, fs = {} }) {
+  const f = {
+    writeFileSync,
+    readFileSync,
+    renameSync,
+    rmSync,
+    lstatSync,
+    chmodSync,
+    ...fs,
+  };
+  const path = join(dataDir, "capture.lock");
+  const mutex = `${path}.takeover`;
+  const tmp = `${path}.${pid}.tmp`;
+
+  const body = () => `${JSON.stringify({ pid, startedAt: new Date(now()).toISOString() })}\n`;
+
+  /**
+   * @returns {{ pid: number, startedAt: number } | { garbage: true, mtimeMs: number } | null}
+   *   null when the lock does not exist
+   */
+  function read() {
+    let text;
+    try {
+      text = String(f.readFileSync(path, "utf8"));
+    } catch (err) {
+      if (hasCode(err, "ENOENT")) return null;
+      throw err;
+    }
+    try {
+      const data = JSON.parse(text);
+      const startedAt = Date.parse(data?.startedAt);
+      if (Number.isInteger(data?.pid) && data.pid > 0 && !Number.isNaN(startedAt)) {
+        return { pid: data.pid, startedAt };
+      }
+    } catch {
+      // falls through to garbage
+    }
+    try {
+      return { garbage: true, mtimeMs: f.lstatSync(path).mtimeMs };
+    } catch (err) {
+      if (hasCode(err, "ENOENT")) return null;
+      throw err;
+    }
+  }
+
+  /** @param {NonNullable<ReturnType<typeof read>>} lock */
+  function isStale(lock) {
+    if ("garbage" in lock) return now() - lock.mtimeMs > LOCK_STALE_MS;
+    return lock.pid === pid || !isAlive(lock.pid) || now() - lock.startedAt > LOCK_STALE_MS;
+  }
+
+  function create() {
+    try {
+      f.writeFileSync(path, body(), { flag: "wx", mode: 0o600 });
+    } catch (err) {
+      if (hasCode(err, "EEXIST")) return false;
+      throw err;
+    }
+    try {
+      f.chmodSync(path, 0o600);
+    } catch {
+      // the mode was set at creation
+    }
+    return true;
+  }
+
+  function takeOver() {
+    try {
+      if (now() - f.lstatSync(mutex).mtimeMs > LOCK_STALE_MS) f.rmSync(mutex, { force: true });
+    } catch {
+      // no mutex file: the normal case
+    }
+    try {
+      f.writeFileSync(mutex, `${pid}\n`, { flag: "wx", mode: 0o600 });
+    } catch (err) {
+      if (hasCode(err, "EEXIST")) return false;
+      throw err;
+    }
+    try {
+      const current = read();
+      if (current !== null) {
+        if (!isStale(current)) return false;
+        f.rmSync(path, { force: true });
+      }
+      return create();
+    } finally {
+      f.rmSync(mutex, { force: true });
+    }
+  }
+
+  /** @returns {boolean} true when this process now holds the lock */
+  function acquire() {
+    try {
+      if (create()) return true;
+      const lock = read();
+      if (lock === null) return create();
+      if (!isStale(lock)) return false;
+      return takeOver();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Rewrites `startedAt`, so a long drain never looks stale.
+   * @returns {boolean} false when the lock is gone or belongs to someone else
+   */
+  function refresh() {
+    try {
+      const lock = read();
+      if (lock === null || "garbage" in lock || lock.pid !== pid) return false;
+      f.rmSync(tmp, { force: true });
+      f.writeFileSync(tmp, body(), { flag: "wx", mode: 0o600 });
+      f.renameSync(tmp, path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Removes the lock only when it is ours. Never throws. */
+  function release() {
+    try {
+      const lock = read();
+      if (lock !== null && !("garbage" in lock) && lock.pid === pid)
+        f.rmSync(path, { force: true });
+    } catch {
+      // best effort
+    }
+  }
+
+  return { acquire, refresh, release };
 }

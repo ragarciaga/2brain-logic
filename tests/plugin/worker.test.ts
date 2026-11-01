@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -379,6 +380,24 @@ describe("runner outcomes", () => {
     ["claude_not_found", { ok: false, code: "claude_not_found" } as Outcome, "claude_not_found"],
     ["timeout", { ok: false, code: "timeout" } as Outcome, "timeout"],
     [
+      "an mcp_unavailable result",
+      { ok: true, result: result({ status: "mcp_unavailable", session_note: null }) } as Outcome,
+      "mcp_unavailable",
+    ],
+    [
+      "a session_type_missing result",
+      {
+        ok: true,
+        result: result({ status: "session_type_missing", session_note: null }),
+      } as Outcome,
+      "session_type_missing",
+    ],
+    [
+      "an unknown result status",
+      { ok: true, result: result({ status: "weird", session_note: null }) } as Outcome,
+      "headless_failed",
+    ],
+    [
       "a failed result",
       { ok: true, result: result({ status: "failed", session_note: null }) } as Outcome,
       "failed",
@@ -423,6 +442,18 @@ describe("runner outcomes", () => {
       expect(queued()).toStrictEqual([]);
     },
   );
+
+  it("counts only valid recipe paths", async () => {
+    enqueue();
+    await run(
+      setup(transcript(3)),
+      outcome({
+        ok: true,
+        result: result({ recipes: ["../x.md", "work/recipes/ok.md"] }),
+      }),
+    );
+    expect(logText()).toContain("sess-1 saved notes=work/sessions/n.md recipes=1");
+  });
 
   it("logs a valid people path after the session note", async () => {
     enqueue();
@@ -610,5 +641,104 @@ describe.skipIf(!posix)("worker as a child process", () => {
     expect(r.stderr).toBe("");
     expect(logText()).toContain("headless_failed exit=1");
     expect(logText()).toContain("sess-2 transcript_missing");
+  });
+});
+
+describe("capture lock", () => {
+  const lockFile = () => join(dir, "capture.lock");
+  const live = () =>
+    writeFileSync(
+      lockFile(),
+      JSON.stringify({ pid: process.ppid, startedAt: new Date(clock - 60000).toISOString() }),
+    );
+
+  it("a throwing runner leaves no lock and the job queued", async () => {
+    enqueue();
+    const runner = vi.fn().mockRejectedValue(new Error("boom"));
+    await run(setup(transcript(3)), runner as never);
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(existsSync(lockFile())).toBe(false);
+    expect(queued()).toHaveLength(1);
+  });
+
+  it("the lock is released after a normal run and held during the runner", async () => {
+    enqueue();
+    let during = false;
+    const runner = vi.fn(async (_a: { input: string }): Promise<Outcome> => {
+      during = existsSync(lockFile());
+      return { ok: true, result: result({ status: "nothing_to_save", session_note: null }) };
+    });
+    await run(setup(transcript(3)), runner);
+    expect(during).toBe(true);
+    expect(existsSync(lockFile())).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "a held lock means no runner call and no sweep",
+    async () => {
+      const exhausted = enqueue("tired-1");
+      q.recordAttempt(q.recordAttempt(q.recordAttempt(exhausted)));
+      live();
+      const runner = ok();
+      await run(setup(transcript(3)), runner);
+      expect(runner).not.toHaveBeenCalled();
+      expect(queued()).toHaveLength(1);
+      expect(readdirSync(join(dir, "failed"))).toStrictEqual([]);
+      expect(existsSync(lockFile())).toBe(true);
+    },
+  );
+
+  it("refreshes the lock before each runner call", async () => {
+    clock = NOW - 2000;
+    enqueue("job-one");
+    clock = NOW - 1000;
+    enqueue("job-two");
+    clock = NOW;
+    const events: string[] = [];
+    const lock = {
+      acquire: () => true,
+      refresh: () => {
+        events.push("refresh");
+        return true;
+      },
+      release: () => {},
+    };
+    const runner = vi.fn(async (_a: { input: string }): Promise<Outcome> => {
+      events.push("run");
+      return { ok: true, result: result({ status: "failed", session_note: null }) };
+    });
+    const s = setup(transcript(3));
+    await runWorker({
+      dataDir: dir,
+      pluginRoot: "/plugin",
+      settings: readSettings({}),
+      env: {},
+      now: () => clock,
+      sleep: s.sleep,
+      fs: { stat: s.stat, readFile: s.readFile },
+      runner: runner as never,
+      lock,
+    });
+    expect(events.slice(0, 4)).toStrictEqual(["refresh", "run", "refresh", "run"]);
+  });
+
+  it("stops when the refresh says the lock was lost", async () => {
+    enqueue();
+    const lock = { acquire: () => true, refresh: () => false, release: vi.fn() };
+    const runner = ok();
+    const s = setup(transcript(3));
+    await runWorker({
+      dataDir: dir,
+      pluginRoot: "/plugin",
+      settings: readSettings({}),
+      env: {},
+      now: () => clock,
+      sleep: s.sleep,
+      fs: { stat: s.stat, readFile: s.readFile },
+      runner: runner as never,
+      lock,
+    });
+    expect(runner).not.toHaveBeenCalled();
+    expect(lock.release).toHaveBeenCalledTimes(1);
   });
 });
