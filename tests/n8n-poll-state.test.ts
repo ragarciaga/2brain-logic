@@ -291,6 +291,38 @@ describe("Poll state: budget", () => {
     expect(blocked.posts).toEqual([]);
   });
 
+  it("a permanently failing id does not starve the ones behind it", async () => {
+    const nullTranscript: Resp = { statusCode: 200, body: { data: { transcript: null } } };
+    const fetch = (id: string): Resp => (id === "BAD" ? nullTranscript : okFetch(id));
+    const first = await simulate({ list: okList(["BAD", "GOOD"]), fetch });
+    expect(first.fetchCalls).toEqual(["BAD", "BAD", "BAD", "GOOD"]);
+    expect(first.failed).toEqual(["BAD"]);
+    expect(first.posts).toEqual(["GOOD"]);
+    // The failed id moves behind the others and keeps its first-seen time.
+    expect(Object.keys(first.state.pending as object)).toEqual(["GOOD", "BAD"]);
+    const seen = (first.state.pending as Record<string, string>).BAD;
+    expect(seen).toBe(NOW);
+
+    vi.setSystemTime(new Date(Date.parse(NOW) + HOUR));
+    const second = await simulate({ state: first.state, list: okList(["BAD", "GOOD"]), fetch });
+    expect(second.fetchCalls.slice(0, 1)).toEqual(["GOOD"]);
+    expect(second.posts).toEqual(["GOOD"]);
+    expect(Object.keys(second.state.pending as object)).toEqual(["GOOD", "BAD"]);
+    expect((second.state.pending as Record<string, string>).BAD).toBe(seen);
+  });
+
+  it("a failed id with no budget left for the next one keeps the rest pending", async () => {
+    const bad: Resp = { statusCode: 200, body: { data: { transcript: null } } };
+    const r = await simulate({
+      budget: 4,
+      list: okList(["BAD", "GOOD"]),
+      fetch: (id) => (id === "BAD" ? bad : okFetch(id)),
+    });
+    expect(r.fetchCalls).toEqual(["BAD", "BAD", "BAD"]);
+    expect(r.state.used).toBe(4);
+    expect(sortedKeys(r.state.pending)).toEqual(["BAD", "GOOD"]);
+  });
+
   it("an error output item counts as a failed try", async () => {
     const r = await simulate({ list: okList(["X"]), fetch: () => ({ error: "socket hang up" }) });
     expect(r.fetchCalls).toHaveLength(3);
