@@ -139,6 +139,27 @@ describe("checkApiHelper", () => {
     expect(call(home, {})).toBe("api_helper_present");
   });
 
+  it.each(["true", "1", "{}", "false", "0", "[]"])(
+    "flags a non-string settings env value %s",
+    (value) => {
+      const home = homeWith(`{"env":{"ANTHROPIC_AUTH_TOKEN":${value}}}`);
+      expect(call(home, {})).toBe("api_helper_present");
+    },
+  );
+
+  it("resolves a relative CLAUDE_CONFIG_DIR against the child cwd, not home", () => {
+    const cwd = mkdtempSync(join(root, "cwd-"));
+    mkdirSync(join(cwd, "rel"));
+    writeFileSync(join(cwd, "rel", "settings.json"), helper);
+    const home = mkdtempSync(join(root, "home-"));
+    mkdirSync(join(home, "rel"));
+    writeFileSync(join(home, "rel", "settings.json"), "{}");
+    expect(checkApiHelper({ home, env: { CLAUDE_CONFIG_DIR: "rel" }, cwd })).toBe(
+      "api_helper_present",
+    );
+    expect(checkApiHelper({ home, env: { CLAUDE_CONFIG_DIR: "rel" } })).toBe("ok");
+  });
+
   it("flags env block case variants only on win32", () => {
     for (const name of STRIPPED) {
       const home = homeWith(JSON.stringify({ env: { [name.toLowerCase()]: "marker-1" } }));
@@ -149,7 +170,7 @@ describe("checkApiHelper", () => {
 
   it.each([
     ['{"env":{"ANTHROPIC_API_KEY":""}}', "empty value"],
-    ['{"env":{"ANTHROPIC_API_KEY":1}}', "number value"],
+    ['{"env":{"ANTHROPIC_API_KEY":null}}', "null value"],
     ['{"env":{"PATH":"marker-1"}}', "unrelated key"],
     ['{"env":"ANTHROPIC_API_KEY"}', "string env"],
     ['{"env":["ANTHROPIC_API_KEY"]}', "array env"],
