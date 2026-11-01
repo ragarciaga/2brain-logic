@@ -15,10 +15,7 @@
       "name": "Poll schedule",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        0,
-        0
-      ]
+      "position": [0, 0]
     },
     {
       "parameters": {
@@ -44,15 +41,161 @@
             }
           ]
         },
+        "includeOtherFields": true,
         "options": {}
       },
       "name": "Settings",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [
-        220,
-        0
-      ]
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Poll state: picks the ids to ask Fireflies for, one request per round.\n// Static data holds only day, used, posted and pending (id -> ISO time).\nconst ID = /^[A-Za-z0-9_-]{1,64}$/;\nconst RESERVED = ['__proto__', 'constructor', 'prototype'];\nconst MAX_TRIES = 3;\nconst WINDOW_MS = 48 * 60 * 60 * 1000;\nconst validId = (v) => typeof v === 'string' && ID.test(v) && !RESERVED.includes(v);\nconst isoOk = (v) => typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T/.test(v) && !Number.isNaN(Date.parse(v));\nconst has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);\n\nconst s = $getWorkflowStaticData('global');\nfor (const k of Object.keys(s)) {\n  if (!['day', 'used', 'posted', 'pending'].includes(k)) delete s[k];\n}\nif (typeof s.day !== 'string') s.day = '';\nif (!Number.isInteger(s.used) || s.used < 0) s.used = 0;\nfor (const f of ['posted', 'pending']) {\n  const cur = s[f];\n  if (cur === null || typeof cur !== 'object' || Array.isArray(cur)) {\n    s[f] = {};\n  } else {\n    for (const k of Object.keys(cur)) {\n      if (!validId(k) || !isoOk(cur[k])) delete cur[k];\n    }\n  }\n}\n\nconst b = Number($('Settings').first().json.daily_budget);\nconst budget = Number.isFinite(b) && b >= 0 ? Math.floor(b) : 0;\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst today = nowIso.slice(0, 10);\nif (s.day !== today) {\n  s.day = today;\n  s.used = 0;\n}\nfor (const k of Object.keys(s.posted)) {\n  if (now.getTime() - Date.parse(s.posted[k]) > WINDOW_MS) delete s.posted[k];\n}\nconst reserve = () => {\n  if (s.used + 1 > budget) return false;\n  s.used += 1;\n  return true;\n};\n\nconst ok2xx = (r) => typeof r.statusCode === 'number' && r.statusCode >= 200 && r.statusCode < 300;\nconst rateLimited = (r) => {\n  if (r.statusCode === 429) return true;\n  const errs = r.body && Array.isArray(r.body.errors) ? r.body.errors : [];\n  return errs.some((e) => e && ((e.extensions && e.extensions.code) ?? e.code) === 'too_many_requests');\n};\nconst req = (next, id, attempt, queue) => ({ json: { poll: { next, id, attempt, queue } } });\nconst fromQueue = (queue, out) => {\n  const q = Array.isArray(queue) ? queue.filter(validId) : [];\n  if (q.length > 0 && reserve()) out.push(req('fetch', q[0], 1, q.slice(1)));\n};\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const j = items[i].json;\n  if (j === null || typeof j !== 'object') continue;\n\n  if ('daily_budget' in j) {\n    if ('body' in j) {\n      const body = j.body;\n      const id = body !== null && typeof body === 'object' && !Array.isArray(body) ? body.meetingId : undefined;\n      if (validId(id) && !has(s.posted, id) && reserve()) out.push(req('fetch', id, 1, []));\n    } else if (reserve()) {\n      out.push({ json: { poll: { next: 'list' } } });\n    }\n    continue;\n  }\n\n  const ctx = $('Poll route').itemMatching(i).json.poll;\n  if (!ctx || typeof ctx !== 'object') continue;\n  if (rateLimited(j)) continue;\n\n  if (ctx.next === 'list') {\n    const list = j.body && j.body.data ? j.body.data.transcripts : undefined;\n    if (!ok2xx(j) || !Array.isArray(list)) continue;\n    const seen = new Set();\n    const sel = [];\n    const add = (id) => {\n      if (validId(id) && !has(s.posted, id) && !seen.has(id)) {\n        seen.add(id);\n        sel.push(id);\n      }\n    };\n    for (const t of list) {\n      if (t && !has(s.pending, t.id)) add(t.id);\n    }\n    for (const id of Object.keys(s.pending)) add(id);\n    for (const id of sel) {\n      if (!has(s.pending, id)) s.pending[id] = nowIso;\n    }\n    if (sel.length > 0 && reserve()) out.push(req('fetch', sel[0], 1, sel.slice(1)));\n    continue;\n  }\n\n  if (ctx.next === 'fetch' || ctx.next === 'retry') {\n    if (!validId(ctx.id)) continue;\n    const tr = j.body && j.body.data ? j.body.data.transcript : undefined;\n    if (ok2xx(j) && tr && tr.id === ctx.id) {\n      out.push({ json: { poll: { next: 'post', id: ctx.id }, transcript: tr } });\n      fromQueue(ctx.queue, out);\n    } else {\n      const attempt = Number.isInteger(ctx.attempt) ? ctx.attempt : MAX_TRIES;\n      if (attempt < MAX_TRIES) {\n        if (reserve()) out.push(req('retry', ctx.id, attempt + 1, Array.isArray(ctx.queue) ? ctx.queue : []));\n      } else {\n        out.push({ json: { poll: { next: 'failed', id: ctx.id } } });\n        if (has(s.pending, ctx.id)) {\n          const first = s.pending[ctx.id];\n          delete s.pending[ctx.id];\n          s.pending[ctx.id] = first;\n        }\n        fromQueue(ctx.queue, out);\n      }\n    }\n  }\n}\nreturn out;\n"
+      },
+      "name": "Poll state",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 100]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-list",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "list",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "list"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-fetch",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "fetch",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "fetch"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-retry",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "retry",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "retry"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-post",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "post",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "post"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "next-failed",
+                    "leftValue": "={{ $json.poll.next }}",
+                    "rightValue": "failed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "failed"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Poll route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "name": "Retry wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [880, 320]
     },
     {
       "parameters": {
@@ -63,33 +206,26 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: \"query($from: DateTime) { transcripts(fromDate: $from, limit: 50) { id date } }\", variables: { from: $now.minus({ hours: 24 }).toISO() } }) }}",
-        "options": {}
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
       },
       "name": "List transcripts",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        440,
-        0
-      ],
+      "position": [880, -120],
       "credentials": {
         "httpHeaderAuth": {
           "name": "Fireflies API"
         }
-      }
-    },
-    {
-      "parameters": {
-        "fieldToSplitOut": "data.transcripts",
-        "options": {}
       },
-      "name": "Split transcripts",
-      "type": "n8n-nodes-base.splitOut",
-      "typeVersion": 1,
-      "position": [
-        660,
-        0
-      ]
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -100,10 +236,7 @@
       "name": "Fireflies webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [
-        0,
-        220
-      ],
+      "position": [0, 220],
       "disabled": true
     },
     {
@@ -132,10 +265,7 @@
       "name": "Completed only",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [
-        440,
-        220
-      ]
+      "position": [440, 220]
     },
     {
       "parameters": {
@@ -145,24 +275,26 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ query: \"query($id: String!) { transcript(id: $id) { id title date duration transcript_url organizer_email participants meeting_attendees { displayName email name } sentences { speaker_name text start_time } } }\", variables: { id: $json.id ?? $json.body.meetingId } }) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify({ query: \"query($id: String!) { transcript(id: $id) { id title date duration transcript_url organizer_email participants meeting_attendees { displayName email name } sentences { speaker_name text start_time } } }\", variables: { id: $json.poll.id } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
       },
       "name": "Fetch transcript",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        880,
-        100
-      ],
+      "position": [880, 100],
       "credentials": {
         "httpHeaderAuth": {
           "name": "Fireflies API"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 5000,
       "onError": "continueErrorOutput"
     },
     {
@@ -184,11 +316,11 @@
             },
             {
               "name": "timeMin",
-              "value": "={{ new Date($('Fetch transcript').item.json.data.transcript.date - 30 * 60000).toISOString() }}"
+              "value": "={{ new Date($('Poll route').item.json.transcript.date - 30 * 60000).toISOString() }}"
             },
             {
               "name": "timeMax",
-              "value": "={{ new Date($('Fetch transcript').item.json.data.transcript.date + $('Fetch transcript').item.json.data.transcript.duration * 60000 + 30 * 60000).toISOString() }}"
+              "value": "={{ new Date($('Poll route').item.json.transcript.date + $('Poll route').item.json.transcript.duration * 60000 + 30 * 60000).toISOString() }}"
             }
           ]
         },
@@ -197,10 +329,7 @@
       "name": "Calendar events",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1100,
-        100
-      ],
+      "position": [1100, 100],
       "credentials": {
         "googleCalendarOAuth2Api": {
           "name": "Google Calendar"
@@ -219,16 +348,13 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ source: \"fireflies\", transcript: $('Fetch transcript').item.json.data.transcript, calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: ($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary') })) }) }}",
+        "jsonBody": "={{ JSON.stringify({ source: \"fireflies\", transcript: $('Poll route').item.json.transcript, calendar_events: ($json.items ?? []).slice(0, 50).map(e => ({ ...e, title: e.summary, calendar_id: ($('Settings').isExecuted ? $('Settings').first().json.calendar_id : 'primary') })) }) }}",
         "options": {}
       },
       "name": "Post meeting",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1320,
-        100
-      ],
+      "position": [1320, 100],
       "credentials": {
         "httpHeaderAuth": {
           "name": "2brain ingest"
@@ -242,10 +368,7 @@
       "name": "Source or calendar failed",
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
-      "position": [
-        1100,
-        320
-      ]
+      "position": [1100, 320]
     }
   ],
   "connections": {
@@ -264,7 +387,7 @@
       "main": [
         [
           {
-            "node": "List transcripts",
+            "node": "Poll state",
             "type": "main",
             "index": 0
           }
@@ -275,18 +398,14 @@
       "main": [
         [
           {
-            "node": "Split transcripts",
+            "node": "Poll state",
             "type": "main",
             "index": 0
           }
-        ]
-      ]
-    },
-    "Split transcripts": {
-      "main": [
+        ],
         [
           {
-            "node": "Fetch transcript",
+            "node": "Poll state",
             "type": "main",
             "index": 0
           }
@@ -308,7 +427,7 @@
       "main": [
         [
           {
-            "node": "Fetch transcript",
+            "node": "Settings",
             "type": "main",
             "index": 0
           }
@@ -319,14 +438,14 @@
       "main": [
         [
           {
-            "node": "Calendar events",
+            "node": "Poll state",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Source or calendar failed",
+            "node": "Poll state",
             "type": "main",
             "index": 0
           }
@@ -345,6 +464,67 @@
         [
           {
             "node": "Source or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll state": {
+      "main": [
+        [
+          {
+            "node": "Poll route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll route": {
+      "main": [
+        [
+          {
+            "node": "List transcripts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Calendar events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Source or calendar failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry wait": {
+      "main": [
+        [
+          {
+            "node": "Fetch transcript",
             "type": "main",
             "index": 0
           }

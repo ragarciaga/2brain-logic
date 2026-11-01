@@ -70,15 +70,13 @@ const SCENARIOS = {
     start: 3_600_000,
     end: 3_600_000 + 10 * 60_000,
     nodes: {
-      "Fetch transcript": {
-        data: {
-          transcript: {
-            id: "ff1",
-            title: "Weekly sync",
-            date: 3_600_000,
-            duration: 10,
-            sentences: [{ speaker_name: "Guest Person", text: "Hello", start_time: 1 }],
-          },
+      "Poll route": {
+        transcript: {
+          id: "ff1",
+          title: "Weekly sync",
+          date: 3_600_000,
+          duration: 10,
+          sentences: [{ speaker_name: "Guest Person", text: "Hello", start_time: 1 }],
         },
       },
       Settings: { calendar_id: "team@example.com" },
