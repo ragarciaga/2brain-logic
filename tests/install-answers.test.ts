@@ -12,6 +12,7 @@ import {
   validatePassphrase,
   validatePublicBaseUrl,
 } from "../src/install/answers.js";
+import { mergeEnv, renderEnv } from "../src/install/env-file.js";
 
 /** True when the message contains the value or any substring of 4 or more characters of it. */
 function leaks(message: string, value: string): boolean {
@@ -174,7 +175,7 @@ describe("validateAuthorName extra rules", () => {
 
 describe("isEnvWritableName", () => {
   it("accepts plain names and each quote form", () => {
-    for (const ok of ["Ana Perez", "O'Brien", 'Ana "Nick" Perez', "Ana $Perez", "dom\\ana"]) {
+    for (const ok of ["Ana Perez", "O'Brien", 'Ana "Nick" Perez', "Ana $Perez"]) {
       expect(isEnvWritableName(ok)).toBe(true);
       expect(validateAuthorName(ok).ok).toBe(true);
     }
@@ -186,6 +187,8 @@ describe("isEnvWritableName", () => {
       "O'Brien\\x",
       "Ana Perez\\",
       "a b\\c",
+      "a\\b",
+      "dom\\ana",
       "a\nb",
       "a\rb",
     ]) {
@@ -193,6 +196,29 @@ describe("isEnvWritableName", () => {
       const error = failure(validateAuthorName(bad));
       expect(error.field).toBe("author name");
       expect(leaks(renderAnswerError(error), bad)).toBe(false);
+    }
+  });
+});
+
+describe("isEnvWritableName against renderEnv", () => {
+  it("is true exactly when the .env writer accepts the name", () => {
+    const alphabet = ["a", " ", "'", '"', "$", "\\", "\n"];
+    const tok = (): string => ["fictional", "token", "0123456789"].join("-");
+    let strings = [""];
+    let layer = [""];
+    for (let n = 0; n < 3; n++) {
+      layer = layer.flatMap((p) => alphabet.map((c) => p + c));
+      strings = strings.concat(layer);
+    }
+    expect(strings.length).toBe(400);
+    for (const v of strings) {
+      let writes = true;
+      try {
+        renderEnv("", mergeEnv("", { authorName: v }, tok));
+      } catch {
+        writes = false;
+      }
+      expect(isEnvWritableName(v), JSON.stringify(v)).toBe(writes);
     }
   });
 });
