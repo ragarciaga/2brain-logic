@@ -104,6 +104,17 @@ describe("remote_reachable", () => {
     }
   });
 
+  it("fails with the timeout fix when git reports its own timeout", async () => {
+    await cloned();
+    const lsRemote = async () => {
+      throw new GitError("ls-remote", null);
+    };
+    expect(await checks({ lsRemote }).byId("remote_reachable").run()).toStrictEqual({
+      status: "fail",
+      fix: FIX_REMOTE_TIMEOUT,
+    });
+  });
+
   it("times out at 15 s with a hanging runner", async () => {
     await cloned();
     vi.useFakeTimers();
@@ -158,6 +169,17 @@ describe("remote_pushable", () => {
       { status: "fail", fix: FIX_NO_BRANCH },
     );
     expect(pushDryRun).not.toHaveBeenCalled();
+  });
+
+  it("fails with the timeout fix when git push reports its own timeout", async () => {
+    await cloned();
+    const pushDryRun = async () => {
+      throw new GitError("push", null);
+    };
+    expect(await checks({ pushDryRun }).byId("remote_pushable").run()).toStrictEqual({
+      status: "fail",
+      fix: FIX_REMOTE_TIMEOUT,
+    });
   });
 
   it("times out at 15 s with a hanging push", async () => {
