@@ -192,6 +192,50 @@ describe("POST /meetings validation", () => {
   });
 });
 
+describe("POST /meetings secret source id (R8.7)", () => {
+  const ghToken = ["gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"].join("");
+  const oauthSecret = ["GOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9S"].join("");
+  const MESSAGE = "must not contain a secret";
+
+  async function expectRefused(path: string, body: unknown, secret: string): Promise<void> {
+    const { app, writeMeeting, logs } = setup();
+    const response = await send(app, JSON.stringify(body));
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(JSON.parse(text)).toEqual({
+      ok: false,
+      error: "invalid_body",
+      issues: [{ path, message: MESSAGE }],
+    });
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain(secret.slice(-8));
+    expect(writeMeeting).not.toHaveBeenCalled();
+    expect(logs.join("\n")).not.toContain(secret.slice(-8));
+  }
+
+  it("R8.7: a Fireflies id holding a token is 400 invalid_body naming transcript.id", async () => {
+    const body = fireflies();
+    body.transcript.id = ghToken;
+    await expectRefused("transcript.id", body, ghToken);
+  });
+
+  it("R8.7: a Gemini name holding a client secret is 400 invalid_body naming transcript.name", async () => {
+    const body = gemini();
+    body.transcript.name = `conferenceRecords/c1/transcripts/${oauthSecret}`;
+    await expectRefused("transcript.name", body, oauthSecret);
+  });
+
+  it("R8.7: an unfinished Gemini transcript with a secret id is still 409", async () => {
+    const { app, writeMeeting } = setup();
+    const body = gemini("STARTED");
+    body.transcript.name = `conferenceRecords/c1/transcripts/${oauthSecret}`;
+    const response = await send(app, JSON.stringify(body));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ ok: false, error: "transcript_not_ready" });
+    expect(writeMeeting).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /meetings write", () => {
   it("D2: a Fireflies body calls the writer once with the mapped input; stored is 201", async () => {
     const { app, writeMeeting } = setup();

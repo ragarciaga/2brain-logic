@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { scrub } from "../vault/scrub/index.js";
 import type { CalendarEvent, FirefliesBody, GeminiBody, MeetingBody } from "./types.js";
 
 // Boundary validation for POST /meetings. Pure: no I/O, no config, no LLM.
@@ -158,6 +159,21 @@ export function parseMeetingBody(json: unknown): MeetingBody {
     throw new TranscriptNotReadyError();
   }
   return body;
+}
+
+/**
+ * R8.7: the issue for a payload whose source id (`transcript.id` for Fireflies, `transcript.name`
+ * for Gemini) changes under the scrub rules, else undefined. The message is fixed: it never holds
+ * the value or the rule id.
+ */
+export function secretSourceIdIssue(
+  body: MeetingBody,
+): { path: string; message: string } | undefined {
+  const [path, value] =
+    body.source === "fireflies"
+      ? (["transcript.id", body.transcript.id] as const)
+      : (["transcript.name", body.transcript.name] as const);
+  return scrub(value).text === value ? undefined : { path, message: "must not contain a secret" };
 }
 
 /** Returns the URL only when it parses as an absolute https URL (R1.7). */

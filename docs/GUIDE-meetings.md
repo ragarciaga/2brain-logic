@@ -175,6 +175,8 @@ meetings fail. An empty `sources` list needs no change.
   hour list window, and the webhook is not sent twice. To recover that meeting, fix the cause and
   add the meeting to the vault by hand. The Gemini workflow repeats the failure on every poll for 24
   hours.
+- A meeting whose source id holds a secret is refused with 400 and is not stored. Add that meeting
+  to the vault by hand.
 - Only the transcript fetch and the calendar calls of Fireflies, and the Meet and calendar calls of
   Gemini, get 3 tries, 5 seconds apart, then the execution ends at
   `Source or calendar failed` (Fireflies) or `Meet or calendar failed` (Gemini). The Fireflies poll

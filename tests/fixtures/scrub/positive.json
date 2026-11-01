@@ -639,6 +639,42 @@
       "rule": "labeled_secret",
       "parts": ["args: --pass", "word=", "hunter2xyz"],
       "expected": "args: --password=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "google_oauth_access_token",
+      "parts": ["use ya", "29.", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbCdEfGh", " now"],
+      "expected": "use [REDACTED:google_oauth_access_token] now"
+    },
+    {
+      "rule": "google_oauth_access_token",
+      "parts": ["see ya", "29.", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbCd", ".Ef3Gh4Ij", "."],
+      "expected": "see [REDACTED:google_oauth_access_token]."
+    },
+    {
+      "rule": "google_oauth_access_token",
+      "parts": [
+        "Authorization: Bearer ya",
+        "29.",
+        "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O",
+        "p8Qr9St0UvWxYzAbCdEfGh",
+        "Ab1Cd2Ef3Gh4Ij5K"
+      ],
+      "expected": "Authorization: Bearer [REDACTED:google_oauth_access_token]"
+    },
+    {
+      "rule": "google_oauth_refresh_token",
+      "parts": ["refresh 1/", "/0", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9St0UvWxYzAbCdEfGh", " done"],
+      "expected": "refresh [REDACTED:google_oauth_refresh_token] done"
+    },
+    {
+      "rule": "google_oauth_client_secret",
+      "parts": ["client_secret: GOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8Qr9S"],
+      "expected": "client_secret: [REDACTED:google_oauth_client_secret]"
+    },
+    {
+      "rule": "google_oauth_client_secret",
+      "parts": ["GOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8"],
+      "expected": "[REDACTED:google_oauth_client_secret]"
     }
   ],
   "frontmatter": [
