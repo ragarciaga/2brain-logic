@@ -17,6 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { verifyPassphrase } from "../src/auth/owner.js";
 import {
   type CliIo,
+  initVault,
   MAX_STDIN_BYTES,
   main,
   processIo,
@@ -123,6 +124,20 @@ describe("init-vault on a new vault", () => {
     expect(out.at(-1)).toBe(
       `init-vault: ${TEMPLATE_FILES.length} copied, 0 skipped into ${target}`,
     );
+  });
+});
+
+describe("initVault export", () => {
+  it("initVault export copies like the command", async () => {
+    const target = join(root, "exported");
+    const { io, out, err } = fakeIo();
+    expect(await initVault(target, io, TEMPLATE_DIR)).toBe(0);
+    expect(tree(target)).toStrictEqual(tree(TEMPLATE_DIR));
+    expect(out).toStrictEqual([
+      ...TEMPLATE_FILES.map((f) => `copied ${f}`),
+      `init-vault: ${TEMPLATE_FILES.length} copied, 0 skipped into ${target}`,
+    ]);
+    expect(err).toStrictEqual([]);
   });
 });
 
