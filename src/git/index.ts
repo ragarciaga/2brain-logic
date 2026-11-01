@@ -312,12 +312,28 @@ export async function pushDryRun(dir: string, env: Record<string, string> = {}):
   });
 }
 
-/** Push HEAD to `branch` on origin. */
+/** Stage the named paths (literal file names, never pathspecs). */
+export async function addPaths(dir: string, paths: string[]): Promise<void> {
+  await runGit(dir, ["add", "--", ...paths]);
+}
+
+/** Refuse a branch name that could change the refspec or look like an option. */
+function assertBranchName(branch: string): void {
+  if (branch === "" || branch.startsWith("-") || branch.includes(":") || branch.includes("..")) {
+    throw new Error("invalid branch name");
+  }
+}
+
+/**
+ * Push HEAD to `branch` on origin. A name that is empty, starts with `-` or contains `:` or `..`
+ * is rejected with a plain `Error` before git runs.
+ */
 export async function pushBranch(
   dir: string,
   branch: string,
   env: Record<string, string> = {},
 ): Promise<void> {
+  assertBranchName(branch);
   await runGit(dir, ["push", "origin", `HEAD:refs/heads/${branch}`], env);
 }
 

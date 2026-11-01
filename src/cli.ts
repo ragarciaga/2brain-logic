@@ -55,7 +55,11 @@ async function isDirectory(path: string): Promise<boolean | "missing"> {
   }
 }
 
-async function initVault(targetArg: string, io: CliIo, templateDir: string): Promise<number> {
+export async function initVault(
+  targetArg: string,
+  io: CliIo,
+  templateDir: string,
+): Promise<number> {
   const target = resolve(targetArg);
   let files: string[];
   try {
