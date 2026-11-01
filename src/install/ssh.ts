@@ -1,10 +1,22 @@
-import { createHash } from "node:crypto";
-import { chmodSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  type Stats,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 import type { SshRemote } from "./answers.js";
 
 /**
- * Pure SSH host key helpers for the installer. They run no binaries: ssh-keyscan output comes in
- * as text. Host key checking is never relaxed; the only trust anchors are the constant below and
+ * SSH helpers for the installer. Binaries (ssh-keygen) run only through an injected runner, so unit
+ * tests need none; ssh-keyscan output comes in as text. Host key checking is never relaxed; the only trust anchors are the constant below and
  * the key a human confirms for another host.
  */
 
@@ -48,12 +60,26 @@ export function knownHostsLine(remote: Pick<SshRemote, "host" | "port">, b64: st
   return `${name} ssh-ed25519 ${b64}`;
 }
 
-/** Writes exactly one line to `<secretsDir>/known_hosts` at mode 0600, replacing any content. */
+/**
+ * Writes exactly one line to `<secretsDir>/known_hosts` at mode 0600, replacing any content. A
+ * target that exists and is not a regular file (a symlink included) is refused; the content goes
+ * to a temp file in the same directory and is renamed into place.
+ */
 export function writeKnownHosts(secretsDir: string, line: string): void {
-  const file = `${secretsDir}/known_hosts`;
-  writeFileSync(file, `${line}\n`, { mode: 0o600 });
-  // The mode above applies only on creation (and the umask can narrow it): fix it explicitly.
-  chmodSync(file, 0o600);
+  const file = join(secretsDir, "known_hosts");
+  const existing = lstatOrNull(file);
+  if (existing !== null && !existing.isFile()) {
+    throw new Error("writeKnownHosts: known_hosts exists and is not a regular file");
+  }
+  const tmp = join(secretsDir, `.known_hosts.${randomBytes(6).toString("hex")}`);
+  try {
+    writeFileSync(tmp, `${line}\n`, { mode: 0o600, flag: "wx" });
+    // The mode above is narrowed by the umask: fix it explicitly.
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 export type PinResult =
@@ -119,4 +145,116 @@ export function gitSshCommand(dir: string): string {
     "-o ServerAliveInterval=5",
     "-o ServerAliveCountMax=2",
   ].join(" ");
+}
+
+export type RunResult = { code: number };
+export type Runner = (
+  cmd: string,
+  args: string[],
+  opts: { timeoutMs: number },
+) => Promise<RunResult>;
+export type KeygenResult =
+  | { ok: true; created: boolean }
+  | { ok: false; code: "keygen_failed"; message: string };
+
+/** Runs a binary with no shell and a timeout; resolves the exit code. Output is never returned or logged. */
+export const execFileRunner: Runner = (cmd, args, opts) =>
+  new Promise((resolvePromise) => {
+    execFile(cmd, args, { timeout: opts.timeoutMs, windowsHide: true }, (error) => {
+      if (error === null) {
+        resolvePromise({ code: 0 });
+        return;
+      }
+      const code = (error as { code?: unknown }).code;
+      resolvePromise({ code: typeof code === "number" && code !== 0 ? code : 1 });
+    });
+  });
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path) as Stats;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function keygenFailed(reason: string): KeygenResult {
+  return { ok: false, code: "keygen_failed", message: `keygen_failed: ${reason}` };
+}
+
+/**
+ * Makes sure `<projectDir>/secrets/deploy_key` exists. An existing regular file is kept untouched
+ * and the runner is not called. Otherwise ssh-keygen writes into a temp dir inside `secrets/` and
+ * the files are renamed into place. Failures return `keygen_failed` with a fixed reason: runner
+ * output and key bytes are never included, and an existing key is never deleted.
+ */
+export async function ensureDeployKey(
+  projectDir: string,
+  run: Runner = execFileRunner,
+): Promise<KeygenResult> {
+  const secretsDir = join(projectDir, "secrets");
+  const finalKey = join(secretsDir, "deploy_key");
+  const finalPub = join(secretsDir, "deploy_key.pub");
+  let tmpDir: string | null = null;
+  let pubMoved = false;
+  try {
+    const dirStat = lstatOrNull(secretsDir);
+    if (dirStat === null) {
+      mkdirSync(secretsDir, { mode: 0o700 });
+    } else if (!dirStat.isDirectory()) {
+      return keygenFailed("secrets is not a directory");
+    }
+    chmodSync(secretsDir, 0o700);
+
+    const keyStat = lstatOrNull(finalKey);
+    if (keyStat !== null) {
+      return keyStat.isFile()
+        ? { ok: true, created: false }
+        : keygenFailed("deploy_key is not a regular file");
+    }
+
+    tmpDir = mkdtempSync(join(secretsDir, ".keygen-"));
+    chmodSync(tmpDir, 0o700);
+    const tmpKey = join(tmpDir, "deploy_key");
+    const tmpPub = join(tmpDir, "deploy_key.pub");
+    let result: RunResult;
+    try {
+      result = await run(
+        "ssh-keygen",
+        ["-q", "-t", "ed25519", "-N", "", "-C", "2brain deploy key", "-f", tmpKey],
+        { timeoutMs: 30000 },
+      );
+    } catch {
+      return keygenFailed("ssh-keygen could not run");
+    }
+    if (result.code !== 0) {
+      return keygenFailed("ssh-keygen exited with an error");
+    }
+    if (!lstatOrNull(tmpKey)?.isFile() || !lstatOrNull(tmpPub)?.isFile()) {
+      return keygenFailed("ssh-keygen did not produce the key files");
+    }
+    chmodSync(tmpKey, 0o600);
+    chmodSync(tmpPub, 0o644);
+    renameSync(tmpPub, finalPub);
+    pubMoved = true;
+    renameSync(tmpKey, finalKey);
+    pubMoved = false;
+    return { ok: true, created: true };
+  } catch {
+    return keygenFailed("could not store the deploy key");
+  } finally {
+    if (pubMoved) {
+      try {
+        unlinkSync(finalPub);
+      } catch {
+        // Nothing more to clean.
+      }
+    }
+    if (tmpDir !== null) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
 }
