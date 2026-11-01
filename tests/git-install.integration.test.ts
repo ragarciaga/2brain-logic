@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   classifyRemoteError,
   cloneInto,
+  currentBranch,
   GitError,
+  hasCommits,
   lsRemote,
   originUrl,
   pushBranch,
@@ -32,6 +34,28 @@ function commitLocal(): void {
 }
 
 describe("installer git functions", () => {
+  it("cloneInto fails with GitError and a null exit code when the timeout hits", async () => {
+    const err = await cloneInto(fixture.remote, join(fixture.root, "slow"), {}, 1).catch((e) => e);
+    expect(err).toBeInstanceOf(GitError);
+    expect(err.exitCode).toBeNull();
+    expect(classifyRemoteError(err)).toBe("remote_unreachable");
+  });
+
+  it("hasCommits is false on an empty clone and true after a commit", async () => {
+    const bare = join(fixture.root, "empty.git");
+    git(fixture.root, ["init", "--bare", bare]);
+    const dir = join(fixture.root, "empty-clone");
+    await cloneInto(bare, dir);
+    expect(await hasCommits(dir)).toBe(false);
+    expect(await hasCommits(clone)).toBe(true);
+  });
+
+  it("currentBranch returns the branch name and rejects on a detached HEAD", async () => {
+    expect(await currentBranch(clone)).toBe("main");
+    git(clone, ["checkout", "--detach"]);
+    await expect(currentBranch(clone)).rejects.toBeInstanceOf(GitError);
+  });
+
   it("cloneInto clones the remote and originUrl returns it", async () => {
     expect(git(clone, ["rev-parse", "HEAD"])).toBe(git(fixture.remote, ["rev-parse", "main"]));
     expect(await originUrl(clone)).toBe(fixture.remote);
