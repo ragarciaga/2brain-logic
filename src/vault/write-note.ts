@@ -21,15 +21,19 @@ import {
   propertiesUnchanged,
   readStoredNote,
 } from "./operations.js";
+import { scrub, scrubFrontmatter } from "./scrub/index.js";
 import {
-  type ScrubFrontmatterResult,
-  type ScrubResult,
-  scrub,
-  scrubFrontmatter,
-} from "./scrub/index.js";
+  type Redaction,
+  type Scrubber,
+  ScrubFailedError,
+  scrubNote,
+  toRedactions,
+} from "./scrub-note.js";
 import { createSourceIndex, type SourceIndex, sourceIdKey } from "./source-index.js";
-import { validateFrontmatter } from "./validate.js";
+import { type FrontmatterVerdict, validateFrontmatter } from "./validate.js";
 import { writeMeetingInSlot } from "./write-meeting.js";
+
+export { type Redaction, type Scrubber, ScrubFailedError, scrubNote, toRedactions };
 
 export class NoteExistsError extends Error {
   constructor() {
@@ -74,18 +78,6 @@ export class WrongFolderError extends Error {
 }
 
 /**
- * The secret scrub could not finish (a rule failed, or the data was too deep or cyclic). The
- * message is fixed and the error carries no `cause`: nothing from the scrubber or the note reaches
- * a response or a log through it.
- */
-export class ScrubFailedError extends Error {
-  constructor() {
-    super("Secret scrub failed");
-    this.name = "ScrubFailedError";
-  }
-}
-
-/**
  * The note is committed locally but the push did not land (a transient failure after all retries,
  * or a rejection because the remote moved). `commit` is the local HEAD sha; the next write pushes
  * it. The message is fixed and there is no `cause`: nothing from git (URL, stderr) reaches a
@@ -103,17 +95,6 @@ export class PushPendingError extends Error {
     this.commit = commit;
     this.exitCode = exitCode;
   }
-}
-
-/** How many times one scrub rule redacted something in a note. Rule id and count only. */
-export interface Redaction {
-  rule: string;
-  count: number;
-}
-
-export interface Scrubber {
-  scrub(text: string): ScrubResult;
-  scrubFrontmatter(data: Record<string, unknown>): ScrubFrontmatterResult;
 }
 
 /** The real scrubber with its default rules. */
@@ -169,7 +150,7 @@ export interface VaultWriter extends NoteWriter {
    * the call and does not block the queue.
    */
   withPulled<T>(fn: (state: PulledState) => Promise<T>): Promise<T>;
-  /** A meeting write on the same queue as `write`: skips, `already_stored`, or (T10) the store. */
+  /** A meeting write on the same queue as `write`: skips, `already_stored`, or the store. */
   writeMeeting(input: MeetingInput): Promise<MeetingOk>;
 }
 
@@ -187,40 +168,6 @@ export interface NoteWriterOptions {
   log?: (message: string) => void;
   /** Waits between push retries. Defaults to a real timer; tests inject one that returns at once. */
   sleep?: (ms: number) => Promise<void>;
-}
-
-/** Combine redaction counts of several scrub results, sorted by rule id. */
-function toRedactions(...maps: ReadonlyMap<string, number>[]): Redaction[] {
-  const counts = new Map<string, number>();
-  for (const hits of maps) {
-    for (const [rule, count] of hits) counts.set(rule, (counts.get(rule) ?? 0) + count);
-  }
-  return [...counts]
-    .map(([rule, count]) => ({ rule, count }))
-    .sort((a, b) => (a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0));
-}
-
-/**
- * Scrub every string of the frontmatter (nested values included) and the body. Any exception from
- * the scrubber becomes `ScrubFailedError` without a cause. Redaction counts of both parts are
- * combined and sorted by rule id.
- */
-export function scrubNote(
-  scrubber: Scrubber,
-  frontmatter: Record<string, unknown>,
-  body: string,
-): { frontmatter: Record<string, unknown>; body: string; redactions: Redaction[] } {
-  let scrubbedFrontmatter: ScrubFrontmatterResult;
-  let scrubbedBody: ScrubResult;
-  let redactions: Redaction[];
-  try {
-    scrubbedFrontmatter = scrubber.scrubFrontmatter(frontmatter);
-    scrubbedBody = scrubber.scrub(body);
-    redactions = toRedactions(scrubbedFrontmatter.hits, scrubbedBody.hits);
-  } catch {
-    throw new ScrubFailedError();
-  }
-  return { frontmatter: scrubbedFrontmatter.data, body: scrubbedBody.text, redactions };
 }
 
 /**
@@ -265,6 +212,11 @@ function assertValid(
 ): void {
   const verdict = validateFrontmatter(frontmatter, path, config);
   if (verdict.ok) return;
+  rejectInvalid(verdict);
+}
+
+/** Throw the error for a verdict that is not ok. */
+function rejectInvalid(verdict: Exclude<FrontmatterVerdict, { ok: true }>): never {
   if (verdict.error === "wrong_folder") throw new WrongFolderError(verdict.expected);
   throw new InvalidFrontmatterError(verdict.missing, verdict.invalid);
 }
@@ -292,7 +244,9 @@ export async function realpathOfDeepestAncestor(target: string): Promise<string>
  * Create the single write path into the vault, for creating a note (`write`), for setting
  * properties of an existing one (`patch`), for moving one to the archive folder (`archive`), and for a meeting
  * recording (`writeMeeting`, in src/vault/write-meeting.ts: it skips short or empty recordings with
- * one log line, and answers `already_stored` for a known source id). All
+ * one log line, answers `already_stored` for a known source id, and otherwise stores the note at
+ * a new path: scrub once, validate the scrubbed result once, create, commit `2brain: add meeting
+ * <path>`, push). All
  * run on one queue (they share one working tree) and share the same steps: refuse a path that matches a scrub rule (`UnsafePathError`, before any git
  * work), pull with rebase (on a rebase conflict the sync in src/git/sync.ts keeps both versions:
  * the remote one at its path, the local one as `<name> (conflict YYYY-MM-DD).md`, scrubbed like
@@ -516,6 +470,57 @@ export function createNoteWriter({
       : { path: note.path, commit };
   }
 
+  /**
+   * Create a meeting note: the create branch of `writeOne` without adoption. Anything already at
+   * the path is `NoteExistsError`. Returns the commit; a push that does not land is
+   * `PushPendingError`.
+   */
+  async function createMeetingNote(path: string, bytes: string, message: string): Promise<string> {
+    const { target, parent, realRoot } = await resolveParent(path);
+    let taken = true;
+    try {
+      await lstat(target);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      taken = false;
+    }
+    if (taken) throw new NoteExistsError();
+    const head = await git.headSha(root);
+    try {
+      await mkdir(parent, { recursive: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
+      throw error;
+    }
+    if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
+    try {
+      await writeFile(target, bytes, { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
+      throw error;
+    }
+    let commit: string;
+    try {
+      commit = await git.commitFile(root, path, message, author);
+    } catch (error) {
+      try {
+        if ((await git.headSha(root)) === head) {
+          await git.unstageFile(root, path);
+          await unlink(target).catch((e: NodeJS.ErrnoException) => {
+            if (e.code !== "ENOENT") throw e;
+          });
+        }
+      } catch {
+        // swallowed on purpose
+      }
+      throw error;
+    }
+    await pushOrPending(path);
+    return commit;
+  }
+
   async function patchOne(input: NotePatch): Promise<WriteResult> {
     refuseSecretPath(input.path);
     const config = await syncAndLoadConfig();
@@ -720,7 +725,19 @@ export function createNoteWriter({
     patch: (input) => enqueue(() => patchOne(input)),
     archive: (input) => enqueue(() => archiveOne(input)),
     writeMeeting: (input) =>
-      enqueue(() => writeMeetingInSlot(input, { root, git, sourceIndex, log, syncAndLoadConfig })),
+      enqueue(() =>
+        writeMeetingInSlot(input, {
+          root,
+          git,
+          sourceIndex,
+          log,
+          syncAndLoadConfig,
+          scrubber,
+          refuseSecretPath,
+          rejectInvalid,
+          createMeetingNote,
+        }),
+      ),
     withPulled: (fn) =>
       enqueue(async () => {
         let stale = false;

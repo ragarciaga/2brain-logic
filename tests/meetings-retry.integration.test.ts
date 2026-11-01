@@ -41,11 +41,11 @@ describe("meeting redelivery", () => {
     expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
   });
 
-  it("another source id is not stored", async () => {
+  it("another source id is stored at a new path", async () => {
     pushFiles(fixture, { [PATH]: storedMeeting("fireflies:01EXAMPLEID") });
-    await expect(makeWriter().writeMeeting(meetingInput(46, { source: "gemini" }))).rejects.toThrow(
-      "meeting store not implemented",
-    );
+    const result = await makeWriter().writeMeeting(meetingInput(46, { source: "gemini" }));
+    expect(result).toMatchObject({ ok: true, commit: expect.any(String) });
+    expect((result as { path: string }).path).not.toBe(PATH);
   });
 
   it("matches a renamed source value", async () => {
