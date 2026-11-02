@@ -76,7 +76,7 @@ npm ci
 ```
 
 ## Autonomy
-Sensitive paths: src/auth/**, src/vault/scrub/**, src/sources/**/delete*.ts, Dockerfile, compose*.yaml, n8n/templates/**
+Sensitive paths: src/auth/**, src/vault/scrub/**, src/sources/**/delete*.ts, Dockerfile, compose*.yaml
 Tier A paths: vault-template/**
 Paid services: Anthropic API (monthly cap USD 20)
 
