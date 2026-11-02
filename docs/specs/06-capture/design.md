@@ -1,6 +1,6 @@
 # Design: Capture from Telegram and email
 
-Status: draft  |  Date: 2026-11-01  |  Requirements: ./requirements.md
+Status: approved  |  Date: 2026-11-02  |  Requirements: ./requirements.md
 ADRs: docs/adr/0021-capture-llm-and-spend-guard.md, docs/adr/0022-speech-to-text-in-n8n.md, docs/adr/0023-email-capture-rule.md
 
 Every item below cites the requirement IDs it serves. Anything without an R reference does not

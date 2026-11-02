@@ -1,6 +1,7 @@
 # Requirements: Capture from Telegram and email
 
-Status: draft  |  Date: 2026-11-01  |  Spec: docs/specs/06-capture/
+Status: approved  |  Date: 2026-11-02  |  Spec: docs/specs/06-capture/
+Baseline: 20 h
 Brief: docs/brief.md  |  ADRs: docs/adr/0002-workflow-vs-agent.md, docs/adr/0003-thin-n8n.md, docs/adr/0006-configuration-driven.md, docs/adr/0008-vault-safety.md, docs/adr/0010-ingest-bearer-token.md, docs/adr/0020-meetings-config-section.md, docs/adr/0021-capture-llm-and-spend-guard.md, docs/adr/0022-speech-to-text-in-n8n.md, docs/adr/0023-email-capture-rule.md
 
 ## Context

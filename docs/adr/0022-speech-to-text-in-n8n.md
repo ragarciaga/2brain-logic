@@ -1,6 +1,6 @@
 # 0022. Voice notes are transcribed in n8n, with Groq by default
 
-Status: proposed
+Status: accepted
 Date: 2026-11-01
 Related: docs/specs/06-capture/design.md, docs/adr/0003-thin-n8n.md
 Approved by: pending, with docs/specs/06-capture/design.md

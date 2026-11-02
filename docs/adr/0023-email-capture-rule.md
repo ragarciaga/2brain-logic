@@ -1,6 +1,6 @@
 # 0023. Emails are captured by label or by LLM criteria, with doubtful ones approved on Telegram in n8n
 
-Status: proposed
+Status: accepted
 Date: 2026-11-01
 Related: docs/specs/06-capture/design.md, docs/adr/0003-thin-n8n.md, docs/adr/0021-capture-llm-and-spend-guard.md
 Approved by: pending, with docs/specs/06-capture/design.md

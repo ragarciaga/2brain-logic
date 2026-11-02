@@ -1,6 +1,6 @@
 # 0021. Capture uses Claude Haiku 5.5 through src/llm with a monthly spend guard
 
-Status: proposed
+Status: accepted
 Date: 2026-11-01
 Related: docs/specs/06-capture/design.md, docs/adr/0002-workflow-vs-agent.md
 Approved by: pending, with docs/specs/06-capture/design.md

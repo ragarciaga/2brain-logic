@@ -1,9 +1,11 @@
 # Progress
 
-Updated: 2026-11-01
+Updated: 2026-11-02
 
 ## Current objective
-F5 meetings without LLM (docs/specs/05-meetings/): Fireflies and Gemini transcripts from n8n stored deterministically, both versions of a meeting linked, zero LLM calls. Backlog: 20 tasks, issues #196 to #215 (T19, T20 manual). F1 to F4 are merged; F4 manual checks T23 (#168) and T24 (#169) and F3 manual checks (#109 to #114) wait for the owner.
+F6 capture from Telegram and email (docs/specs/06-capture/): requirements and design approved on 2026-11-02 (23 criteria, ADRs 0021 to 0023, Anthropic Haiku 5.5 and Groq speech to text under USD 1 a month each). Next: `/rb-tasks docs/specs/06-capture/` (6 tasks planned in the design), then the spec PR and the build.
+
+F5 meetings: every buildable task is merged (T1 to T18, plus the #233 hardening tasks 1 to 3); T19 (#214) and T20 (#215) are owner manual checks. The two meeting templates were imported into the owner's n8n as inactive `[2brain test]` drafts and passed pinned test runs (#214 has the results).
 
 ## Current state
 - Works: walking skeleton (PR #10) plus F1 tasks merged: strict vault config and template (T1), INGEST_TOKEN required (T2), bearer token on every route except `GET /health` (T3), Windows-safe paths and literal pathspecs (T4), frontmatter validator (T6), config re-read after each pull with 503 `config_invalid` (T7), frontmatter validated on create with 400 (T8), `init-vault` (T16), template in the image and compose healthcheck (T17).
@@ -35,9 +37,13 @@ F5 meetings without LLM (docs/specs/05-meetings/): Fireflies and Gemini transcri
 - 2026-10-31: skeleton bodies stored verbatim, 409 on an existing path, HOST defaults to 127.0.0.1, see PR #10
 
 ## Next steps
-1. Finish F1: T8, then T9, then T10 and T11, T12, T13, T14, T15 (each depends on the previous).
-2. Owner: check #41 against the SWIFT registry on your machine.
-3. F2: T1 to T11 can run in parallel with F1; F2 T13 and T14 start after F1 is merged. T18 (#61) needs the owner: a public HTTPS URL and the claude.ai account.
+1. Agent: run `/rb-tasks docs/specs/06-capture/` on branch `rb/spec-06-capture` (spec already approved; do not ask again), open the spec PR, then build F6 with the lighter review the owner approved: tasks sized to about 6 PRs, verifier on every PR, blind auditor and security only where `rb risk` asks, at most 3 tasks in parallel when files do not overlap.
+2. Agent: prototype the two F6 n8n templates live in the owner's personal n8n through Composio (inactive drafts named `[2brain test]`), then freeze them as templates with tests.
+3. Owner: merge PR #249 (n8n templates to tier B; the session classifier blocked the agent from merging a change that lowers its own oversight).
+4. Owner: deploy the service on the server with docs/INSTALL.md (F4 manual checks #168, #169); without it no flow can store anything for real.
+5. Owner: in the personal n8n, create the credentials `Fireflies API`, `Telegram bot` (new bot from BotFather), `Speech to text` (Groq key) and `Gmail` (work account, OAuth); then the agent runs T19 and the F6 live checks with real data.
+6. Owner, optional: protect `main` with `rb protect` or a GitHub branch rule.
+7. Later: #233 items 1 and 7 (spec changes) and 8, 9, 11, 12 (after the manual checks); the scrub boundary note on #233; F7 routines.
 
 ## Timing
 <!-- rb:timing:start -->
