@@ -1,6 +1,6 @@
 # Progress
 
-Updated: 2026-11-02
+Updated: 2026-11-09
 
 ## Current objective
 F6 capture from Telegram and email (docs/specs/06-capture/): requirements and design approved on 2026-11-02 (23 criteria, ADRs 0021 to 0023, Anthropic Haiku 5.5 and Groq speech to text under USD 1 a month each). Next: `/rb-tasks docs/specs/06-capture/` (6 tasks planned in the design), then the spec PR and the build.
@@ -39,11 +39,12 @@ F5 meetings: every buildable task is merged (T1 to T18, plus the #233 hardening 
 ## Next steps
 1. Agent: run `/rb-tasks docs/specs/06-capture/` on branch `rb/spec-06-capture` (spec already approved; do not ask again), open the spec PR, then build F6 with the lighter review the owner approved: tasks sized to about 6 PRs, verifier on every PR, blind auditor and security only where `rb risk` asks, at most 3 tasks in parallel when files do not overlap.
 2. Agent: prototype the two F6 n8n templates live in the owner's personal n8n through Composio (inactive drafts named `[2brain test]`), then freeze them as templates with tests.
-3. Owner: merge PR #249 (n8n templates to tier B; the session classifier blocked the agent from merging a change that lowers its own oversight).
-4. Owner: deploy the service on the server with docs/INSTALL.md (F4 manual checks #168, #169); without it no flow can store anything for real.
-5. Owner: in the personal n8n, create the credentials `Fireflies API`, `Telegram bot` (new bot from BotFather), `Speech to text` (Groq key) and `Gmail` (work account, OAuth); then the agent runs T19 and the F6 live checks with real data.
-6. Owner, optional: protect `main` with `rb protect` or a GitHub branch rule.
-7. Later: #233 items 1 and 7 (spec changes) and 8, 9, 11, 12 (after the manual checks); the scrub boundary note on #233; F7 routines.
+3. Done 2026-11-09: the owner merged PR #249 (n8n templates are tier B now).
+4. Owner, in progress 2026-11-09: deploying on the server that already runs n8n and Caddy (n8n-docker-caddy example, Docker network `n8n-docker-caddy_default`, Compose 2.32.4) with docs/INSTALL.md; DNS record for the brain subdomain created. Agent, first thing next session: ask the owner for the doctor output and the domain, then close F4 manual checks #168 and #169.
+5. Agent: add `restart: unless-stopped` to the `brain` service in compose.yaml (tier C, sensitive path; owner standing approval covers it) and drop the "After a host restart" section from docs/INSTALL.md. Today `brain` does not start again after a host reboot.
+6. Owner: in the personal n8n, create the credentials `2brain ingest`, `Fireflies API`, `Telegram bot` (new bot from BotFather), `Speech to text` (Groq key) and `Gmail` (work account, OAuth), and send the Telegram chat id; then the agent runs T19 and the F6 live checks with real data.
+7. Owner, optional: protect `main` with `rb protect` or a GitHub branch rule.
+8. Later: #233 items 1 and 7 (spec changes) and 8, 9, 11, 12 (after the manual checks); the scrub boundary note on #233; F7 routines.
 
 ## Timing
 <!-- rb:timing:start -->
