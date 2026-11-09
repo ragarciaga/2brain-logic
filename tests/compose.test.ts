@@ -510,3 +510,24 @@ describe("image carries the vault template", () => {
     }
   });
 });
+
+describe("compose restart policy", () => {
+  const services = (): Record<string, unknown> => {
+    const compose = parseYamlConfig(read("compose.yaml"));
+    const found = isRecord(compose) ? compose.services : undefined;
+    if (!isRecord(found)) throw new Error("compose.yaml: services missing");
+    return found;
+  };
+
+  it("brain restarts after a host or Docker restart unless it was stopped", () => {
+    const brain = services().brain;
+    expect(isRecord(brain) ? brain.restart : undefined).toBe("unless-stopped");
+  });
+
+  it("the one-shot setup and doctor services have no restart policy", () => {
+    for (const name of ["setup", "doctor"]) {
+      const service = services()[name];
+      expect(isRecord(service) ? service.restart : "missing").toBeUndefined();
+    }
+  });
+});

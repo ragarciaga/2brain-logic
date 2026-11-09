@@ -235,12 +235,15 @@ Your `.env`, `secrets/` and vault are kept.
 
 ## After a host restart
 
-The compose file sets no restart policy yet, so `brain` does not start again by itself when the
-host reboots. After a reboot, run this from the `2brain` directory:
+`brain` starts again on its own when the host or Docker restarts (`restart: unless-stopped`), as
+long as Docker itself starts at boot. Check that once:
 
 ```bash
-docker compose up -d
+systemctl is-enabled docker
 ```
+
+If it does not print `enabled`, run `systemctl enable docker`. A service you stopped with
+`docker compose stop` stays stopped until you run `docker compose up -d`.
 
 ## Troubleshooting
 
