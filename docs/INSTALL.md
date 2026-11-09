@@ -19,16 +19,38 @@ the same container image as the service.
 
 ## Get the code
 
+Run every command in this guide on the host itself (open an SSH session, or use your provider's
+web console). Nothing runs on your own computer.
+
 ```bash
 git clone <repository URL> 2brain
 cd 2brain
 ```
 
+If the repository is private, the host needs read access. On GitHub, create a fine-grained personal
+access token with access to this repository only and the permission Contents: Read-only. Then
+store it once, so later `git pull` runs do not ask again:
+
+```bash
+git config --global credential.helper store
+git clone https://github.com/<owner>/<repository>.git 2brain
+```
+
+When git asks, give your GitHub user name and paste the token as the password (nothing is
+echoed). The token is stored in `~/.git-credentials` on the host, readable only by your user.
+
 ## Create the Docker network
 
 The service and your reverse proxy talk over a shared Docker network. The default name is `n8n`.
 If n8n or your proxy already runs on a network, skip the command and give that network's name
-when setup asks for it (it is stored as `N8N_NETWORK`). Otherwise create it:
+when setup asks for it (it is stored as `N8N_NETWORK`). To find it, list the networks:
+
+```bash
+docker network ls
+```
+
+Compose names a project's network `<project>_default`. For example, n8n installed from the
+n8n-docker-caddy example runs on `n8n-docker-caddy_default`. If no network fits, create one:
 
 ```bash
 docker network create n8n
@@ -143,6 +165,22 @@ server {
 
 Reload the proxy after editing its configuration.
 
+If Caddy runs in a container (as in the n8n-docker-caddy example), find the Caddyfile on the host
+from the container's mounts. The line that ends in `-> /etc/caddy/Caddyfile` shows the host path:
+
+```bash
+docker inspect <caddy container> --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'
+```
+
+Add the block above to that file, then reload Caddy without stopping n8n:
+
+```bash
+docker exec <caddy container> caddy reload --config /etc/caddy/Caddyfile
+```
+
+`docker ps` lists the container names. Caddy requests the HTTPS certificate on its own once the
+domain's DNS record points at the host.
+
 ## Run doctor
 
 ```bash
@@ -194,6 +232,15 @@ docker compose run --rm doctor
 ```
 
 Your `.env`, `secrets/` and vault are kept.
+
+## After a host restart
+
+The compose file sets no restart policy yet, so `brain` does not start again by itself when the
+host reboots. After a reboot, run this from the `2brain` directory:
+
+```bash
+docker compose up -d
+```
 
 ## Troubleshooting
 
