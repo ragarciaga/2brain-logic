@@ -1,122 +1,95 @@
 # Meetings guide
 
-This guide connects your meeting sources to the vault. Two n8n workflows read meetings and post
-them to the ingest API: one for Fireflies and one for Google Meet transcripts (Gemini notes). Each
-meeting becomes one note in your vault. For the install itself, see [INSTALL.md](INSTALL.md).
+This guide brings your recorded meetings into the vault. One n8n workflow reads Fireflies
+transcripts and Google Meet transcripts (the "Notes by Gemini" documents in Drive) and posts each
+meeting to the service. It runs when you ask for it from an AI client, through the
+`import_meetings` tool, and once a day on its own. Each meeting becomes one note in your vault,
+named from your calendar. For the install itself, see [INSTALL.md](INSTALL.md).
 
 ## Before you start
 
 - INSTALL.md is done, including the `2brain ingest` credential, and n8n runs on the same Docker
   network as the service.
-- Check your Fireflies plan's daily API request limit, and whether the plan offers webhooks. The
-  defaults in this guide assume a limit of about 50 requests a day. If your limit is lower, change
-  the budget as described below.
-- For Google Meet, your Workspace edition must produce Meet transcripts.
-- The templates target n8n 2.39.8.
+- A Fireflies account whose plan allows API access. Check its daily API request limit: one import
+  uses one list request plus one request per new meeting.
+- A Composio account with Google Drive and Google Calendar connected for the Google account that
+  receives your meetings. The workflow reaches Google through Composio, so no Google Cloud project
+  or OAuth client is needed. Check your Composio plan's monthly limit: one import uses one Drive
+  search, one export per new Gemini meeting and one calendar lookup per meeting.
+- For Gemini, Google Meet must take notes with Gemini and include the transcript. Gemini writes a
+  document named `<title> - YYYY/MM/DD HH:MM <zone> - Notes by Gemini` and shares it with the
+  invited guests of the organizer's organization.
+- The template targets n8n 2.39.8, which has the `MCP Client` node.
 
-## Import the templates
+## How an import runs
 
-In n8n, import both files from the `n8n/templates/` folder of the repository:
+1. You ask an AI client connected to your brain, for example "bring my meetings from today". It
+   calls `import_meetings` with `days` from 1 to 7 (1 when not given).
+2. The service posts `{ "days": n }` to the workflow's webhook on the internal network, with your
+   ingest token, and waits up to 50 seconds.
+3. The workflow lists the Fireflies transcripts and the Gemini documents of the last `days` days,
+   then, one meeting at a time, fetches it, reads the calendar events around it and posts it to
+   `http://brain:3000/meetings`.
+4. It answers with the stored paths, the paths already stored, and how many meetings were skipped
+   or failed. If it takes longer than 50 seconds, the tool answers `pending: true`; the workflow
+   keeps running, and `recent` shows the notes a minute later.
 
-- `meetings-fireflies.json`
-- `meetings-gemini.json`
+The `Daily sweep` trigger runs the same import with `days` 1 every night at 23:30 (n8n's time
+zone), so a meeting you never asked for still reaches the vault.
 
-Both post to `http://brain:3000/meetings`. If a node shows a credential warning after the import,
-open it and pick the credential of that name.
+The service stores only the transcript. Of a Gemini document it keeps the part after the
+`<title> - Transcript` heading, never Gemini's notes. Speaker names stay as the source delivers
+them: Fireflies may write `Speaker 1` when it records without joining the call, while Gemini writes
+each person's name.
+
+## Import the template
+
+In n8n, import `n8n/templates/meetings-import.json` from the repository. If a node shows a
+credential warning after the import, open it and pick the credential of that name.
 
 ## Credentials
 
-Create these four credentials in n8n. The names must match, because the templates refer to them by
-name.
+Create these three credentials in n8n. The names must match, because the template refers to them
+by name.
 
-- `2brain ingest`: Header Auth, see INSTALL.md.
+- `2brain ingest`: Header Auth, see INSTALL.md. The workflow uses it twice: to post meetings, and
+  on its webhook, so only the service can start an import.
 - `Fireflies API`: Header Auth, header name `Authorization`, value `Bearer <your Fireflies API key>`.
   Check the exact header format in the Fireflies API documentation.
-- `Google Calendar`: Google Calendar OAuth2 API. The templates only read events, with GET
-  requests. If the credential lets you choose scopes, use
-  `https://www.googleapis.com/auth/calendar.readonly`.
-- `Google Meet`: Google OAuth2 API, scope `https://www.googleapis.com/auth/meetings.space.readonly`.
+- `Composio MCP`: Header Auth, header name `x-consumer-api-key`, value your Composio MCP key. That
+  key reaches every account you connected in Composio; keep it only in this credential.
 
-Both workflows have a `Settings` node. Open it to change these values:
+## Settings
 
+Open the `Settings` node and replace the placeholders:
+
+- `composio_mcp_url`: the MCP server address your Composio dashboard shows for MCP clients.
+- `drive_account`: the Composio account id of the Google Drive connection that receives the Gemini
+  documents.
+- `calendar_account`: the Composio account id of the Google Calendar connection with your meetings.
 - `calendar_id`: `primary`. The calendar the workflow reads to find the event of each meeting.
 
-The Fireflies workflow has two more values, described in the next sections.
+An AI client connected to Composio can list your account ids, or you can copy them from the
+Composio dashboard.
 
-## Fireflies: poll or webhook mode
+## Connect the service
 
-The Fireflies workflow ships in poll mode: `Poll schedule` is on and `Fireflies webhook` is
-disabled. Poll mode needs only an API key, so it should work on any plan that allows API access.
-Use webhook mode only if your plan offers webhooks.
+Add the workflow's webhook address to `.env` on the host, then restart the service:
 
-Run one mode only. The executions of a workflow share its static data without locking, so two
-triggers at once can overwrite each other's state.
+```bash
+echo 'MEETINGS_IMPORT_URL=http://n8n:5678/webhook/2brain-meetings-import' >> .env
+docker compose up -d
+```
 
-## Fireflies: poll interval and daily budget
+`n8n` is the name of the n8n container on the shared Docker network. If yours differs, use the
+name `docker ps` shows and the port n8n listens on. Without this variable, `import_meetings`
+answers `import_not_configured`.
 
-The `Settings` node of the Fireflies workflow has two values:
+## Activate the workflow
 
-- `poll_interval_minutes`: `60`
-- `daily_budget`: `40`
-
-The schedule does not read `poll_interval_minutes`. To change the interval, edit the
-`Poll schedule` trigger and set `poll_interval_minutes` in `Settings` to the same value, so that
-the two agree.
-
-Every request to Fireflies counts against `daily_budget`, retries included, per UTC day. One list
-request runs per poll, and one fetch runs per new transcript (up to 3 tries each).
-
-- `1440/interval` list requests a day: 24 at the default interval.
-- `daily_budget - 24` is what is left for fetches: 16 at the defaults.
-
-Keep `daily_budget` below your plan's daily API request limit. If you have more meetings than the
-fetches left, lengthen the interval: at 120 minutes there are 12 list requests, which leaves 28
-fetches.
-
-When the budget is used up, the listed ids stay pending until the next UTC day.
-
-During an ingest outage one execution can take about 3 minutes per meeting and overlap the next
-poll. Keep the interval at 60 minutes or more, and keep the budget modest.
-
-## Fireflies webhook mode
-
-In this order:
-
-1. Replace the path `REPLACE-WITH-RANDOM-PATH` in the `Fireflies webhook` node with a long random
-   value. This is required: the placeholder is public, and anyone who knows the URL can call it.
-2. Disable `Poll schedule` and enable `Fireflies webhook`.
-3. In Fireflies, enter the Production URL of the `Fireflies webhook` node.
-4. Only the `Transcription completed` event is used. The webhook path goes through `Settings`, so
-   it uses `calendar_id` and `daily_budget` too.
-5. Nothing is kept pending in webhook mode. If the daily budget is reached, Fireflies answers a
-   rate-limit error, or ingest still answers 502 or 503 after the last post, the execution ends
-   without an error and the meeting is not fetched again. A fetch or calendar failure fails the
-   execution.
-6. Recovery: within 24 hours, switch to poll mode for one poll. It fetches the meetings of the last
-   24 hours that were not posted.
-
-## Activate the workflows
-
-Activate both workflows instead of running them by hand. Activation is what makes the schedules
-run.
-
-The Fireflies workflow keeps its state (posted and pending ids, and the daily count) in n8n static
-data, which n8n keeps only for active workflows. Check this in the n8n documentation for your
-version. Do not import that workflow again over a running one. Re-importing loses the state, and
-repeated meetings then answer `already_stored` and still use budget.
-
-The Gemini workflow keeps no state. Each poll posts every conference record of the last 24 hours
-again, and the repeats answer `already_stored`.
-
-## Google Meet: Workspace edition and Meet REST API
-
-1. Confirm with your admin, or in Google's edition comparison, that your Workspace edition produces
-   Meet transcripts and that transcripts are turned on.
-2. In a Google Cloud project, enable the Google Meet REST API and create the OAuth client that the
-   two Google credentials use.
-3. The Gemini workflow polls every 60 minutes for conference records that ended in the last 24
-   hours. If you change its interval, keep it well under 24 hours, or meetings fall out of the
-   window.
+Activate the workflow. Activation makes the webhook answer at its production address and the
+daily schedule run. Then ask your AI client to import today's meetings, and open the workflow's
+executions in n8n to see each step.
 
 ## Meetings config
 
@@ -149,48 +122,35 @@ meetings:
 - An area rule has a `domain` or a `calendar`, not both. The `area` must be one of your `areas`.
 - Rules match the exact email domain of the organizer or of a participant, or the calendar id of
   the event. The first rule that matches wins.
-- A `calendar` rule compares against the `calendar_id` of the `Settings` node of the workflow, so
-  the value is the same for every meeting that workflow posts. Prefer `domain` rules.
 - `default_area: null` means the first area of `areas`.
 - A meeting with no matching calendar event is named `Untitled meeting HH-MM`, using the label and
   the local start time.
+- When the same meeting arrives from both sources, the two notes link to each other through the
+  `versions` property.
 
 ## Source allow-list
 
 If the `sources` list of your config is not empty, add `fireflies` and `gemini`, the `value` of each
 entry under `meetings.sources`. Otherwise meeting posts get a 503 `config_invalid` answer, while
-other writes keep working. A 503 looks like an ingest outage, so check this first when only
-meetings fail. An empty `sources` list needs no change.
+other writes keep working.
 
-## Skips and retries
+## Skips and failures
 
-- Recordings of `min_minutes` (default 5) or less get `too_short`. Transcripts with no text get
-  `empty_transcript`. Both answer 200, write nothing and count as posted.
-- A meeting that was already stored answers `already_stored`.
-- Answers 502 and 503 are posted again 3 times, 60 seconds apart, so 4 posts in all. After that the
-  Fireflies poll keeps the id pending, and the Gemini workflow posts it again on a later poll while
-  the record is inside the 24 hour window.
-- A 4xx answer fails the execution at `Ingest refused`. The Fireflies workflow records the id as
-  posted and does not fetch it again: it stays recorded for 48 hours, which is longer than its 24
-  hour list window, and the webhook is not sent twice. To recover that meeting, fix the cause and
-  add the meeting to the vault by hand. The Gemini workflow repeats the failure on every poll for 24
-  hours.
-- A meeting whose source id holds a secret is refused with 400 and is not stored. Add that meeting
-  to the vault by hand.
-- Only the transcript fetch and the calendar calls of Fireflies, and the Meet and calendar calls of
-  Gemini, get 3 tries, 5 seconds apart, then the execution ends at
-  `Source or calendar failed` (Fireflies) or `Meet or calendar failed` (Gemini). The Fireflies poll
-  keeps the id pending.
-- A failed Fireflies list request (`List transcripts`) is not retried. The execution fails at
-  `Source or calendar failed` and makes no other Fireflies request; pending ids wait for the next
-  poll. A wrong API key shows up as failed executions: open the output of `List transcripts`. A
-  rate-limit answer is not a failure (next bullet).
-- A rate-limit error stops the Fireflies requests of that execution. The ids stay pending.
-- The Gemini workflow posts only transcripts in the state `FILE_GENERATED`.
+- Recordings of `min_minutes` (default 5) or less get `too_short`. Transcripts with no text, and
+  Gemini documents without a transcript, get `empty_transcript`. Both write nothing and count as
+  skipped.
+- A meeting that was already stored answers `already_stored`, so importing the same days again is
+  safe. Gemini writes one document per language for some meetings; the first one imported is
+  stored and the others answer `already_stored`.
+- A Gemini document whose name has no date, time or known time zone is refused with 400 and counts
+  as failed.
+- A meeting whose calendar lookup fails is not posted and counts as failed, so it is never stored
+  under a wrong name. The next import tries it again.
+- A failed Fireflies list or Drive search counts as one failure; the other source still runs.
 
 ## Privacy
 
 - The n8n execution history keeps transcripts, attendee names and emails. Limit it with the
   execution data settings of n8n.
-- Anyone who knows the webhook URL can send any meeting id, and n8n fetches it with your key. A team
-  key includes the meetings of your teammates. Keep the path secret, and prefer a personal key.
+- The webhook answers only requests that carry your ingest token.
+- Composio holds the Google connections and sees the documents it exports for the workflow.

@@ -3,6 +3,7 @@ import { loadEnv } from "./config/env.js";
 import { ConfigInvalidError, loadVaultConfig } from "./config/vault-config.js";
 import { defaultGit, ensureClone } from "./git/index.js";
 import { createPublicApp } from "./mcp/app.js";
+import { createMeetingsImporter } from "./meetings/import.js";
 import { configInvalidLogLine, createApp } from "./server/app.js";
 import { startServer } from "./server/start.js";
 import { createNoteWriter } from "./vault/write-note.js";
@@ -43,7 +44,18 @@ async function main(): Promise<void> {
   console.log(`auth store open: ${authStore.clientCount()} clients`);
   const { app: publicApp } = createPublicApp({
     baseUrl: PUBLIC_BASE_URL,
-    mcp: { writer, config: { vaultDir: env.VAULT_DIR } },
+    mcp: {
+      writer,
+      config: { vaultDir: env.VAULT_DIR },
+      ...(env.MEETINGS_IMPORT_URL === undefined
+        ? {}
+        : {
+            meetingsImporter: createMeetingsImporter({
+              url: env.MEETINGS_IMPORT_URL,
+              token: env.INGEST_TOKEN,
+            }),
+          }),
+    },
     auth: {
       store: authStore,
       allowedRedirectHosts: ALLOWED_REDIRECT_HOSTS,

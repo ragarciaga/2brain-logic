@@ -5,6 +5,7 @@ import { ingestTokenAuth } from "../auth/ingest-token.js";
 import { parseMeetingBody, secretSourceIdIssue } from "../meetings/schema.js";
 import type { MeetingInput, MeetingOk } from "../meetings/types.js";
 import { mapFireflies } from "../sources/fireflies/map.js";
+import { mapGeminiDoc } from "../sources/gemini/doc.js";
 import { mapGemini } from "../sources/gemini/map.js";
 import { NoteArchive, NoteInput, NotePatch } from "../vault/note-schema.js";
 import type { NoteWriter, WriteResult } from "../vault/write-note.js";
@@ -164,7 +165,9 @@ export function createApp({
         input =
           parsed.source === "fireflies"
             ? mapFireflies(parsed)
-            : mapGemini(parsed, { unknownSpeaker: "" });
+            : parsed.source === "gemini"
+              ? mapGemini(parsed, { unknownSpeaker: "" })
+              : mapGeminiDoc(parsed);
       } catch (error) {
         if (error instanceof z.ZodError) {
           return c.json({ ok: false, error: "invalid_body", issues: issuesOf(error) }, 400);

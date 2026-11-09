@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { scrub } from "../vault/scrub/index.js";
-import type { CalendarEvent, FirefliesBody, GeminiBody, MeetingBody } from "./types.js";
+import { parseGeminiDocName } from "./gemini-doc-name.js";
+import type {
+  CalendarEvent,
+  FirefliesBody,
+  GeminiBody,
+  GeminiDocBody,
+  MeetingBody,
+} from "./types.js";
 
 // Boundary validation for POST /meetings. Pure: no I/O, no config, no LLM.
 // Every message below is a fixed string; none interpolates received input, so a ZodError
@@ -139,13 +146,34 @@ const geminiSchema = z.object({
   calendar_events: calendarEvents,
 });
 
-export const meetingBodySchema = z.discriminatedUnion("source", [firefliesSchema, geminiSchema]);
+/** Upper bound of one exported doc: well above a 12 hour transcript, inside the 4 MiB body. */
+export const MAX_DOC_CHARS = 3_000_000;
+
+const geminiDocSchema = z.object({
+  source: z.literal("gemini_doc"),
+  doc: z.object({
+    id: field(),
+    name: field().refine((v) => parseGeminiDocName(v) !== undefined, {
+      error: "must be a Notes by Gemini document name with date, time and a known zone",
+    }),
+    text: z.string().max(MAX_DOC_CHARS, { error: "document is too long" }),
+  }),
+  created_time: rfc3339.optional(),
+  calendar_events: calendarEvents,
+});
+
+export const meetingBodySchema = z.discriminatedUnion("source", [
+  firefliesSchema,
+  geminiSchema,
+  geminiDocSchema,
+]);
 
 // Compile-time check: the schemas produce the contract types.
 type Assignable<T, _U extends T> = true;
 export type _SchemaMatchesTypes = [
   Assignable<FirefliesBody, z.infer<typeof firefliesSchema>>,
   Assignable<GeminiBody, z.infer<typeof geminiSchema>>,
+  Assignable<GeminiDocBody, z.infer<typeof geminiDocSchema>>,
   Assignable<CalendarEvent, z.infer<typeof calendarEvent>>,
 ];
 
@@ -163,8 +191,8 @@ export function parseMeetingBody(json: unknown): MeetingBody {
 
 /**
  * R8.7: the issue for a payload whose source id (`transcript.id` for Fireflies, `transcript.name`
- * for Gemini) changes under the scrub rules, else undefined. The message is fixed: it never holds
- * the value or the rule id.
+ * for Gemini, `doc.id` for a Gemini doc) changes under the scrub rules, else undefined. The
+ * message is fixed: it never holds the value or the rule id.
  */
 export function secretSourceIdIssue(
   body: MeetingBody,
@@ -172,7 +200,9 @@ export function secretSourceIdIssue(
   const [path, value] =
     body.source === "fireflies"
       ? (["transcript.id", body.transcript.id] as const)
-      : (["transcript.name", body.transcript.name] as const);
+      : body.source === "gemini"
+        ? (["transcript.name", body.transcript.name] as const)
+        : (["doc.id", body.doc.id] as const);
   return scrub(value).text === value ? undefined : { path, message: "must not contain a secret" };
 }
 

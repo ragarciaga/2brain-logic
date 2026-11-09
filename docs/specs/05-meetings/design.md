@@ -1,5 +1,8 @@
 # Design: Meetings without LLM
 
+> Superseded in part by docs/adr/0021-meetings-on-demand.md (2026-11-09): one on-demand import
+> workflow replaces the two polling templates, and Gemini meetings come from the notes doc.
+
 Status: approved  |  Date: 2026-11-01  |  Requirements: ./requirements.md
 ADRs: docs/adr/0018-meeting-versions-as-linked-notes.md, docs/adr/0019-meeting-ingest-contract.md, docs/adr/0020-meetings-config-section.md
 

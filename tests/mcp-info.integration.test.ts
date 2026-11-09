@@ -81,7 +81,7 @@ const CONFIG = [
 ].join("\n");
 
 describe("vault_info over the SDK client", () => {
-  it("R10.1: lists seven tools and returns a config pushed from another clone", async () => {
+  it("R10.1: lists the tools and returns a config pushed from another clone", async () => {
     const other = fixture.cloneElsewhere("info-seed");
     mkdirSync(dirname(join(other, ".2brain/config.yaml")), { recursive: true });
     writeFileSync(join(other, ".2brain/config.yaml"), CONFIG);
@@ -98,6 +98,7 @@ describe("vault_info over the SDK client", () => {
       "save_recipe",
       "update_properties",
       "vault_info",
+      "import_meetings",
     ]);
     const res = (await client.callTool({ name: "vault_info", arguments: {} })) as {
       isError?: boolean;
