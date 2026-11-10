@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_VAULT_CONFIG } from "../src/config/defaults.js";
 import type { VaultConfig } from "../src/config/vault-config.js";
-import { routeArea } from "../src/meetings/area.js";
+import { routeArea, titleWithoutPrefix } from "../src/meetings/area.js";
 import type { CalendarEvent, MeetingInput } from "../src/meetings/types.js";
 
 function cfgWith(
-  rules: { area: string; domain?: string; calendar?: string }[],
+  rules: { area: string; domain?: string; calendar?: string; title_prefix?: string }[],
   defaultArea: string | null = null,
 ): VaultConfig {
   const cfg = structuredClone(DEFAULT_VAULT_CONFIG);
@@ -115,5 +115,30 @@ describe("routeArea", () => {
     const cfg = cfgWith([{ area: "work", domain: "example.com" }], "personal");
     const i = input({ organizerEmail: "example.com", people: [{ email: "ana@" }] });
     expect(routeArea(event(), i, cfg)).toBe("personal");
+  });
+});
+
+describe("title_prefix rules", () => {
+  const rules = [
+    { area: "work", title_prefix: "Work · " },
+    { area: "personal", title_prefix: "AG · " },
+  ];
+
+  it("routes by the start of the event title, ignoring case, before the default", () => {
+    const cfg = cfgWith(rules, "personal");
+    expect(routeArea(event({ title: "Work · Pilot review" }), input(), cfg)).toBe("work");
+    expect(routeArea(event({ title: "work · pilot review" }), input(), cfg)).toBe("work");
+    expect(routeArea(event({ title: "AG · Dentist" }), input(), cfg)).toBe("personal");
+    expect(routeArea(event({ title: "Pilot review · Work · " }), input(), cfg)).toBe("personal");
+    expect(routeArea(undefined, input(), cfgWith(rules, "work"))).toBe("work");
+  });
+
+  it("leaves the matching prefix out of the title, and keeps a title that is only the prefix", () => {
+    const cfg = cfgWith(rules);
+    expect(titleWithoutPrefix("Work · Pilot review", cfg)).toBe("Pilot review");
+    expect(titleWithoutPrefix("  work · Pilot review", cfg)).toBe("Pilot review");
+    expect(titleWithoutPrefix("Pilot review", cfg)).toBe("Pilot review");
+    expect(titleWithoutPrefix("Work · ", cfg)).toBe("Work · ");
+    expect(titleWithoutPrefix("Work · Pilot", cfgWith([]))).toBe("Work · Pilot");
   });
 });

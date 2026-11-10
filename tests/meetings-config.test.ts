@@ -235,3 +235,24 @@ describe("requireMeetingSetup", () => {
     requireMeetingSetup(await loadVaultConfig(dir));
   });
 });
+
+describe("title_prefix area rules", () => {
+  it("accepts a title_prefix rule and refuses a rule with two kinds or none", async () => {
+    const { VaultConfigSchema } = await import("../src/config/vault-config.js");
+    const base = { areas: ["personal", "work"] };
+    const ok = VaultConfigSchema.safeParse({
+      ...base,
+      meetings: { area_rules: [{ area: "work", title_prefix: "Work · " }] },
+    });
+    expect(ok.success).toBe(true);
+    for (const rule of [
+      { area: "work", title_prefix: "Work · ", domain: "example.com" },
+      { area: "work" },
+      { area: "work", title_prefix: "" },
+    ]) {
+      expect(
+        VaultConfigSchema.safeParse({ ...base, meetings: { area_rules: [rule] } }).success,
+      ).toBe(false);
+    }
+  });
+});

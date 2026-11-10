@@ -37,7 +37,8 @@ types:
   session: { value: session, folder: "{area}/sessions" }
 
 # Meeting settings. Recordings of min_minutes or less are skipped. Dates and times use the zone.
-# A default_area of null means the first area. Each area rule has a domain or a calendar, not both.
+# A default_area of null means the first area. Each area rule has one of domain, calendar or
+# title_prefix (the start of the event title; it is left out of the note name).
 # Source values are stored in the source property; labels name extra versions of a meeting.
 meetings:
   timezone: UTC

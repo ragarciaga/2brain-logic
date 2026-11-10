@@ -4,12 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_VAULT_CONFIG } from "../src/config/defaults.js";
 import { VaultConfigSchema } from "../src/config/vault-config.js";
 import { parseYamlConfig } from "../src/vault/frontmatter.js";
-import {
-  loadTemplate,
-  type N8nNode,
-  type N8nTemplate,
-  nodeByName,
-} from "./helpers/n8n-template.js";
+import { loadTemplate, type N8nTemplate, nodeByName } from "./helpers/n8n-template.js";
 import { scanOwnerData } from "./plugin/helpers/plugin-scan.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -141,14 +136,6 @@ describe("docs/GUIDE-meetings.md", () => {
       expect(rest).toStrictEqual(expected);
       expect(VaultConfigSchema.safeParse(parsed).success).toBe(true);
     });
-  });
-
-  it("tells the owner to extend a non-empty sources allow-list", () => {
-    const values = Object.values(vaultConfig.meetings.sources).map((s) => s.value);
-    expect(values).toEqual(["fireflies", "gemini"]);
-    const body = section(guide, "Source allow-list");
-    const re = new RegExp(`\`sources\`[^\\n]*\`${values[0]}\`[^\\n]*\`${values[1]}\``);
-    expect(body).toMatch(re);
   });
 
   it("tells the owner to extend a non-empty sources allow-list", () => {

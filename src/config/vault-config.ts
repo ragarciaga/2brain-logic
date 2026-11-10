@@ -131,6 +131,7 @@ const AreaRuleSchema = z.strictObject({
   area: nonEmpty,
   domain: nonEmpty.optional(),
   calendar: nonEmpty.optional(),
+  title_prefix: nonEmpty.max(100).optional(),
 });
 
 const MEETING_PROPERTY_KEYS = [
@@ -185,6 +186,8 @@ export interface AreaRule {
   area: string;
   domain?: string | undefined;
   calendar?: string | undefined;
+  /** Matches an event title that starts with it; the prefix is left out of the note name. */
+  title_prefix?: string | undefined;
 }
 
 export interface MeetingSource {
@@ -247,8 +250,12 @@ export const VaultConfigSchema: z.ZodType<VaultConfig, unknown> = z
     };
 
     meetings.area_rules.forEach((rule, i) => {
-      if ((rule.domain === undefined) === (rule.calendar === undefined)) {
-        add(["area_rules", i], "an area rule needs exactly one of domain or calendar");
+      const kinds = [rule.domain, rule.calendar, rule.title_prefix].filter((v) => v !== undefined);
+      if (kinds.length !== 1) {
+        add(
+          ["area_rules", i],
+          "an area rule needs exactly one of domain, calendar or title_prefix",
+        );
       }
       if (!config.areas.includes(rule.area)) {
         add(["area_rules", i, "area"], `"${rule.area}" is not one of the configured areas`);
