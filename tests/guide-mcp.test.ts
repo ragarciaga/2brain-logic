@@ -62,6 +62,7 @@ describe("docs/GUIDE-mcp.md", () => {
     "save_note",
     "save_recipe",
     "update_properties",
+    "append_to_note",
     "vault_info",
     "import_meetings",
   ]) {
@@ -70,9 +71,9 @@ describe("docs/GUIDE-mcp.md", () => {
     });
   }
 
-  it("says eight tools, describes vault_info as read only and no longer says seven", () => {
-    expect(guide).toContain("eight tools");
-    expect(guide).not.toContain("seven tools");
+  it("says nine tools, describes vault_info as read only and no longer says eight", () => {
+    expect(guide).toContain("nine tools");
+    expect(guide).not.toContain("eight tools");
     expect(guide).toMatch(/- `vault_info`: read only;/);
   });
 

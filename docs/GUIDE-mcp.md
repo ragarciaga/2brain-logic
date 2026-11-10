@@ -8,7 +8,7 @@ and Codex or ChatGPT. The examples use `https://brain.example.com`; use your own
 
 The service exposes one HTTPS origin (`PUBLIC_BASE_URL`) and the MCP endpoint is
 `<PUBLIC_BASE_URL>/mcp`, for example `https://brain.example.com/mcp`. Clients sign in with your
-owner passphrase through OAuth. After that they can use eight tools:
+owner passphrase through OAuth. After that they can use nine tools:
 
 - `search`: find notes in the vault.
 - `read`: read one note by its vault path.
@@ -16,6 +16,8 @@ owner passphrase through OAuth. After that they can use eight tools:
 - `save_note`: create a note.
 - `save_recipe`: save a recipe note.
 - `update_properties`: change the properties of an existing note.
+- `append_to_note`: add text at the end of an existing note. What the note already says is never
+  changed, and meeting transcripts are refused.
 - `vault_info`: read only; describe the vault's areas, property names, note types with their
   folders, and the archive folder.
 - `import_meetings`: bring the meetings of the last days from Fireflies and Gemini into the vault,

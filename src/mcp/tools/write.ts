@@ -20,7 +20,8 @@ import {
 import type { McpServerDeps, McpToolDefinition } from "../server.js";
 
 /**
- * The write tools: `save_note`, `save_recipe` and `update_properties` (R9.1 to R9.5).
+ * The write tools: `save_note`, `save_recipe`, `update_properties` (R9.1 to R9.5) and
+ * `append_to_note` (docs/adr/0023-mcp-append.md).
  *
  * - `save_note` and `save_recipe` save through `VaultWriter.write`, the same create path as
  *   `POST /notes`; `update_properties` goes through `VaultWriter.patch`, the same path as
@@ -30,6 +31,9 @@ import type { McpServerDeps, McpToolDefinition } from "../server.js";
  * - Every answer is `{ ok: true, ... }` or the body `mapWriteError` gives the ingest API for the
  *   same error, so codes and detail fields cannot drift. Handlers never throw, and no result or
  *   log line carries note content, a request value, an error message or a stack.
+ * - `append_to_note` goes through the same `VaultWriter.patch` path with `append` only: the
+ *   stored bytes are kept, the text is scrubbed and its remote embeds neutralized, and a note of a
+ *   type with an immutable body (a transcript) is refused.
  * - There is no tool that deletes, moves, renames or archives a file.
  */
 
@@ -38,6 +42,8 @@ const TITLE_MAX = 200;
 const AREA_MAX = 100;
 const SOURCE_MAX = 100;
 const PATH_MAX = 1024;
+/** Most text one append may add: a long section, far below the 2 MiB MCP body cap. */
+export const APPEND_MAX = 100_000;
 
 export interface WriteToolOptions {
   /** Test seam for the clock (the recipe date is its UTC day). */
@@ -365,7 +371,35 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
     },
   };
 
-  return [saveNote, saveRecipe, updateProperties];
+  const appendToNote: McpToolDefinition = {
+    name: "append_to_note",
+    register(server: McpServer, deps: McpServerDeps) {
+      server.registerTool(
+        "append_to_note",
+        {
+          description:
+            "Add text at the end of the body of an existing note, after a blank line, for example a dated section with new decisions or facts. What the note already says is never changed or removed. Meeting transcripts (types with an immutable body) are refused. Search first to find the note and read it to avoid repeating what it already says. Secrets are redacted and remote image embeds are turned into links before the text is stored.",
+          inputSchema: z.object({
+            path: text("path", PATH_MAX),
+            text: z
+              .string({ message: "text must be a string" })
+              .min(1, { message: "text must not be empty" })
+              .max(APPEND_MAX, { message: "text is too long" })
+              .refine((t) => t.trim() !== "", { message: "text must not be blank" }),
+          }),
+        },
+        (args) =>
+          run("append_to_note", async () => {
+            // The same patch path as PATCH /notes: earlier bytes kept, scrub, embeds, immutable refused.
+            const parsed = NotePatch.safeParse({ path: args.path, append: args.text });
+            if (!parsed.success) return invalidBody(issuesOf(parsed.error));
+            return viaWriter(() => deps.writer.patch(parsed.data));
+          }),
+      );
+    },
+  };
+
+  return [saveNote, saveRecipe, updateProperties, appendToNote];
 }
 
 export const WRITE_TOOLS: readonly McpToolDefinition[] = Object.freeze(createWriteTools());
