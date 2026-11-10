@@ -207,6 +207,7 @@ Claude Code, Codex and ChatGPT, see [GUIDE-mcp.md](GUIDE-mcp.md).
 
 In a claude.ai chat that has the connector enabled, ask Claude to save a short test note with
 `save_note`. Then open your vault repository and check that a new commit with the note appears.
+To read and edit the notes in Obsidian on your computer, see [GUIDE-obsidian.md](GUIDE-obsidian.md).
 To capture your Claude Code sessions as notes too, see [GUIDE-plugin.md](GUIDE-plugin.md).
 
 ## n8n credential
