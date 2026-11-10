@@ -69,3 +69,4 @@ Minutes per phase.
 Open (started, not ended): T5/verify, T8/plan.
 <!-- rb:timing:end -->
 - 2026-11-01: retro on F4 and F5: 5 lessons, 0 config changes, 0 autonomy changes, 5 harness issues (ragarciaga/rockbuilt#45 to #49) plus evidence comments on ragarciaga/rockbuilt#42 and #43.
+- 2026-11-10: retro on the out-of-cycle work of 2026-11-09 and 2026-11-10 (PRs #250 to #262): 2 lessons, 1 config change (baseline recorded; branch protection left to the owner, `rb protect` was blocked in the cloud session), 0 autonomy changes, 5 harness issues (ragarciaga/rockbuilt#63 to #67) plus related links on #55, #56, #59 and evidence on #60.
