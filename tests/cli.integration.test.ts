@@ -801,3 +801,22 @@ describe("entry point", () => {
     }
   });
 });
+
+describe("init-vault flags (#34)", () => {
+  it("prints usage on stdout for --help and -h, and seeds nothing", async () => {
+    for (const flag of ["--help", "-h"]) {
+      const { io, out, err } = fakeIo();
+      expect(await main(["init-vault", flag], io)).toBe(0);
+      expect(out.join("\n")).toContain("usage: node dist/cli.js init-vault <dir>");
+      expect(err).toEqual([]);
+      expect(existsSync(join(process.cwd(), flag))).toBe(false);
+    }
+  });
+
+  it("refuses any other flag as a usage error, without seeding a directory named after it", async () => {
+    const { io, err } = fakeIo();
+    expect(await main(["init-vault", "--force"], io)).toBe(2);
+    expect(err.join("\n")).toContain("usage:");
+    expect(existsSync(join(process.cwd(), "--force"))).toBe(false);
+  });
+});

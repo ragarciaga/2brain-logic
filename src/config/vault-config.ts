@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { parseYamlConfig } from "../vault/frontmatter.js";
+import { isSafePathSegment } from "../vault/note-schema.js";
 import { DEFAULT_VAULT_CONFIG } from "./defaults.js";
 
 export const CONFIG_FILE = ".2brain/config.yaml";
@@ -28,14 +29,13 @@ export class ConfigInvalidError extends Error {
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
 /** One path segment: non-empty, no separators, no control characters, not hidden or `..`. */
+/**
+ * One folder or area name: the note path rule (src/vault/note-schema.ts), so a config that names a
+ * folder no note could be written to (`CON`, `notes.`, `a:b`) fails as `config_invalid` instead
+ * of every create of that type failing as `invalid_body`.
+ */
 function isSafeSegment(value: string): boolean {
-  return (
-    value !== "" &&
-    !value.includes("/") &&
-    !value.includes("\\") &&
-    !CONTROL_CHARS.test(value) &&
-    !value.startsWith(".")
-  );
+  return !value.includes("/") && !value.includes("\\") && isSafePathSegment(value);
 }
 
 /** A relative folder: safe segments joined by `/`, no drive letter. */

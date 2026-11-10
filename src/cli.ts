@@ -254,7 +254,18 @@ export async function main(
   if (argv[0] === "doctor") {
     return doctorCommand(argv.slice(1), io, options.doctorDeps ?? {});
   }
-  if (argv[0] !== "init-vault" || argv.length !== 2 || argv[1] === undefined || argv[1] === "") {
+  if (argv[0] === "init-vault" && (argv[1] === "--help" || argv[1] === "-h")) {
+    io.stdout(USAGE);
+    return 0;
+  }
+  // A flag is never a directory name: `init-vault --force` must not seed a vault named `--force`.
+  if (
+    argv[0] !== "init-vault" ||
+    argv.length !== 2 ||
+    argv[1] === undefined ||
+    argv[1] === "" ||
+    argv[1].startsWith("-")
+  ) {
     io.stderr(USAGE);
     return 2;
   }

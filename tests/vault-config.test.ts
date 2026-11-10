@@ -278,3 +278,28 @@ describe("expandTypeFolders", () => {
     expect(expandTypeFolders(config)).toStrictEqual(["plain", "home/x"]);
   });
 });
+
+describe("config folders and areas follow the note path rule (#37)", () => {
+  const cases: [string, string][] = [
+    ["archive_folder: CON", "vault:\n  archive_folder: CON\n"],
+    ["area aux", "areas: [personal, aux]\n"],
+    ["type folder notes.", "types:\n  idea: { value: idea, folder: notes. }\n"],
+    ["inbox folder with a colon", 'vault:\n  inbox_folder: "in:box"\n'],
+  ];
+  for (const [name, yaml] of cases) {
+    it(`refuses ${name} as config_invalid`, async () => {
+      mkdirSync(join(dir, ".2brain"), { recursive: true });
+      writeFileSync(join(dir, ".2brain", "config.yaml"), yaml);
+      await expect(loadVaultConfig(dir)).rejects.toBeInstanceOf(ConfigInvalidError);
+    });
+  }
+
+  it("still accepts spaces inside a name and the {area} pattern", async () => {
+    mkdirSync(join(dir, ".2brain"), { recursive: true });
+    writeFileSync(
+      join(dir, ".2brain", "config.yaml"),
+      'vault:\n  inbox_folder: "00 inbox"\ntypes:\n  idea: { value: idea, folder: "{area}/ideas" }\n',
+    );
+    expect((await loadVaultConfig(dir)).vault.inbox_folder).toBe("00 inbox");
+  });
+});
