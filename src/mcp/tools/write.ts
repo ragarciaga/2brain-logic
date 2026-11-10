@@ -274,12 +274,16 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
         "save_note",
         {
           description:
-            "Save a new note at a vault path with frontmatter and a body. Secrets are redacted before it is stored. Fails when the path already exists.",
+            "Save a new note at a vault path with frontmatter and a body. Call vault_info first: it gives the property names, areas, note types and the folder of each type. The frontmatter must hold the type, area and date properties under the names vault_info returns (date as YYYY-MM-DD), and the path must sit in the folder of that type. Secrets are redacted before it is stored. Fails when the path already exists.",
           inputSchema: z.object({
             path: text("path", PATH_MAX),
-            frontmatter: z.record(z.string(), z.unknown(), {
-              message: "frontmatter must be an object",
-            }),
+            frontmatter: z
+              .record(z.string(), z.unknown(), {
+                message: "frontmatter must be an object",
+              })
+              .describe(
+                "Properties of the note. Required: the type, area and date properties named by vault_info.",
+              ),
             body: z.string({ message: "body must be a string" }),
           }),
         },
@@ -334,7 +338,7 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
         "update_properties",
         {
           description:
-            "Set frontmatter properties of an existing note. Top-level keys in set replace the stored ones and the others are kept. The body is never changed. Secrets are redacted before they are stored.",
+            "Set frontmatter properties of an existing note. Top-level keys in set replace the stored ones and the others are kept. Use the property names vault_info returns. The body is never changed. Secrets are redacted before they are stored.",
           // Loose on purpose: a key the schema does not name must reach the handler, which refuses
           // it. A plain object schema would strip `append` and apply `set` as if it were absent.
           inputSchema: z.looseObject({

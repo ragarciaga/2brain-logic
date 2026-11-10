@@ -1063,3 +1063,18 @@ describe("R9.5: the registry", () => {
     }
   });
 });
+
+describe("#251: write tool descriptions point to vault_info", () => {
+  it("save_note names the required properties and vault_info, and update_properties points to it", async () => {
+    const { client } = await connect();
+    const tools = (await client.listTools()).tools;
+    const saveNote = tools.find((t) => t.name === "save_note");
+    const update = tools.find((t) => t.name === "update_properties");
+    expect(saveNote?.description).toMatch(/vault_info/);
+    expect(saveNote?.description).toMatch(/type, area and date/);
+    const fm = (saveNote?.inputSchema.properties as Record<string, { description?: string }>)
+      .frontmatter;
+    expect(fm?.description).toMatch(/vault_info/);
+    expect(update?.description).toMatch(/vault_info/);
+  });
+});
