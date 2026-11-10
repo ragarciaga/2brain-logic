@@ -1,6 +1,7 @@
 import { DEFAULT_VAULT_CONFIG } from "../config/defaults.js";
 import { CONFIG_FILE, ConfigInvalidError, type VaultConfig } from "../config/vault-config.js";
 import { scrub } from "../vault/scrub/index.js";
+import { titleWithoutPrefix } from "./area.js";
 import type { CalendarEvent } from "./types.js";
 
 // Names a meeting note: `<folder>/YYYY-MM-DD · <title>.md` (docs/specs/05-meetings/design.md).
@@ -98,7 +99,7 @@ export function meetingTitle(
   maxBytes: number = Number.MAX_SAFE_INTEGER,
 ): string {
   if (event?.title !== undefined) {
-    const title = safeText(event.title, maxLen, maxBytes);
+    const title = safeText(titleWithoutPrefix(event.title, cfg), maxLen, maxBytes);
     if (title !== "") return title;
   }
   const labelMax = Math.max(maxLen - TIME_SUFFIX_LENGTH, 0);

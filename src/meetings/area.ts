@@ -14,10 +14,39 @@ function domainOf(email: string | undefined): string | undefined {
   return domain === "" ? undefined : domain;
 }
 
+/** True when the title starts with the prefix, ignoring case and leading spaces. */
+export function hasTitlePrefix(title: string | undefined, prefix: string): boolean {
+  if (title === undefined) return false;
+  return title
+    .normalize("NFC")
+    .trimStart()
+    .toLowerCase()
+    .startsWith(prefix.normalize("NFC").toLowerCase());
+}
+
 /**
- * The area of the first `meetings.area_rules` entry that matches the event's calendar id or the
- * exact email domain of the input organizer, the event organizer or any participant. Without a
- * match: `default_area`, or the first configured area when that is null.
+ * The event title without the first `title_prefix` of `meetings.area_rules` it starts with, so a
+ * calendar that tags titles (`BFA · Weekly`) still names the note after the meeting. A title
+ * that is only the prefix is kept as it is.
+ */
+export function titleWithoutPrefix(title: string, cfg: VaultConfig): string {
+  for (const rule of cfg.meetings.area_rules) {
+    if (rule.title_prefix === undefined || !hasTitlePrefix(title, rule.title_prefix)) continue;
+    const rest = title
+      .normalize("NFC")
+      .trimStart()
+      .slice(rule.title_prefix.normalize("NFC").length)
+      .trim();
+    return rest === "" ? title : rest;
+  }
+  return title;
+}
+
+/**
+ * The area of the first `meetings.area_rules` entry that matches the event's calendar id, the
+ * start of the event title, or the exact email domain of the input organizer, the event organizer
+ * or any participant. Without a match: `default_area`, or the first configured area when that is
+ * null.
  */
 export function routeArea(
   event: CalendarEvent | undefined,
@@ -36,6 +65,9 @@ export function routeArea(
   }
   for (const rule of cfg.meetings.area_rules) {
     if (rule.calendar !== undefined && event?.calendar_id === rule.calendar) return rule.area;
+    if (rule.title_prefix !== undefined && hasTitlePrefix(event?.title, rule.title_prefix)) {
+      return rule.area;
+    }
     if (rule.domain !== undefined && domains.has(rule.domain.trim().toLowerCase())) {
       return rule.area;
     }

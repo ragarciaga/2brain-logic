@@ -270,3 +270,12 @@ describe("every path is a valid NotePath", () => {
     expect(NotePath.safeParse(r.path).success).toBe(true);
   });
 });
+
+describe("title prefix", () => {
+  it("names the note without the prefix of a title_prefix rule", () => {
+    const c = cfg({ area_rules: [{ area: "work", title_prefix: "Work · " }] });
+    const ev = { id: "e1", title: "Work · Pilot review", start: {}, end: {} };
+    expect(meetingTitle(ev, START, c, 200)).toBe("Pilot review");
+    expect(meetingTitle(ev, START, cfg(), 200)).toBe("Work · Pilot review");
+  });
+});

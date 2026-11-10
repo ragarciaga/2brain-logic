@@ -119,9 +119,13 @@ meetings:
     versions: versions
 ```
 
-- An area rule has a `domain` or a `calendar`, not both. The `area` must be one of your `areas`.
-- Rules match the exact email domain of the organizer or of a participant, or the calendar id of
-  the event. The first rule that matches wins.
+- An area rule has one of `domain`, `calendar` or `title_prefix`. The `area` must be one of your
+  `areas`.
+- Rules match the exact email domain of the organizer or of a participant, the calendar id of the
+  event, or the start of the event title (case is ignored). The first rule that matches wins.
+- Use `title_prefix` when your calendar copies events from other calendars and tags their titles,
+  for example `{ title_prefix: "Work · ", area: work }`. Copied events usually carry no guests, so
+  `domain` rules cannot match them. The prefix is left out of the note name.
 - `default_area: null` means the first area of `areas`.
 - A meeting with no matching calendar event is named `Untitled meeting HH-MM`, using the label and
   the local start time.
