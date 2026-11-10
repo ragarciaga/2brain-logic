@@ -169,6 +169,69 @@ export async function unstageFile(dir: string, relPath: string): Promise<void> {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
+/** One tracked path that differs from HEAD: its index (`X`) and worktree (`Y`) status letters. */
+export interface TrackedChange {
+  path: string;
+  index: string;
+  worktree: string;
+}
+
+/**
+ * Tracked paths whose index or worktree differs from HEAD (`git status`, untracked files left out,
+ * renames reported as a delete and an add). A path whose name is not valid UTF-8 is skipped.
+ */
+export async function trackedChanges(dir: string): Promise<TrackedChange[]> {
+  const out = await runGitBuffer(dir, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=no",
+    "--no-renames",
+  ]);
+  const changes: TrackedChange[] = [];
+  for (const record of splitNul(out)) {
+    if (record.length < 4) continue;
+    let path: string;
+    try {
+      path = STRICT_UTF8.decode(record.subarray(3));
+    } catch {
+      continue;
+    }
+    changes.push({
+      path,
+      index: String.fromCharCode(record[0] ?? 32),
+      worktree: String.fromCharCode(record[1] ?? 32),
+    });
+  }
+  return changes;
+}
+
+/**
+ * The bytes of `relPath` at HEAD (`from: "head"`) or in the index (`from: "index"`); undefined
+ * when there is no such blob.
+ */
+export async function readBlob(
+  dir: string,
+  relPath: string,
+  from: "head" | "index",
+): Promise<Buffer | undefined> {
+  try {
+    return await runGitBuffer(dir, [
+      "cat-file",
+      "blob",
+      `${from === "head" ? "HEAD" : ""}:${relPath}`,
+    ]);
+  } catch (error) {
+    if (error instanceof GitError) return undefined;
+    throw error;
+  }
+}
+
+/** Put one tracked path back to its HEAD version, in the index and in the worktree. */
+export async function restoreFromHead(dir: string, relPath: string): Promise<void> {
+  await runGit(dir, ["checkout", "-q", "HEAD", "--", relPath]);
+}
+
 /**
  * Paths changed by commits made since `since` on HEAD, each with the committer date (ISO 8601) of
  * the newest commit that touched it, newest first. Renames are reported as a delete and an add; a

@@ -409,6 +409,142 @@ describe("rollback resets the index", () => {
   });
 });
 
+describe("#233 item 1: a crash in the middle of a version link", () => {
+  const status = () => git(fixture.vaultDir, ["status", "--porcelain"]);
+
+  /**
+   * A writer that crashes in the link commit: the HEAD read fails afterwards, so nothing is rolled
+   * back. With `stage`, both paths are staged first and the index is never reset.
+   */
+  function crashingApp(options: { stage?: boolean } = {}) {
+    let armed = false;
+    return makeApp({
+      git: {
+        commitPaths: async (dir, paths) => {
+          armed = true;
+          if (options.stage) await defaultGit.addPaths(dir, paths);
+          throw new Error("crash");
+        },
+        headSha: (dir) => {
+          if (armed) return Promise.reject(new Error("crash"));
+          return defaultGit.headSha(dir);
+        },
+        // A crash leaves the index as it was: nothing resets it.
+        unstageFile: (dir, rel) =>
+          options.stage ? Promise.reject(new Error("crash")) : defaultGit.unstageFile(dir, rel),
+      },
+    });
+  }
+
+  async function expectLinkedOnRetry(): Promise<void> {
+    const before = remoteHead();
+    const again = await post(makeApp(), geminiBody());
+    expect(again.status).toBe(201);
+    expect(again.json.path).toBe(GM_PATH);
+    expect(again.json.linked).toBe(FF_PATH);
+    expect(status()).toBe("");
+    expect(remoteHead()).toBe(again.json.commit);
+    expect(git(fixture.remote, ["rev-list", "--count", `${before}..main`])).toBe("1");
+    const changed = git(fixture.remote, [
+      "-c",
+      "core.quotepath=false",
+      "show",
+      "--name-only",
+      "--format=",
+      "main",
+    ]).split("\n");
+    expect(changed.sort()).toEqual([FF_PATH, GM_PATH].sort());
+    expect(parseNote(file(FF_PATH)).data.versions).toEqual([`[[${base(GM_PATH)}]]`]);
+    expect(parseNote(file(GM_PATH)).data.versions).toEqual([`[[${base(FF_PATH)}]]`]);
+  }
+
+  it("a crash after the new file only: the untracked identical file is adopted and linked", async () => {
+    await post(makeApp(), firefliesBody());
+    const ffAtHead = file(FF_PATH);
+    // Crash after the new note is written, before the other note is touched.
+    const crashed = await post(
+      makeApp({
+        git: {
+          commitPaths: () => Promise.reject(new Error("crash")),
+          headSha: async (dir) => {
+            if (existsSync(join(fixture.vaultDir, GM_PATH))) throw new Error("crash");
+            return defaultGit.headSha(dir);
+          },
+        },
+      }),
+      geminiBody(),
+    );
+    expect(crashed.status).toBe(500);
+    writeFileSync(join(fixture.vaultDir, FF_PATH), ffAtHead);
+    expect(git(fixture.vaultDir, ["diff", "HEAD", "--name-only"])).toBe("");
+    expect(git(fixture.vaultDir, ["-c", "core.quotepath=false", "ls-files", "--others"])).toBe(
+      GM_PATH,
+    );
+    await expectLinkedOnRetry();
+  });
+
+  it("a dirty other note left by the link write is restored to HEAD, then linked", async () => {
+    await post(makeApp(), firefliesBody());
+    const crashed = await post(crashingApp(), geminiBody());
+    expect(crashed.status).toBe(500);
+    expect(existsSync(join(fixture.vaultDir, GM_PATH))).toBe(true);
+    expect(file(FF_PATH)).not.toBe(gitRaw(fixture.vaultDir, ["show", `HEAD:${FF_PATH}`]));
+    await expectLinkedOnRetry();
+  });
+
+  it("the same with both paths left staged", async () => {
+    await post(makeApp(), firefliesBody());
+    const crashed = await post(crashingApp({ stage: true }), geminiBody());
+    expect(crashed.status).toBe(500);
+    expect(git(fixture.vaultDir, ["diff", "--cached", "--name-only"])).not.toBe("");
+    await expectLinkedOnRetry();
+  });
+
+  it("the restore also unblocks a plain note write", async () => {
+    await post(makeApp(), firefliesBody());
+    await post(crashingApp(), geminiBody());
+    const writer = createNoteWriter({
+      vaultDir: fixture.vaultDir,
+      author: TEST_AUTHOR,
+      git: defaultGit,
+      log: () => undefined,
+      sleep: () => Promise.resolve(),
+    });
+    const result = await writer.write({
+      path: "inbox/idea.md",
+      frontmatter: { type: "idea", area: "personal", date: "2026-10-30", source: "manual" },
+      body: "An idea.\n",
+    });
+    expect(result.commit).toBe(remoteHead());
+    expect(file(FF_PATH)).toBe(gitRaw(fixture.vaultDir, ["show", `HEAD:${FF_PATH}`]));
+  });
+
+  it("an other note with any further edit is left alone", async () => {
+    await post(makeApp(), firefliesBody());
+    await post(crashingApp(), geminiBody());
+    const edited = `${file(FF_PATH)}owner edit\n`;
+    writeFileSync(join(fixture.vaultDir, FF_PATH), edited);
+    const head = git(fixture.vaultDir, ["rev-parse", "HEAD"]);
+    const again = await post(makeApp(), geminiBody());
+    expect(again.status).toBe(500);
+    expect(file(FF_PATH)).toBe(edited);
+    expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(head);
+  });
+
+  it("a rewritten other note whose linked file is gone is left alone", async () => {
+    await post(makeApp(), firefliesBody());
+    await post(crashingApp(), geminiBody());
+    const dirty = file(FF_PATH);
+    // The new note moved away (not deleted): the link no longer names a leftover.
+    const moved = join(fixture.root, "moved.md");
+    writeFileSync(moved, file(GM_PATH));
+    unlinkSync(join(fixture.vaultDir, GM_PATH));
+    const again = await post(makeApp(), geminiBody());
+    expect(again.status).toBe(500);
+    expect(file(FF_PATH)).toBe(dirty);
+  });
+});
+
 describe("D5: an untracked leftover of the other source", () => {
   it("an untracked other-source note is not linked", async () => {
     await post(makeApp(), firefliesBody());

@@ -327,6 +327,22 @@ describe("syncBeforeWrite through the note writer", () => {
       expect(logs.join("\n")).not.toContain(ANT);
     });
 
+    it("issue 135: neutralizes a remote image in the copy, but not in a transcript copy", async () => {
+      const image = "![x](https://example.com/x.png)\n";
+      const meeting = { type: "meeting", area: "personal", date: "2026-10-31", source: "manual" };
+      const meetingPath = "personal/meetings/m.md";
+      localCommit({ "inbox/a.md": bytes(image), [meetingPath]: stringifyNote(meeting, image) });
+      remoteCommit({
+        "inbox/a.md": REMOTE,
+        [meetingPath]: stringifyNote(meeting, "remote\n"),
+      });
+      expect((await post(makeApp(), note("inbox/b.md"))).status).toBe(201);
+      expect(remoteFile(COPY)).toBe(bytes("[x](https://example.com/x.png)\n"));
+      expect(remoteFile(`personal/meetings/m (conflict ${DAY}).md`)).toBe(
+        stringifyNote(meeting, image),
+      );
+    });
+
     it("a scrubber failure is 500 scrub_failed and restores the local state", async () => {
       const local = localCommit({ "inbox/a.md": bytes("LOCALMARK\n") });
       const remote = remoteCommit({ "inbox/a.md": REMOTE });

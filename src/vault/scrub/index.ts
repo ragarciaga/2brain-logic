@@ -1,5 +1,6 @@
 import {
   isLabelKey,
+  isPinKey,
   isPlaceholder,
   REDACTED_PREFIX,
   SCRUB_RULES,
@@ -11,6 +12,7 @@ export {
   IBAN_LENGTHS,
   ibanValid,
   isLabelKey,
+  isPinKey,
   isPlaceholder,
   luhnValid,
   SCRUB_RULES,
@@ -20,6 +22,27 @@ export {
 
 const RULE_ID = /^[a-z][a-z0-9_]*$/;
 const LABELED_ID = "labeled_secret";
+const PIN_ID = "pin_code";
+const CARD_ID = "card_number";
+const PIN_VALUE = /^[ \t]*\d{4,12}[ \t]*$/;
+
+function redactAs(id: string, hits: Map<string, number>): string {
+  hits.set(id, (hits.get(id) ?? 0) + 1);
+  return placeholder(id);
+}
+
+/**
+ * True for an integer number of 13 to 19 digits that is above 2^53. It lost digits when the YAML
+ * or JSON was parsed, so a card number held in it can no longer pass the Luhn check: it is redacted
+ * as a card without the check. Such a number is already wrong as data, so nothing of value is lost.
+ */
+function isUnsafeCardSized(value: number | bigint): boolean {
+  if (typeof value !== "number" || Number.isSafeInteger(value) || !Number.isInteger(value)) {
+    return false;
+  }
+  const size = Math.abs(value);
+  return size >= 1e12 && size < 1e19;
+}
 
 /** A rule failed. The message names the rule id and nothing else: never the text or the match. */
 export class ScrubError extends Error {
@@ -188,14 +211,27 @@ function scrubString(
   return result.text;
 }
 
+/**
+ * `labeled` is true under a key that names a secret, and stays true for everything nested under
+ * it (array elements and the values of a nested object). `pin` is true right under a PIN key.
+ */
 function scrubValue(
   value: unknown,
   labeled: boolean,
   rules: readonly ScrubRule[],
   hits: Map<string, number>,
+  pin = false,
 ): unknown {
+  if (
+    pin &&
+    (typeof value === "string" || typeof value === "number") &&
+    PIN_VALUE.test(String(value))
+  ) {
+    return redactAs(PIN_ID, hits);
+  }
   if (typeof value === "string") return scrubString(value, labeled, rules, hits);
   if ((typeof value === "number" && Number.isFinite(value)) || typeof value === "bigint") {
+    if (isUnsafeCardSized(value)) return redactAs(labeled ? LABELED_ID : CARD_ID, hits);
     const asText = String(value);
     const replaced = scrubString(asText, labeled, rules, hits);
     return replaced === asText ? value : replaced;
@@ -207,7 +243,7 @@ function scrubValue(
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        scrubValue(item, isLabelKey(key), rules, hits),
+        scrubValue(item, labeled || isLabelKey(key), rules, hits, isPinKey(key)),
       ]),
     );
   }
@@ -216,8 +252,10 @@ function scrubValue(
 
 /**
  * Scrubs every string in a nested object. A key that names a secret (see `isLabelKey`) makes its
- * value, and the elements of an array under it, count as labeled. Numbers and bigints are checked
- * as text and become the placeholder string on a hit. The input is never mutated; keys, booleans,
+ * value, the elements of an array under it and every value of an object under it count as
+ * labeled. A key that names a PIN (see `isPinKey`) redacts a value of 4 to 12 digits. Numbers and
+ * bigints are checked as text and become the placeholder string on a hit; an integer above 2^53
+ * of card size is redacted without the Luhn check (its digits are already lost). The input is never mutated; keys, booleans,
  * null, Dates and other objects pass through unchanged.
  */
 export function scrubFrontmatter(

@@ -675,6 +675,244 @@
       "rule": "google_oauth_client_secret",
       "parts": ["GOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8"],
       "expected": "[REDACTED:google_oauth_client_secret]"
+    },
+    {
+      "rule": "github_token",
+      "parts": [
+        "my-",
+        "github_",
+        "pat_",
+        "A1B2C3D4A1B2C3D4A1B2C3",
+        "_",
+        "e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f"
+      ],
+      "expected": "my-[REDACTED:github_token]"
+    },
+    {
+      "rule": "github_token",
+      "parts": ["rec-", "gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"],
+      "expected": "rec-[REDACTED:github_token]"
+    },
+    {
+      "rule": "anthropic_key",
+      "parts": ["x-", "sk-", "ant-", "api03-Ab1Cd-E_3Gh4Ab1C-2Ef_Gh4Ab1"],
+      "expected": "x-[REDACTED:anthropic_key]"
+    },
+    {
+      "rule": "stripe_secret_key",
+      "parts": ["key-", "sk_", "live_", "a1b2c3d4e5f6a1b2c3d4e5f6"],
+      "expected": "key-[REDACTED:stripe_secret_key]"
+    },
+    {
+      "rule": "github_token",
+      "parts": ["see ", "gh", "p_", "a1b2c3d4e5f6", "\u200b", "a1b2c3d4e5f6a1b2c3d4e5f6", " ok"],
+      "expected": "see [REDACTED:github_token] ok"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["card 4111", "\u00a01111\u00a01111\u00a01111", " ok"],
+      "expected": "card [REDACTED:card_number] ok"
+    },
+    {
+      "rule": "card_number",
+      "parts": ["card 4111", "\u202f1111\u202f1111\u202f1111"],
+      "expected": "card [REDACTED:card_number]"
+    },
+    {
+      "rule": "iban",
+      "parts": ["iban DE89", "\u00a03704\u00a00044\u00a00532\u00a00130\u00a000"],
+      "expected": "iban [REDACTED:iban]"
+    },
+    {
+      "rule": "bearer",
+      "parts": ["Bea", "rer\u00a0", "a1b2c3d4e5f6a7b8c9d0"],
+      "expected": "Bearer\u00a0[REDACTED:bearer]"
+    },
+    {
+      "rule": "bearer",
+      "parts": ["Authorization: Bea", "rer ", "abc123XYZ9"],
+      "expected": "Authorization: Bearer [REDACTED:bearer]"
+    },
+    {
+      "rule": "bearer",
+      "parts": ["call it with Bea", "rer ", "k9Xq2Lm7 now"],
+      "expected": "call it with Bearer [REDACTED:bearer] now"
+    },
+    {
+      "rule": "url_password",
+      "parts": ["db ", "postgres://app:", "Xq9vL2mPz7Rt", "@db.example.com/main"],
+      "expected": "db postgres://app:[REDACTED:url_password]@db.example.com/main"
+    },
+    {
+      "rule": "url_password",
+      "parts": ["https://alice:", "Xq9v", "L2mPz7Rt", "@host.example.com/x"],
+      "expected": "https://alice:[REDACTED:url_password]@host.example.com/x"
+    },
+    {
+      "rule": "url_password",
+      "parts": ["redis://:", "Xq9vL2mPz7Rt", "@cache.example.com:6379/0"],
+      "expected": "redis://:[REDACTED:url_password]@cache.example.com:6379/0"
+    },
+    {
+      "rule": "url_password",
+      "parts": ["postgres://app:", "Xq9v/L2m", "Pz7Rt", "@db.example.com/main"],
+      "expected": "postgres://app:[REDACTED:url_password]@db.example.com/main"
+    },
+    {
+      "rule": "authorization_header",
+      "parts": ["Authorization: Ba", "sic ", "dXNlcjpYcTl2TDJtUHo3UnQ="],
+      "expected": "Authorization: Basic [REDACTED:authorization_header]"
+    },
+    {
+      "rule": "authorization_header",
+      "parts": [
+        "\"Authorization\": \"to",
+        "ken ",
+        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "\""
+      ],
+      "expected": "\"Authorization\": \"token [REDACTED:authorization_header]\""
+    },
+    {
+      "rule": "authorization_header",
+      "parts": ["Proxy-Authorization: Ba", "sic ", "YWxpY2U6czNjcjN0"],
+      "expected": "Proxy-Authorization: Basic [REDACTED:authorization_header]"
+    },
+    {
+      "rule": "curl_user",
+      "parts": ["curl -u alice:", "Xq9vL2mPz7Rt", " https://api.example.com/v1"],
+      "expected": "curl -u alice:[REDACTED:curl_user] https://api.example.com/v1"
+    },
+    {
+      "rule": "curl_user",
+      "parts": ["curl --user \"alice:", "Xq9v L2mPz7Rt", "\" https://api.example.com"],
+      "expected": "curl --user \"alice:[REDACTED:curl_user]\" https://api.example.com"
+    },
+    {
+      "rule": "curl_user",
+      "parts": [
+        "curl -X POST \\\n  --user=alice:",
+        "Xq9vL2mPz7Rt",
+        " \\\n  https://api.example.com"
+      ],
+      "expected": "curl -X POST \\\n  --user=alice:[REDACTED:curl_user] \\\n  https://api.example.com"
+    },
+    {
+      "rule": "cookie",
+      "parts": ["Coo", "kie: sid=", "a1b2c3d4e5f6a7b8; theme=dark"],
+      "expected": "Cookie: [REDACTED:cookie]"
+    },
+    {
+      "rule": "cookie",
+      "parts": ["Set-Coo", "kie: sid=a1b2c3d4e5f6a7b8; Path=/; HttpOnly"],
+      "expected": "Set-Cookie: [REDACTED:cookie]"
+    },
+    {
+      "rule": "cookie",
+      "parts": ["Coo", "kie: \"sid=a1b2c3d4e5f6a7b8\" sent"],
+      "expected": "Cookie: \"[REDACTED:cookie]\" sent"
+    },
+    {
+      "rule": "cookie",
+      "parts": ["\"set-coo", "kie\": [\"sid=a1b2c3d4e5f6a7b8; Path=/\", \"csrf=e5f6a7b8c9d0\"]"],
+      "expected": "\"set-cookie\": [\"[REDACTED:cookie]\"]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["DB_PA", "SS=Xq9vL2mPz7Rt"],
+      "expected": "DB_PASS=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["SMTP_PASS", "WD=Xq9vL2mPz7Rt"],
+      "expected": "SMTP_PASSWD=[REDACTED:labeled_secret]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["user: alice\npa", "ss: Xq9vL2mPz7Rt\n"],
+      "expected": "user: alice\npass: [REDACTED:labeled_secret]\n"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pa", "ss = \"Xq9vL2mPz7Rt\""],
+      "expected": "pass = \"[REDACTED:labeled_secret]\""
+    },
+    {
+      "rule": "pin_code",
+      "parts": ["PI", "N: 4821"],
+      "expected": "PIN: [REDACTED:pin_code]"
+    },
+    {
+      "rule": "pin_code",
+      "parts": ["sim_pi", "n=48213977;"],
+      "expected": "sim_pin=[REDACTED:pin_code];"
+    },
+    {
+      "rule": "pin_code",
+      "parts": ["PIN co", "de: \"482139\""],
+      "expected": "PIN code: \"[REDACTED:pin_code]\""
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "note\n",
+        "---- BEG",
+        "IN SSH2 ENCRYPTED PRIV",
+        "ATE KEY ----\n",
+        "Comment: \"rsa-key\"\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "---- E",
+        "ND SSH2 ENCRYPTED PRIV",
+        "ATE KEY ----",
+        "\nok\n"
+      ],
+      "expected": "note\n[REDACTED:private_key]\nok\n"
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: eddsa-key\nPublic-Lines: 1\nAAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
+        "Private-",
+        "Lines: 2\n",
+        "AAAAIGExampleOnlyNotARealKey0123456789\n",
+        "AAAAIGExampleOnlyNotARealKey9876543210\n",
+        "Private-MAC: 0123abcd\n"
+      ],
+      "expected": "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: eddsa-key\nPublic-Lines: 1\nAAAAC3NzaC1lZDI1NTE5AAAAIExample\n[REDACTED:private_key]\nPrivate-MAC: 0123abcd\n"
+    },
+    {
+      "rule": "slack_webhook",
+      "parts": [
+        "hook ",
+        "https://hooks.slack",
+        ".com/services/",
+        "T0001ABCD/B0002EFGH/",
+        "a1b2c3d4e5f6a7b8c9d0e1f2"
+      ],
+      "expected": "hook https://hooks.slack.com/services/[REDACTED:slack_webhook]"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": [
+        "users:\n- name: dev\n  user:\n    client-key-",
+        "data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ==\n"
+      ],
+      "expected": "users:\n- name: dev\n  user:\n    client-key-data: [REDACTED:labeled_secret]\n"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word: |\n  Xq9vL2mPz7Rt\n"],
+      "expected": "password: |\n  [REDACTED:labeled_secret]\n"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["db:\n  pass", "word: >-\n    \"Xq9v L2mPz7Rt\"\n"],
+      "expected": "db:\n  password: >-\n    \"[REDACTED:labeled_secret]\"\n"
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word:\n  Xq9vL2mPz7Rt\n"],
+      "expected": "password:\n  [REDACTED:labeled_secret]\n"
     }
   ],
   "frontmatter": [
@@ -810,6 +1048,42 @@
       "field": "my password",
       "kind": "string",
       "parts": ["abcd1234", "efgh"]
+    },
+    {
+      "rule": "pin_code",
+      "field": "pin",
+      "kind": "number",
+      "parts": ["48", "21"]
+    },
+    {
+      "rule": "pin_code",
+      "field": "simPinCode",
+      "kind": "string",
+      "parts": ["4821", "3977"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "DB_PASS",
+      "kind": "string",
+      "parts": ["Xq9vL2", "mPz7Rt"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "client-key-data",
+      "kind": "string",
+      "parts": ["LS0tLS1CRUdJTiBSU0Eg", "UFJJVkFURSBLRVktLS0tLQ=="]
+    },
+    {
+      "rule": "card_number",
+      "field": "payment",
+      "kind": "number",
+      "parts": ["9111", "1111", "1111", "1111"]
+    },
+    {
+      "rule": "card_number",
+      "field": "ref",
+      "kind": "number",
+      "parts": ["4111", "1111", "1111", "1111", "111"]
     }
   ]
 }

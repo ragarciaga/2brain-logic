@@ -1,11 +1,14 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
+import { DEFAULT_VAULT_CONFIG } from "../config/defaults.js";
 import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
 import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../git/sync.js";
 import type { MeetingInput, MeetingOk } from "../meetings/types.js";
+import { appendOpensStoredTag, neutralizeRemoteEmbeds, REMOTE_EMBED_RULE } from "./embeds.js";
 import { parseNote, stringifyNote } from "./frontmatter.js";
+import { restoreInterruptedMeeting } from "./meeting-recovery.js";
 import type { NoteArchive, NoteInput, NotePatch } from "./note-schema.js";
 import {
   AlreadyArchivedError,
@@ -224,6 +227,26 @@ export function scrubText(
   }
 }
 
+/**
+ * Neutralize the remote embeds of a body text (docs/adr/0022-remote-embeds.md), reported as the
+ * redaction rule `remote_embed`. `context` is the stored body an append goes after: read, never
+ * changed. Any exception becomes `ScrubFailedError` without a cause.
+ */
+export function neutralizeEmbeds(
+  text: string,
+  context = "",
+): { text: string; redactions: Redaction[] } {
+  try {
+    const result = neutralizeRemoteEmbeds(text, context);
+    return {
+      text: result.text,
+      redactions: result.count > 0 ? [{ rule: REMOTE_EMBED_RULE, count: result.count }] : [],
+    };
+  } catch {
+    throw new ScrubFailedError();
+  }
+}
+
 /** Merge redaction lists, adding the counts of equal rules, sorted by rule id. */
 export function combineRedactions(...lists: Redaction[][]): Redaction[] {
   return toRedactions(...lists.map((list) => new Map(list.map((r) => [r.rule, r.count]))));
@@ -342,8 +365,15 @@ export function createNoteWriter({
 }: NoteWriterOptions): VaultWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
+  /** The vault config of the last write; a conflict copy is prepared before this write reads it. */
+  let lastConfig: VaultConfig | undefined;
 
-  /** Scrub a conflict copy like a created note. Any failure is `ScrubFailedError`. */
+  /**
+   * Scrub a conflict copy like a created note and neutralize its remote embeds, except in the
+   * body of a type configured `immutable_body` (a transcript is kept verbatim). The type is judged
+   * with the config of the last write, or the default config before the first one. Any failure is
+   * `ScrubFailedError`.
+   */
   function prepareCopy(text: string): string {
     let parsed: ReturnType<typeof parseNote>;
     try {
@@ -352,8 +382,15 @@ export function createNoteWriter({
       throw new ScrubFailedError();
     }
     const scrubbed = scrubNote(scrubber, parsed.data, parsed.content);
-    if (scrubbed.redactions.length === 0) return text;
-    return stringifyNote(scrubbed.frontmatter, scrubbed.body);
+    let body = scrubbed.body;
+    let changed = scrubbed.redactions.length > 0;
+    if (!isImmutableBody(parsed.data, lastConfig ?? DEFAULT_VAULT_CONFIG)) {
+      const neutralized = neutralizeEmbeds(body);
+      changed ||= neutralized.text !== body;
+      body = neutralized.text;
+    }
+    if (!changed) return text;
+    return stringifyNote(scrubbed.frontmatter, body);
   }
 
   /**
@@ -370,8 +407,18 @@ export function createNoteWriter({
     if (pathHasSecret) throw new UnsafePathError();
   }
 
-  /** Pull and log what the sync did. */
+  /**
+   * Pull and log what the sync did. First, what a crash in the middle of a meeting commit left
+   * behind is put back (`restoreInterruptedMeeting`), so it cannot block the pull. That step is
+   * best effort: if it fails, the pull runs and reports as before.
+   */
   async function syncAndLog(): Promise<void> {
+    try {
+      const restored = await restoreInterruptedMeeting(root, () => loadVaultConfig(root));
+      if (restored > 0) log(`interrupted_meeting_restored: ${restored}`);
+    } catch {
+      // swallowed on purpose: the pull below reports the state
+    }
     const { conflicts, recovered } = await syncBeforeWrite(root, { git, author, now, prepareCopy });
     if (recovered) log("rebuild_recovered");
     if (conflicts > 0) log(`conflicts_kept: ${conflicts}`);
@@ -380,7 +427,8 @@ export function createNoteWriter({
   /** Pull, log what the sync did, and read the vault config as it is after the pull. */
   async function syncAndLoadConfig(): Promise<VaultConfig> {
     await syncAndLog();
-    return loadVaultConfig(root);
+    lastConfig = await loadVaultConfig(root);
+    return lastConfig;
   }
 
   /** The lexical and the real location of the target's parent must both be inside the vault. */
@@ -419,12 +467,16 @@ export function createNoteWriter({
 
     const scrubbed = scrubNote(scrubber, note.frontmatter, note.body);
     assertValid(scrubbed.frontmatter, note.path, config);
+    // Every created body, whatever its type: a caller that declares a transcript type does not
+    // get its remote embeds stored. The meeting flow (writeMeetingInSlot) keeps transcripts
+    // verbatim and does not come through here.
+    const body = neutralizeEmbeds(scrubbed.body);
+    const redactions = combineRedactions(scrubbed.redactions, body.redactions);
 
     const { target, parent, realRoot } = await resolveParent(note.path);
 
-    const bytes = stringifyNote(scrubbed.frontmatter, scrubbed.body);
-    const redactionsPart =
-      scrubbed.redactions.length > 0 ? { redactions: scrubbed.redactions } : {};
+    const bytes = stringifyNote(scrubbed.frontmatter, body.text);
+    const redactionsPart = redactions.length > 0 ? { redactions } : {};
     // The parent is inside the vault, so this never reads outside it. A final symlink is never
     // followed (lstat), and the file is read only when its size matches.
     let existing: Stats | undefined;
@@ -502,9 +554,7 @@ export function createNoteWriter({
       throw error;
     }
     await pushOrPending(note.path);
-    return scrubbed.redactions.length > 0
-      ? { path: note.path, commit, redactions: scrubbed.redactions }
-      : { path: note.path, commit };
+    return { path: note.path, commit, ...redactionsPart };
   }
 
   /** Reset one index entry to HEAD, with one retry; a second failure is swallowed. */
@@ -520,7 +570,9 @@ export function createNoteWriter({
   }
 
   /**
-   * Create a meeting note: the create branch of `writeOne` without adoption. Anything already at
+   * Create a meeting note, like the create branch of `writeOne`. A regular file already at the
+   * path that HEAD does not track and whose bytes equal `bytes` (left by a crash between write and
+   * commit) is adopted: committed as it is, and kept if the commit fails. Anything else already at
    * the path is `NoteExistsError`. Returns the commit; a push that does not land is
    * `PushPendingError`.
    *
@@ -528,8 +580,9 @@ export function createNoteWriter({
    * commit: it must be a regular file (a symlink is `UnsafePathError`) whose bytes still equal
    * `link.original` (else `NoteExistsError`). Both paths are staged and committed together with
    * `message`. If that fails, both index entries are reset to HEAD (one retry each) whatever HEAD
-   * did; if HEAD did not move, the new file is removed and the other note gets `link.original`
-   * back. The other note is written without following a symlink swapped in after the check.
+   * did; if HEAD did not move, the new file (unless adopted) is removed and the other note gets
+   * `link.original` back. The other note is written without following a symlink swapped in after
+   * the check.
    */
   async function createMeetingNote(
     path: string,
@@ -547,29 +600,39 @@ export function createNoteWriter({
       if (!info.isFile()) throw new NoteExistsError();
       if (!(await readFile(linkTarget)).equals(link.original)) throw new NoteExistsError();
     }
-    let taken = true;
+    let existing: Stats | undefined;
     try {
-      await lstat(target);
+      existing = await lstat(target);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      taken = false;
     }
-    if (taken) throw new NoteExistsError();
+    // An identical regular file that HEAD does not track was left by a crash between write and
+    // commit: it is committed as it is. Anything else at the path is taken.
+    const adopted = existing !== undefined;
+    if (existing !== undefined) {
+      if (!existing.isFile() || existing.size !== Buffer.byteLength(bytes)) {
+        throw new NoteExistsError();
+      }
+      if (!(await readFile(target)).equals(Buffer.from(bytes))) throw new NoteExistsError();
+      if (await trackedAtHead(root, path)) throw new NoteExistsError();
+    }
     const head = await git.headSha(root);
-    try {
-      await mkdir(parent, { recursive: true });
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
-      throw error;
-    }
-    if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
-    try {
-      await writeFile(target, bytes, { flag: "wx" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
-      throw error;
+    if (!adopted) {
+      try {
+        await mkdir(parent, { recursive: true });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
+        throw error;
+      }
+      if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
+      try {
+        await writeFile(target, bytes, { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
+        throw error;
+      }
     }
     let commit: string;
     try {
@@ -599,9 +662,10 @@ export function createNoteWriter({
       }
       if (!moved) {
         try {
-          await unlink(target).catch((e: NodeJS.ErrnoException) => {
-            if (e.code !== "ENOENT") throw e;
-          });
+          if (!adopted)
+            await unlink(target).catch((e: NodeJS.ErrnoException) => {
+              if (e.code !== "ENOENT") throw e;
+            });
         } catch {
           // swallowed on purpose
         }
@@ -662,16 +726,30 @@ export function createNoteWriter({
       input.set === undefined
         ? { data: {}, redactions: [] as Redaction[] }
         : scrubProperties(scrubber, input.set);
-    const added =
-      input.append === undefined
-        ? { text: "", redactions: [] as Redaction[] }
-        : scrubText(scrubber, input.append);
+    let added = { text: "", redactions: [] as Redaction[] };
+    if (input.append !== undefined) {
+      const clean = scrubText(scrubber, input.append);
+      const neutralized = neutralizeEmbeds(clean.text, body);
+      added = {
+        text: neutralized.text,
+        redactions: combineRedactions(clean.redactions, neutralized.redactions),
+      };
+    }
     const merged = mergeProperties(data, scrubbed.data);
     assertValid(merged, input.path, config);
     const allRedactions = combineRedactions(scrubbed.redactions, added.redactions);
     const redactionsPart = allRedactions.length > 0 ? { redactions: allRedactions } : {};
 
     const newBody = appendBody(body, added.text);
+    // A tag left open at the end of the stored body would take its attributes from the append;
+    // stored bytes never change, so such an append is refused.
+    let opensTag: boolean;
+    try {
+      opensTag = newBody !== body && appendOpensStoredTag(body, newBody);
+    } catch {
+      throw new ScrubFailedError();
+    }
+    if (opensTag) throw new ScrubFailedError();
     const bytes = propertiesUnchanged(data, scrubbed.data)
       ? appendedBytes(original, stored, newBody)
       : Buffer.from(stringifyNote(merged, newBody));
