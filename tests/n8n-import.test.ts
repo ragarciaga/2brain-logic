@@ -263,6 +263,7 @@ describe("meetings-import.json: Summary", () => {
       { statusCode: 200, body: { ok: true, commit: null, skipped: "too_short" } },
       { statusCode: 400, body: { ok: false, error: "invalid_body" } },
       { failed: true, what: "calendar" },
+      { error: { message: "connect ECONNREFUSED" } },
       { noop: true },
     ]);
     expect(out).toEqual([
@@ -270,7 +271,8 @@ describe("meetings-import.json: Summary", () => {
         stored: ["bfa/reuniones/a.md"],
         already_stored: ["bfa/reuniones/b.md"],
         skipped: 1,
-        failed: 2,
+        failed: 3,
+        failures: ["ingest_400", "calendar", "ingest_unreachable"],
       },
     ]);
   });

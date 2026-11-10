@@ -28,6 +28,7 @@ const TEXT = [
   "00:05:02",
   "Ana Ruiz: Good: send me the sheet.",
   "Bo Chen: Will do.",
+  "Transcription ended after 00:06:10",
   "",
   "This editable transcript was computer generated and might contain errors. People can also change the text after it was created.",
 ].join("\r\n");

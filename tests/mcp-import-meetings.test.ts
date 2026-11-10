@@ -94,13 +94,37 @@ describe("meetings importer", () => {
       already_stored: [],
       skipped: 1,
       failed: 0,
+      failures: [],
     });
   });
 
   it("drops unknown summary keys, so nothing but paths and counts reaches the client", async () => {
     const fetch = respond(200, { stored: [], transcript: "secret words", failed: 2 });
     const out = await createMeetingsImporter({ url: URL_, token: TOKEN, fetch }).run(1);
-    expect(out).toEqual({ ok: true, stored: [], already_stored: [], skipped: 0, failed: 2 });
+    expect(out).toEqual({
+      ok: true,
+      stored: [],
+      already_stored: [],
+      skipped: 0,
+      failed: 2,
+      failures: [],
+    });
+  });
+
+  it("passes the failed steps through and refuses free text in them", async () => {
+    const ok = respond(200, { failed: 2, failures: ["calendar", "ingest_400"] });
+    expect(
+      await createMeetingsImporter({ url: URL_, token: TOKEN, fetch: ok }).run(1),
+    ).toMatchObject({
+      ok: true,
+      failed: 2,
+      failures: ["calendar", "ingest_400"],
+    });
+    const leak = respond(200, { failed: 1, failures: ["No account found matching x@example.com"] });
+    expect(await createMeetingsImporter({ url: URL_, token: TOKEN, fetch: leak }).run(1)).toEqual({
+      ok: false,
+      error: "import_failed",
+    });
   });
 
   it("maps refusals, errors, bad bodies and timeouts to fixed outcomes", async () => {
@@ -155,6 +179,7 @@ describe("import_meetings tool", () => {
       already_stored: [],
       skipped: 0,
       failed: 0,
+      failures: [],
     }));
     const w = writer();
     const reply = await call(

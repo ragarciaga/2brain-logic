@@ -14,6 +14,7 @@ import { cleanLabel } from "../fireflies/map.js";
 //   Bo Chen: text
 //   00:05:02
 //   ...
+//   Transcription ended after 00:36:37
 //   This editable transcript was computer generated and might contain errors. ...
 //
 // A `HH:MM:SS` line sets the offset of the turns after it. A `Name: text` line starts a turn.
@@ -22,6 +23,8 @@ import { cleanLabel } from "../fireflies/map.js";
 const TIMESTAMP = /^(\d{1,2}):(\d{2}):(\d{2})$/;
 const TURN = /^([^:]{1,80}): (.*)$/;
 const END_MARKER = "This editable transcript was computer generated";
+/** Gemini's own footer line after the last turn, not something anyone said. */
+const ENDED_LINE = /^Transcription ended after \d{1,2}:\d{2}:\d{2}$/;
 /** Longest meeting the email date may stand for as the end (the schema's own cap). */
 const MAX_SPAN_MS = 12 * 60 * 60_000;
 
@@ -54,7 +57,7 @@ export function transcriptSegments(text: string, title: string): Segment[] {
   const segments: Segment[] = [];
   let offset = 0;
   for (const line of lines.slice(start + 1)) {
-    if (line.startsWith(END_MARKER)) break;
+    if (line.startsWith(END_MARKER) || ENDED_LINE.test(line)) break;
     if (line === "") continue;
     const stamp = TIMESTAMP.exec(line);
     if (stamp !== null) {
