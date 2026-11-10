@@ -57,3 +57,5 @@ A verifier mutation-probing the worktree while the implementer was still applyin
 - 2026-11-01 (F5 T13, T16): byte-exact `.expected.md` fixtures are excluded from the Biome formatter in biome.json; never run `biome format --write` or `check --write` on files a task does not change (an implementer reformatted an unrelated template).
 - 2026-11-01 (F5 T18): review a guide sentence by sentence against the templates and code, and make its test read every stated fact from the templates; three false sentences passed a structure-only test.
 - 2026-11-01 (F5 T14): reviewer status lines use the spec task id (`task=T14`), not the worktree name (`F5-T14`); say so in every review prompt.
+- 2026-11-10 (retro): judge every Verification command by its exit code (`npm run lint; echo $?`), never by the last output line; Biome prints the error above a blank summary line, and a lint failure reached main (#260) because only `tail -1` was read.
+- 2026-11-10 (retro): run lint only as `npm run lint` (its path list); `biome check --write .` reformats harness-owned files under `.claude/` and `tools/rockbuilt/`, every doc and the ADRs.
