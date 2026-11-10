@@ -326,15 +326,39 @@ function namesSecret(words: readonly string[]): boolean {
  * `dbcredentials`), or `key` after a word that ends in `api`, `access` or `private` (`MYAPI_KEY`).
  * The words are read twice, split at camelCase edges and not split at them, and either list may
  * name the secret (`passWord`, `PassPhrase`, `sshPassPhrase`); the last camelCase word must not be
- * one that turns it into something else (`count`, `url`, `name`, ...). Only the last 4 spaced words
- * and the last 64 characters are read: a label is the end of the text before the separator.
+ * one that turns it into something else (`count`, `url`, `name`, ...). A label without spaces
+ * whose last word is `pass` (`DB_PASS`, `smtpPass`) names a secret too; a spaced one ("first
+ * pass") does not, so prose is kept. The kubeconfig key `client-key-data` is a label. Only the last
+ * 4 spaced words and the last 64 characters are read: a label is the end of the text before the
+ * separator.
  */
 export function isLabelKey(label: string): boolean {
   const text = label.split(" ").slice(-4).join(" ").slice(-64);
   const words = labelWords(text, true);
   const last = words[words.length - 1];
   if (last === undefined || LABEL_LAST_DENIED.has(last)) return false;
+  if (words.slice(-3).join(" ") === "client key data") return true;
+  if (last === "pass" && !text.includes(" ")) return true;
   return namesSecret(words) || namesSecret(labelWords(text, false));
+}
+
+/** True when a label is a secret label only because its last word is `pass` (`DB_PASS`). */
+function namesSecretOnlyByPass(label: string): boolean {
+  const words = labelWords(label, true);
+  if (words[words.length - 1] !== "pass") return false;
+  return !namesSecret(words) && !namesSecret(labelWords(label, false));
+}
+
+/**
+ * True when a frontmatter key names a PIN: its last word is `pin`, or `pin` then `code` or
+ * `number` (`pin`, `sim_pin`, `pinCode`, `PIN_NUMBER`). A PIN is too short for the 6 character
+ * floor of a labeled value, so `index.ts` judges it on its own: 4 to 12 digits.
+ */
+export function isPinKey(key: string): boolean {
+  const words = labelWords(key.slice(-64), true);
+  const last = words[words.length - 1];
+  if (last === "pin") return true;
+  return (last === "code" || last === "number") && words[words.length - 2] === "pin";
 }
 
 /**
@@ -376,8 +400,23 @@ const LABELED_VALUE = [
 // (a quote, an escaped quote or 6 unspaced characters), so a separator that is followed by too
 // little can still back off to a shorter one (":=" then ":"). The value is read by `LABELED_TAIL`
 // and only for a head whose label `isLabelKey` admits, so a rejected head never scans its value.
+//
+// A value may also sit on the next, indented line (`<label>:` or a YAML block scalar indicator
+// such as `|` or `>-`, then a line break and indentation): the `nl` group. `admitLabeled` takes it
+// only after a label without spaces and the `:` separator, and the negative lookahead refuses a
+// next line that is itself a YAML key (a mapping of credentials with a username key), so the keys
+// under a label are read as labels of their own.
+const LINE_END = String.raw`[ \t]*(?:\r?\n|$)`;
+const LABELED_NEXT_LINE = [
+  String.raw`(?<nl>(?:[|>][+-]?[0-9]?[ \t]{0,20})?\r?\n[ \t]{1,40})`,
+  String.raw`(?![^\s:]{1,128}:(?:\s|$))`,
+  String.raw`(?=["'][^\r\n]{0,1024}["']${LINE_END}|[^\s"'\x60]{6,1024}${LINE_END})`,
+].join("");
+// Only after a separator that follows `pass` (the lookbehind is short and cheap): `lone` is set
+// when the value is a single run that ends its line, which `admitLabeled` needs for a bare `pass`.
+const PASS_LONE = String.raw`(?:(?<=pass\\?["'\x60]?[ \t]{0,20}(?::=|=>|:|=)[ \t]{0,20})(?=(?<lone>[^\s"'\x60]{6,1024}${LINE_END}))|)`;
 const LABELED_PATTERN = new RegExp(
-  `(?<keep>(?<label>${LABEL_CANDIDATE})(?:\\\\?["'\\x60])?[ \\t]{0,20}(?::=|=>|:|=)[ \\t]{0,20})(?=["'\\x60]|\\\\["']|[^\\s"'\\x60]{6})`,
+  `(?<keep>(?<label>${LABEL_CANDIDATE})(?<quote>\\\\?["'\\x60])?(?<gap>[ \\t]{0,20})(?<sep>:=|=>|:|=)[ \\t]{0,20}(?:${LABELED_NEXT_LINE})?)${PASS_LONE}(?=(?<open>["'\\x60]|\\\\["'])|[^\\s"'\\x60]{6})`,
   "gi",
 );
 const LABELED_TAIL = new RegExp(LABELED_VALUE, "y");
@@ -404,6 +443,25 @@ function valueSpan(found: string): ScrubSpan | null {
   return { start, end };
 }
 
+/**
+ * Admits a head whose label names a secret. A next-line value only after an unquoted identifier
+ * and `:` (a quoted `case` label of a switch is code). A label that names a secret only through
+ * a last word `pass` needs a quoted value, or the separator right after it and then either a
+ * value that ends its line or a label of two words or more (`DB_PASS`): so a ternary
+ * (`? PASS : fail()`), a default parameter (`pass = fallback`) and a wrapped sentence that starts
+ * with the word pass and a colon are kept.
+ */
+function admitLabeled(groups: Readonly<Record<string, string | undefined>>): boolean {
+  const label = groups.label ?? "";
+  if (!isLabelKey(label)) return false;
+  if (groups.nl !== undefined) {
+    if (groups.sep !== ":" || groups.quote !== undefined || label.includes(" ")) return false;
+  }
+  if (groups.open !== undefined || !namesSecretOnlyByPass(label)) return true;
+  if (groups.gap !== "") return false;
+  return groups.lone !== undefined || labelWords(label, true).length > 1;
+}
+
 /** The head was admitted by `isLabelKey`, so the value only needs its span (a placeholder is kept). */
 function selectLabeled(found: string, from: number): ScrubSpan | null {
   return from === 0 ? valueSpan(found) : null;
@@ -421,13 +479,25 @@ function isAsciiDigit(code: number): boolean {
 }
 
 /**
- * Walks the word starts of a candidate run of letters, digits and single spaces and returns the
- * first IBAN: a known country, the registry length counted in alphanumerics, mod-97 equal to 1.
+ * A space between the groups of an IBAN or a card: the ASCII space, the no-break space (U+00A0),
+ * the figure space (U+2007) and the narrow no-break space (U+202F) that word processors and
+ * French or Swiss number formatting put between digit groups.
+ */
+function isGroupSpace(code: number): boolean {
+  return code === 32 || code === 0xa0 || code === 0x2007 || code === 0x202f;
+}
+
+/** The same set as a regex class body, for the patterns. */
+const GROUP_SPACE = " \\u00a0\\u2007\\u202f";
+
+/**
+ * Walks the word starts of a candidate run of letters, digits and single spaces (see
+ * `isGroupSpace`) and returns the first IBAN: a known country, the registry length counted in alphanumerics, mod-97 equal to 1.
  */
 function selectIban(found: string, from: number): ScrubSpan | null {
   const n = found.length;
   for (let i = from; i < n; i++) {
-    if (i > 0 && found.charCodeAt(i - 1) !== 32) continue;
+    if (i > 0 && !isGroupSpace(found.charCodeAt(i - 1))) continue;
     if (
       !isAsciiLetter(found.charCodeAt(i)) ||
       !isAsciiLetter(found.charCodeAt(i + 1)) ||
@@ -442,7 +512,7 @@ function selectIban(found: string, from: number): ScrubSpan | null {
     let compact = "";
     let j = i;
     while (compact.length < length && j < n) {
-      if (found.charCodeAt(j) !== 32) compact += found.charAt(j);
+      if (!isGroupSpace(found.charCodeAt(j))) compact += found.charAt(j);
       j++;
     }
     if (compact.length === length && ibanValid(compact)) return { start: i, end: j };
@@ -471,7 +541,7 @@ const CARD_GROUP_SHAPES: ReadonlySet<string> = new Set([
 /**
  * Offset after the longest Luhn-valid window of 13 to 19 digits that starts at `start` (a group
  * start) and ends at the end of a digit group, or -1. A group is a run of digits between
- * separators (a space or a hyphen) or the ends of the text. A window of one group is any run of
+ * separators (a space of `isGroupSpace` or a hyphen) or the ends of the text. A window of one group is any run of
  * 13 to 19 digits; a window of several groups must have one of the `CARD_GROUP_SHAPES`.
  */
 function longestCardEnd(found: string, start: number): number {
@@ -503,7 +573,7 @@ function longestCardEnd(found: string, start: number): number {
     let next = -1;
     if (digitAt(found, offset + 1) >= 0) next = offset + 1;
     else if (
-      (found.charCodeAt(offset + 1) === 32 || found.charCodeAt(offset + 1) === 45) &&
+      (isGroupSpace(found.charCodeAt(offset + 1)) || found.charCodeAt(offset + 1) === 45) &&
       digitAt(found, offset + 2) >= 0
     ) {
       next = offset + 2;
@@ -545,17 +615,147 @@ function selectCard(found: string, from: number): ScrubSpan | null {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Credentials inside URLs, headers and commands
+
+/** True for a value that is already masked by hand (`***`, `xxxxxx`) rather than a secret. */
+function isMasked(value: string): boolean {
+  return /^(?:\*+|x+|X+|\.{3,}|\[(?:redacted|hidden|masked)[^\]]{0,40}\])$/i.test(value);
+}
+
+/**
+ * The password of a URL userinfo. A secret that is a port and a path (`host:8080/` before a `@`
+ * further on, as in `localhost:3000/@user`) is not a password; nor is a placeholder or a mask.
+ */
+function selectUrlPassword(found: string, from: number): ScrubSpan | null {
+  if (from > 0 || /^\d{1,5}(?:[/?#]|$)/.test(found)) return null;
+  if (isPlaceholder(found) || isMasked(found)) return null;
+  return { start: 0, end: found.length };
+}
+
+/**
+ * An `Authorization` header value after the `Basic` or `token` scheme. Basic must be base64 that
+ * decodes to `user:password` (with the colon), so a word after "Basic" in prose is kept; `token`
+ * must be 20 or more characters with a digit (a legacy GitHub or API token).
+ */
+function selectAuthorization(
+  found: string,
+  from: number,
+  groups: Readonly<Record<string, string | undefined>>,
+): ScrubSpan | null {
+  if (from > 0) return null;
+  if ((groups.scheme ?? "").toLowerCase() === "basic") {
+    let decoded: string;
+    try {
+      decoded = atob(found);
+    } catch {
+      return null;
+    }
+    return decoded.includes(":") ? { start: 0, end: found.length } : null;
+  }
+  return found.length >= 20 && /\d/.test(found) ? { start: 0, end: found.length } : null;
+}
+
+/**
+ * A Bearer token: 16 or more characters anywhere; 6 or more right after an `Authorization` header;
+ * 8 to 15 elsewhere only when it mixes letters and digits, so "Bearer tokens" in prose is kept.
+ */
+function selectBearer(
+  found: string,
+  from: number,
+  groups: Readonly<Record<string, string | undefined>>,
+): ScrubSpan | null {
+  if (from > 0) return null;
+  const whole = { start: 0, end: found.length };
+  if (found.length >= 16 || groups.header !== undefined) return whole;
+  return found.length >= 8 && /\d/.test(found) && /[A-Za-z]/.test(found) ? whole : null;
+}
+
+// The user option of curl: `-u` or `--user`, then a space or `=`, then `user:password`, bare or in
+// double or single quotes. Only the password is the secret. The bounds keep each try short.
+const CURL_USER = new RegExp(
+  [
+    String.raw`(?<![A-Za-z0-9_-])(?:-u|--user)(?:[ \t]{1,20}|=)`,
+    "(?:",
+    String.raw`"[^\r\n"':]{0,128}:(?<dq>[^\r\n"]{1,512})"`,
+    String.raw`|'[^\r\n"':]{0,128}:(?<sq>[^\r\n']{1,512})'`,
+    String.raw`|[^\s"':]{0,128}:(?<bare>[^\s"']{1,512})`,
+    ")",
+  ].join(""),
+  "dg",
+);
+
+/** Each password of a `-u` or `--user` option in one curl command (a placeholder is kept). */
+function selectCurlUser(found: string, from: number): ScrubSpan | null {
+  const scan = new RegExp(CURL_USER.source, CURL_USER.flags);
+  scan.lastIndex = from;
+  for (let m = scan.exec(found); m !== null; m = scan.exec(found)) {
+    const where = m.indices?.groups;
+    const span = where?.dq ?? where?.sq ?? where?.bare;
+    if (span === undefined) continue;
+    const value = found.slice(span[0], span[1]);
+    if (isPlaceholder(value) || isMasked(value) || value.startsWith(REDACTED_PREFIX)) continue;
+    return { start: span[0], end: span[1] };
+  }
+  return null;
+}
+
+/**
+ * A cookie header value, from the first `name=` to the end of the line, to the closing quote of a
+ * quoted value, or to the `]` of the Node array form (the quote before it stays). A lone
+ * placeholder value is kept.
+ */
+function selectCookie(
+  found: string,
+  from: number,
+  groups: Readonly<Record<string, string | undefined>>,
+): ScrubSpan | null {
+  if (from > 0) return null;
+  const keep = groups.keep ?? "";
+  const quote = keep.charAt(keep.length - 1);
+  const quoted = quote === '"' || quote === "'";
+  let end = found.length;
+  if (/\[[ \t]*["']?$/.test(keep)) {
+    const close = found.indexOf("]");
+    if (close >= 0) end = close;
+    while (end > 0 && /[\s"',]/.test(found.charAt(end - 1))) end--;
+  } else if (quoted) {
+    const close = found.indexOf(quote);
+    if (close >= 0) end = close;
+  }
+  while (end > 0 && /\s/.test(found.charAt(end - 1))) end--;
+  const equals = found.indexOf("=");
+  const value = found.slice(equals + 1, end);
+  if (end <= equals + 1 || isPlaceholder(value.trim())) return null;
+  return { start: 0, end };
+}
+
+// ---------------------------------------------------------------------------------------------
 // The rule list
 
 /** Left boundary: not inside a longer token. */
 const LB = "(?<![A-Za-z0-9_-])";
+/**
+ * Left boundary of a token with a fixed prefix: a hyphen before the prefix is a boundary (a token
+ * glued after `rec-` or `x-` is still a token), a letter, digit or underscore is not.
+ */
+const LBP = "(?<![A-Za-z0-9_])";
+/** Optional zero-width characters that a copy from a chat or a document can leave inside a token. */
+const ZW = "[\\u200b\\u200c\\u200d\\u2060\\ufeff]?";
 
-export const SCRUB_RULES: readonly ScrubRule[] = [
+const RULES: ScrubRule[] = [
   {
     id: "private_key",
     // No `m` flag, so `$` is the end of the text: a block without an END line goes to the end.
-    pattern:
-      /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----|$)/g,
+    // The second branch is the SSH2 (RFC 4716, ssh.com) private key block, the third the private
+    // lines of a PuTTY key file (`Private-Lines:` with its count and its base64 lines).
+    pattern: new RegExp(
+      [
+        String.raw`-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----|$)`,
+        String.raw`---- BEGIN SSH2 [A-Z0-9 ]{0,40}PRIVATE KEY ----[\s\S]*?(?:---- END SSH2 [A-Z0-9 ]{0,40}PRIVATE KEY ----|$)`,
+        String.raw`(?<![A-Za-z0-9-])Private-Lines:[ \t]{0,20}\d{1,4}\r?\n[A-Za-z0-9+/=]+(?=\r?\n|$)(?:\r?\n[A-Za-z0-9+/=]+(?=\r?\n|$))*`,
+      ].join("|"),
+      "g",
+    ),
   },
   {
     id: "aws_access_key_id",
@@ -563,39 +763,50 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
   },
   {
     id: "github_token",
-    pattern: new RegExp(`${LB}gh[pousr]_[A-Za-z0-9]{36,}|${LB}github_pat_[A-Za-z0-9_]{22,}`, "g"),
+    pattern: new RegExp(
+      `${LBP}gh[pousr]_(?:[A-Za-z0-9]${ZW}){36,}|${LBP}github_pat_(?:[A-Za-z0-9_]${ZW}){22,}`,
+      "g",
+    ),
   },
   {
     id: "slack_token",
-    pattern: new RegExp(`${LB}xox[abeoprs]-[A-Za-z0-9-]{10,}`, "g"),
+    pattern: new RegExp(`${LBP}xox[abeoprs]-[A-Za-z0-9-]{10,}`, "g"),
+  },
+  {
+    id: "slack_webhook",
+    pattern: new RegExp(
+      `(?<keep>${LBP}https?://hooks\\.slack\\.com/(?:services|workflows|triggers)/)(?<secret>[A-Za-z0-9_-]{6,}(?:/[A-Za-z0-9_-]{4,}){1,4})`,
+      "g",
+    ),
   },
   {
     id: "anthropic_key",
-    pattern: new RegExp(`${LB}sk-ant-[A-Za-z0-9_-]{20,}`, "g"),
+    pattern: new RegExp(`${LBP}sk-ant-[A-Za-z0-9_-]{20,}`, "g"),
   },
   {
     id: "openai_key",
+    // Keeps the strict boundary: a slug with the Slovak language code (`notes-sk-...`) is common.
     pattern: new RegExp(`${LB}sk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}`, "g"),
   },
   {
     id: "google_api_key",
-    pattern: new RegExp(`${LB}AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])`, "g"),
+    pattern: new RegExp(`${LBP}AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])`, "g"),
   },
   {
     id: "google_oauth_access_token",
-    pattern: new RegExp(`${LB}ya29\\.[A-Za-z0-9_-]{40,}(?:\\.[A-Za-z0-9_-]+)*`, "g"),
+    pattern: new RegExp(`${LBP}ya29\\.[A-Za-z0-9_-]{40,}(?:\\.[A-Za-z0-9_-]+)*`, "g"),
   },
   {
     id: "google_oauth_refresh_token",
-    pattern: new RegExp(`${LB}1//[A-Za-z0-9_-]{40,}`, "g"),
+    pattern: new RegExp(`${LBP}1//[A-Za-z0-9_-]{40,}`, "g"),
   },
   {
     id: "google_oauth_client_secret",
-    pattern: new RegExp(`${LB}GOCSPX-[A-Za-z0-9_-]{24,}`, "g"),
+    pattern: new RegExp(`${LBP}GOCSPX-[A-Za-z0-9_-]{24,}`, "g"),
   },
   {
     id: "stripe_secret_key",
-    pattern: new RegExp(`${LB}(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}`, "g"),
+    pattern: new RegExp(`${LBP}(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}`, "g"),
   },
   {
     id: "jwt",
@@ -605,27 +816,74 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
     ),
   },
   {
-    id: "bearer",
+    id: "url_password",
+    // A scheme, `://`, a user (it may be empty), a colon, the password and `@`. The password runs to the `@` and may hold
+    // an unencoded `/`; scheme, user and host stay. The password is read as one atomic run (a
+    // lookahead captures it and a backreference consumes it), so a run without `@` fails at once.
+    pattern:
+      /(?<keep>(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}:\/\/[^\s:/?#@"'<>\x60]{0,256}:)(?<secret>(?=(?<run>[^\s@"'<>\x60]{1,256}))\k<run>)(?=@)/g,
+    select: selectUrlPassword,
+  },
+  {
+    id: "authorization_header",
     pattern: new RegExp(
-      `(?<keep>${LB}bearer[ \\t]{1,20})(?<secret>[A-Za-z0-9._~+/-]{16,}=*)`,
+      `(?<keep>${LBP}(?:proxy-)?authorization["']?[ \\t]{0,20}[:=][ \\t]{0,20}["']?(?<scheme>basic|token)[ \\t\\u00a0\\u202f]{1,20})(?<secret>[A-Za-z0-9+/_.~-]{4,}={0,2})`,
       "gi",
     ),
+    select: selectAuthorization,
+  },
+  {
+    id: "bearer",
+    pattern: new RegExp(
+      `(?<keep>(?<header>${LBP}(?:proxy-)?authorization["']?[ \\t]{0,20}[:=][ \\t]{0,20}["']?)?${LB}bearer[ \\t\\u00a0\\u202f]{1,20})(?<secret>[A-Za-z0-9._~+/-]{6,}=*)`,
+      "gi",
+    ),
+    select: selectBearer,
+  },
+  {
+    id: "curl_user",
+    // The head is `curl`; the secret is the rest of the command (backslash line continuations
+    // included), and `selectCurlUser` finds the `-u` or `--user` passwords in it.
+    pattern: /(?<keep>(?<![A-Za-z0-9_-])curl(?=[ \t]))(?<secret>(?:[^\r\n\\]|\\[^\r\n]|\\\r?\n)*)/g,
+    select: selectCurlUser,
+  },
+  {
+    id: "cookie",
+    // A Cookie or Set-Cookie header (or a quoted header name, a JSON key, a `document.cookie`
+    // assignment) whose value starts with `name=`; "Cookie: chocolate chip" has no `=` and stays.
+    pattern:
+      /(?<keep>(?<![A-Za-z0-9_-])(?:set-)?cookie(?:["'][ \t]{0,20}[:,=]|[ \t]{0,20}[:=])[ \t]{0,20}(?:\[[ \t]{0,20})?["']?)(?<secret>[A-Za-z0-9!#$%&*+.^_|~-]{1,128}=[^\r\n]*)/gi,
+    select: selectCookie,
+  },
+  {
+    id: "pin_code",
+    // A PIN of 4 to 12 digits after a label whose last word is `pin` (`PIN`, `sim_pin`, `PIN code`).
+    pattern:
+      /(?<keep>(?<![A-Za-z0-9_-])(?:[A-Za-z0-9]{1,30}[_-])?pin(?:[ _-]?(?:code|number))?["']?[ \t]{0,20}[:=][ \t]{0,20}["']?)(?<secret>\d{4,12})(?![A-Za-z0-9])/gi,
   },
   {
     id: "labeled_secret",
     pattern: LABELED_PATTERN,
     tail: LABELED_TAIL,
-    admit: (groups) => isLabelKey(groups.label ?? ""),
+    admit: admitLabeled,
     select: selectLabeled,
   },
   {
     id: "iban",
-    pattern: /(?<![A-Za-z0-9])[A-Za-z]{2}\d{2}(?: ?[A-Za-z0-9]){11,}/g,
+    pattern: new RegExp(
+      `(?<![A-Za-z0-9])[A-Za-z]{2}\\d{2}(?:[${GROUP_SPACE}]?[A-Za-z0-9]){11,}`,
+      "g",
+    ),
     select: selectIban,
   },
   {
     id: "card_number",
-    pattern: /(?<!\d)\d(?:[ -]?\d){12,}/g,
+    pattern: new RegExp(`(?<!\\d)\\d(?:[${GROUP_SPACE}-]?\\d){12,}`, "g"),
     select: selectCard,
   },
 ];
+
+/** The rules, frozen: neither the list nor a rule object can be changed at run time. */
+export const SCRUB_RULES: readonly Readonly<ScrubRule>[] = Object.freeze(
+  RULES.map((rule) => Object.freeze(rule)),
+);

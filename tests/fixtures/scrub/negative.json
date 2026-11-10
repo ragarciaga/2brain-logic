@@ -175,17 +175,6 @@
       "parts": ["my", "gh", "p_", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"]
     },
     {
-      "rule": "github_token",
-      "parts": [
-        "my-",
-        "github_",
-        "pat_",
-        "A1B2C3D4A1B2C3D4A1B2C3",
-        "_",
-        "e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f"
-      ]
-    },
-    {
       "rule": "slack_token",
       "parts": [
         "a",
@@ -353,6 +342,180 @@
     {
       "rule": "google_oauth_client_secret",
       "parts": ["XGOC", "SPX-", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7O", "p8"]
+    },
+    {
+      "rule": "github_token",
+      "parts": [
+        "my",
+        "github_",
+        "pat_",
+        "A1B2C3D4A1B2C3D4A1B2C3",
+        "_",
+        "e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f6g7h8e5f"
+      ]
+    },
+    {
+      "rule": "openai_key",
+      "parts": ["release-notes-s", "k-2024-november-final-draft"]
+    },
+    {
+      "rule": "github_token",
+      "parts": ["gh", "p_", "a1b2c3d4e5f6", "\u200b", "a1b2c3d4e5f6a1b2c3d4e5f"]
+    },
+    {
+      "rule": "card_number",
+      "parts": ["card 4111", "\u00a01111\u00a01111\u00a01113"]
+    },
+    {
+      "rule": "iban",
+      "parts": ["NL92", "\u00a0ABNA\u00a00417\u00a01643\u00a000"]
+    },
+    {
+      "rule": "bearer",
+      "parts": ["Bearer tokens expire after an hour"]
+    },
+    {
+      "rule": "bearer",
+      "parts": ["the Bearer password scheme"]
+    },
+    {
+      "rule": "bearer",
+      "parts": ["Authorization: Bearer abcde"]
+    },
+    {
+      "rule": "url_password",
+      "parts": ["see http://localhost:3000/@alice for the profile"]
+    },
+    {
+      "rule": "url_password",
+      "parts": ["postgres://app:", "${DB_PASSWORD}", "@db.example.com/main"]
+    },
+    {
+      "rule": "url_password",
+      "parts": ["redis://:", "****", "@cache.example.com"]
+    },
+    {
+      "rule": "url_password",
+      "parts": ["postgres://app:", "[redacted]", "@db.example.com/x"]
+    },
+    {
+      "rule": "url_password",
+      "parts": ["https://alice@host.example.com/x and mailto:bob@example.com"]
+    },
+    {
+      "rule": "authorization_header",
+      "parts": ["Authorization: Basic scheme is weak"]
+    },
+    {
+      "rule": "authorization_header",
+      "parts": ["Authorization: token based access"]
+    },
+    {
+      "rule": "authorization_header",
+      "parts": ["Authorization: Basic <base64>"]
+    },
+    {
+      "rule": "curl_user",
+      "parts": ["docker run -u 1000:1000 alpine"]
+    },
+    {
+      "rule": "curl_user",
+      "parts": ["curl -u \"$API_USER:$API_PASS\" https://api.example.com"]
+    },
+    {
+      "rule": "curl_user",
+      "parts": ["git push -u origin main && curl -sS https://api.example.com"]
+    },
+    {
+      "rule": "cookie",
+      "parts": ["Cookie: chocolate chip, 12 per batch"]
+    },
+    {
+      "rule": "cookie",
+      "parts": ["cookie_count=3 and cookies: none"]
+    },
+    {
+      "rule": "cookie",
+      "parts": ["Cookie: <name>=<value>"]
+    },
+    {
+      "rule": "cookie",
+      "parts": ["Coo", "kie: sid=${SESSION_ID}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["return ok ? PASS : fail(FIX_INGEST);"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["function login(url, pass = fallbackValue) {}"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["the check must\npass: report it as blocked"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["first pass: reviewed the draft"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["bypass: enabled_for_all"]
+    },
+    {
+      "rule": "pin_code",
+      "parts": ["pinned: 1234 and spin: 1000 rpm"]
+    },
+    {
+      "rule": "pin_code",
+      "parts": ["pin: 12"]
+    },
+    {
+      "rule": "pin_code",
+      "parts": ["PIN code: <your-pin>"]
+    },
+    {
+      "rule": "private_key",
+      "parts": [
+        "---- BEG",
+        "IN SSH2 PUB",
+        "LIC KEY ----\n",
+        "Comment: \"rsa-key\"\n",
+        "a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8a1b2c3d4e5f6g7h8\n",
+        "---- E",
+        "ND SSH2 PUB",
+        "LIC KEY ----\n"
+      ]
+    },
+    {
+      "rule": "private_key",
+      "parts": ["The Private-Lines: header counts the base64 lines of a PuTTY key."]
+    },
+    {
+      "rule": "slack_webhook",
+      "parts": [
+        "docs at https://api.slack.com/messaging/webhooks and https://hooks.slack.com/services/"
+      ]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["client-certificate-path: /etc/kube/client.crt"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["credentials:\n  username: alice_admin\n  region: eu-west\n"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["case \"passphrase\":\n      return answers.passphraseHash;"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["Password:\n  must be twelve characters long"]
+    },
+    {
+      "rule": "labeled_secret",
+      "parts": ["pass", "word = |\n  notavalue\n"]
     }
   ],
   "frontmatter": [
@@ -433,6 +596,36 @@
       "field": "token_count_2",
       "kind": "string",
       "parts": ["abcdefghij"]
+    },
+    {
+      "rule": "pin_code",
+      "field": "pin",
+      "kind": "string",
+      "parts": ["12"]
+    },
+    {
+      "rule": "pin_code",
+      "field": "spin",
+      "kind": "number",
+      "parts": ["1000"]
+    },
+    {
+      "rule": "pin_code",
+      "field": "pinned",
+      "kind": "number",
+      "parts": ["4821"]
+    },
+    {
+      "rule": "card_number",
+      "field": "huge",
+      "kind": "number",
+      "parts": ["1234567890", "1234567890", "1"]
+    },
+    {
+      "rule": "labeled_secret",
+      "field": "bypass",
+      "kind": "string",
+      "parts": ["enabled_for_all"]
     }
   ]
 }

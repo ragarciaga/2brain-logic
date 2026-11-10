@@ -46,7 +46,7 @@ const negative = readJson<FixtureFile<TextNegative, FrontmatterFixture>>("negati
 const ibanExamples = readJson<Record<string, string[]>>("iban-examples.json");
 
 const RULE_IDS =
-  "private_key aws_access_key_id github_token slack_token anthropic_key openai_key google_api_key google_oauth_access_token google_oauth_refresh_token google_oauth_client_secret stripe_secret_key jwt bearer labeled_secret iban card_number".split(
+  "private_key aws_access_key_id github_token slack_token slack_webhook anthropic_key openai_key google_api_key google_oauth_access_token google_oauth_refresh_token google_oauth_client_secret stripe_secret_key jwt url_password authorization_header bearer curl_user cookie pin_code labeled_secret iban card_number".split(
     " ",
   );
 
@@ -85,13 +85,23 @@ function ruleById(id: string): ScrubRule {
 }
 
 describe("rule list (R4.2)", () => {
-  it("has exactly the 16 rules, in order, with unique ids and global patterns", () => {
+  it("has exactly the 22 rules, in order, with unique ids and global patterns", () => {
     expect(SCRUB_RULES.map((rule) => rule.id)).toEqual(RULE_IDS);
     expect(new Set(SCRUB_RULES.map((rule) => rule.id)).size).toBe(RULE_IDS.length);
     for (const rule of SCRUB_RULES) {
       expect(rule.id).toMatch(/^[a-z][a-z0-9_]*$/);
       expect(rule.pattern.global).toBe(true);
     }
+  });
+
+  it("is frozen: neither the list nor a rule object can be changed", () => {
+    expect(Object.isFrozen(SCRUB_RULES)).toBe(true);
+    for (const rule of SCRUB_RULES) expect(Object.isFrozen(rule)).toBe(true);
+    expect(() => (SCRUB_RULES as ScrubRule[]).push(ruleById("jwt"))).toThrow(TypeError);
+    expect(() => {
+      (ruleById("jwt") as { id: string }).id = "other";
+    }).toThrow(TypeError);
+    expect(ruleById("jwt").id).toBe("jwt");
   });
 
   it("scans a private key block with the g flag only, so a missing END line ends at the text end", () => {
@@ -1038,6 +1048,55 @@ describe("scrubFrontmatter (R4.1)", () => {
     expect(result.hits.get("github_token")).toBe(1);
   });
 
+  it("lets a label key cover every value of a nested object under it, at any depth", () => {
+    const secret = join("Xq9vL2", "mPz7Rt");
+    const result = scrubFrontmatter({
+      credentials: { value: secret, inner: { deep: [secret] }, short: "abc", on: true },
+      other: { value: secret },
+    });
+    expect(result.data).toEqual({
+      credentials: {
+        value: MARK("labeled_secret"),
+        inner: { deep: [MARK("labeled_secret")] },
+        short: "abc",
+        on: true,
+      },
+      other: { value: secret },
+    });
+    expect([...result.hits]).toEqual([["labeled_secret", 2]]);
+  });
+
+  it("redacts a PIN only right under a PIN key, from 4 to 12 digits", () => {
+    const result = scrubFrontmatter({
+      pin: join("48", "21"),
+      card: { pin_code: Number(join("4821", "3977")) },
+      pinned: 4821,
+      list: { pin: "abcd" },
+      long: { pin: "1234567890123" },
+    });
+    expect(result.data).toEqual({
+      pin: MARK("pin_code"),
+      card: { pin_code: MARK("pin_code") },
+      pinned: 4821,
+      list: { pin: "abcd" },
+      long: { pin: "1234567890123" },
+    });
+    expect([...result.hits]).toEqual([["pin_code", 2]]);
+  });
+
+  it("redacts an integer above 2^53 of card size, whose digits the parser already lost", () => {
+    const card = Number(join("9111", "1111", "1111", "1111"));
+    expect(Number.isSafeInteger(card)).toBe(false);
+    expect(scrubFrontmatter({ ref: card }).data).toEqual({ ref: MARK("card_number") });
+    expect(scrubFrontmatter({ password: card }).data).toEqual({
+      password: MARK("labeled_secret"),
+    });
+    const safe = Number.MAX_SAFE_INTEGER;
+    expect(scrubFrontmatter({ ref: safe }).data).toEqual({ ref: safe });
+    expect(scrubFrontmatter({ ref: 1e21 }).data).toEqual({ ref: 1e21 });
+    expect(scrubFrontmatter({ ref: 2 ** 60 + 0.5 }).hits.size).toBe(1);
+  });
+
   it("redacts the whole value when something of 6 characters or more remains after the rules", () => {
     const key = join("to", "ken");
     const mixed = `${tokenOf("github_token")} extra12345`;
@@ -1701,6 +1760,45 @@ describe("adversarial 1 MiB inputs finish in under 5000 ms (D5)", () => {
     ["refresh token prefix then a", `${join("1/", "/")}${repeat("a")}`],
     ["client secret prefix runs", repeat(join("GOC", "SPX-"))],
     ["client secret prefix then a", `${join("GOC", "SPX-")}${repeat("a")}`],
+    ["hyphen-glued token prefixes", repeat(join("x-gh", "p_ab-sk-", "ant-ab-xo", "xb-"))],
+    ["zero-width characters inside a token prefix run", `${join("gh", "p_")}${repeat("a\u200b")}`],
+    ["URL schemes", repeat("a://")],
+    ["URL user then colon runs", repeat("a://b:")],
+    ["URL user then a long password without @", `${join("a://", "b:")}${repeat("c")}`],
+    ["URL ports and paths", repeat("http://h:1/@")],
+    ["Authorization Basic runs", repeat(join("Authorization: Ba", "sic "))],
+    ["Authorization Basic then a", `${join("Authorization: Ba", "sic ")}${repeat("a")}`],
+    ["Authorization Bearer runs", repeat(join("Authorization: Bea", "rer "))],
+    ["Bearer then short tokens", repeat(join("Bea", "rer abc123 "))],
+    ["NBSP Bearer runs", repeat(join("Bea", "rer\u00a0"))],
+    ["curl runs", repeat("curl ")],
+    ["curl -u runs", `curl ${repeat("-u ")}`],
+    ["curl -u without a colon", `curl -u ${repeat("a")}`],
+    ["curl -u then a long password", `${join("cu", "rl -u a:")}${repeat("b")}`],
+    ["curl continuation lines", `curl ${repeat("-u a \\\n")}`],
+    ["cookie header runs", repeat(join("Set-Coo", "kie: "))],
+    ["cookie name runs", `${join("Coo", "kie: ")}${repeat("a")}`],
+    ["cookie arrays without a close", `${join('"set-coo', 'kie": ["')}${repeat("a=b; ")}`],
+    ["pin label runs", repeat(join("sim_pi", "n: "))],
+    ["pin prefixes", repeat("a_")],
+    ["PASS label runs", repeat(join("DB_PA", "SS="))],
+    ["PASS ternaries", repeat(join("? PA", "SS : fail(x) "))],
+    ["next-line labels", repeat(join("pass", "word:\n  "))],
+    ["block scalar labels", repeat(join("pass", "word: |\n  "))],
+    ["next-line YAML keys", repeat(join("pass", "word:\n  a:\n"))],
+    ["next-line long values", `${join("pass", "word:\n  ")}${repeat("a")}`],
+    ["next-line quoted values without a close", `${join("pass", 'word:\n  "')}${repeat("a")}`],
+    ["SSH2 BEGIN runs", repeat(join("---- BEGIN SSH2 PRIV", "ATE KEY ----\n"))],
+    ["PuTTY private line runs", repeat(join("Private-", "Lines: 1\n"))],
+    ["PuTTY private body", `${join("Private-", "Lines: 1\n")}${repeat("A")}`],
+    ["PuTTY private body lines", `${join("Private-", "Lines: 1\n")}${repeat("AAAA\n")}`],
+    ["Slack webhook runs", repeat(join("https://hooks.slack", ".com/services/"))],
+    [
+      "Slack webhook segments",
+      `${join("https://hooks.slack", ".com/services/")}${repeat("aaaa/")}`,
+    ],
+    ["NBSP digit groups", repeat("1234\u00a0")],
+    ["NBSP IBAN runs", repeat(join("DE89", "\u00a0AAAA\u00a0"))],
   ];
 
   it.each(inputs)("%s", (_name, input) => {
