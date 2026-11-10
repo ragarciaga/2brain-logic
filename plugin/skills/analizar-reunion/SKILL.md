@@ -10,18 +10,21 @@ vault. The analysis runs in this session, with the owner's own Claude subscripti
 
 ## Tools
 
-The tools are `vault_info`, `search`, `recent`, `read`, `save_note` and `update_properties`. They
-belong to the brain MCP server, so their full names look like `mcp__<server>__<tool>`; the server
-is called `brain` unless the owner chose another name. If they are missing, stop and tell the
-owner to add the server and sign in, as described in docs/GUIDE-mcp.md.
+The tools are `vault_info`, `search`, `recent`, `read`, `import_meetings`, `save_note` and
+`update_properties`. They belong to the brain MCP server, so their full names look like
+`mcp__<server>__<tool>`; the server is called `brain` unless the owner chose another name. If
+they are missing, stop and tell the owner to add the server and sign in, as described in
+docs/GUIDE-mcp.md.
 
 ## Steps
 
 1. Call `vault_info` first, before any other tool. From its answer take the `areas`, the property
    names (`properties`), the `value` of the types `meeting` and `analysis`, and the `folder` of
    the `analysis` type. Never assume a name, folder or area that `vault_info` did not return.
-2. Find the meeting with `search` or `recent`. Then `read` every note of that meeting. Notes of
-   one meeting that come from different sources are analyzed together as one meeting.
+2. Find the meeting with `search` or `recent`. If it is not there and it happened in the last
+   seven days, call `import_meetings` with the days back to that date, then search again. Then
+   `read` every note of that meeting. Notes of one meeting that come from different sources are
+   analyzed together as one meeting.
 3. Write the analysis in the language of the conversation with the owner: decisions, figures
    and open questions, each tied to what the notes say. Follow-up tasks are not part of it; they
    are listed in the answer only (see step 7).

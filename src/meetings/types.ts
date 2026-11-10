@@ -48,7 +48,16 @@ export type GeminiBody = {
   calendar_events: CalendarEvent[];
 };
 
-export type MeetingBody = FirefliesBody | GeminiBody;
+/** A "Notes by Gemini" Google Doc exported as plain text, as n8n reads it from Drive. */
+export type GeminiDocBody = {
+  source: "gemini_doc";
+  doc: { id: string; name: string; text: string };
+  /** When Drive created the doc, at the end of the meeting: the best end time the doc offers. */
+  created_time?: string;
+  calendar_events: CalendarEvent[];
+};
+
+export type MeetingBody = FirefliesBody | GeminiBody | GeminiDocBody;
 
 export type MeetingInput = {
   source: "fireflies" | "gemini";

@@ -1,0 +1,851 @@
+{
+  "name": "2brain: import meetings",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "2brain-meetings-import",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Import request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "import-request",
+      "webhookId": "2brain-meetings-import",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "2brain ingest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 23,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "name": "Daily sweep",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 200],
+      "id": "daily-sweep"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "days",
+              "name": "days",
+              "type": "number",
+              "value": "={{ Math.min(7, Math.max(1, Math.trunc(Number($json.body && $json.body.days !== undefined ? $json.body.days : 1)) || 1)) }}"
+            },
+            {
+              "id": "composio-mcp-url",
+              "name": "composio_mcp_url",
+              "type": "string",
+              "value": "REPLACE-WITH-COMPOSIO-MCP-URL"
+            },
+            {
+              "id": "drive-account",
+              "name": "drive_account",
+              "type": "string",
+              "value": "REPLACE-WITH-DRIVE-ACCOUNT-ID"
+            },
+            {
+              "id": "calendar-account",
+              "name": "calendar_account",
+              "type": "string",
+              "value": "REPLACE-WITH-CALENDAR-ACCOUNT-ID"
+            },
+            {
+              "id": "calendar-id",
+              "name": "calendar_id",
+              "type": "string",
+              "value": "primary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [240, 100],
+      "id": "settings"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"query($from: DateTime) { transcripts(fromDate: $from, limit: 50) { id date } }\", variables: { from: $now.minus({ days: $('Settings').first().json.days }).toISO() } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "List Fireflies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 100],
+      "id": "list-fireflies",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Fireflies API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "={{ $('Settings').first().json.composio_mcp_url }}",
+        "authentication": "headerAuth",
+        "tool": {
+          "__rl": true,
+          "mode": "id",
+          "value": "COMPOSIO_MULTI_EXECUTE_TOOL"
+        },
+        "inputMode": "json",
+        "jsonInput": "={{ JSON.stringify({ tools: [{ tool_slug: 'GOOGLEDRIVE_FIND_FILE', account: $('Settings').first().json.drive_account, arguments: { q: \"name contains 'Notes by Gemini' and mimeType = 'application/vnd.google-apps.document' and trashed = false and createdTime > '\" + $now.minus({ days: $('Settings').first().json.days }).toUTC().toISO({ suppressMilliseconds: true, includeOffset: false }) + \"'\", fields: 'files(id,name,createdTime)', pageSize: 50 } }], sync_response_to_workbench: false, thought: '2brain meetings import' }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Find Gemini docs",
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1.1,
+      "position": [720, 100],
+      "id": "find-gemini-docs",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Composio MCP"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Composio answers through MCP: a text block holding JSON, with one result per tool call.\nfunction composio(json) {\n  let r = json;\n  if (r && Array.isArray(r.content)) {\n    const block = r.content.find((c) => c && c.type === 'text');\n    r = block ? block.text : undefined;\n  }\n  if (typeof r === 'string') r = JSON.parse(r);\n  const results = (r && r.data && r.data.results) || (r && r.results) || [];\n  const first = results[0];\n  if (!first || !first.response || first.response.successful !== true) throw new Error('composio call failed');\n  return first.response.data;\n}// One job per meeting: Fireflies ids from the list, Gemini docs from Drive. A listing that\n// failed becomes one failed job, so the summary reports it. Never an empty output: the loop\n// must run so the webhook gets its answer.\nconst jobs = [];\nconst ff = $('List Fireflies').first().json;\nconst ffBody = ff.body !== undefined ? ff.body : ff;\nconst transcripts = ffBody && ffBody.data && Array.isArray(ffBody.data.transcripts) ? ffBody.data.transcripts : null;\nif (ff.error !== undefined || ff.statusCode >= 400 || transcripts === null) {\n  jobs.push({ failed: true, what: 'fireflies_list' });\n} else {\n  for (const t of transcripts) if (t && typeof t.id === 'string') jobs.push({ kind: 'fireflies', id: t.id });\n}\ntry {\n  const found = $('Find Gemini docs').first().json;\n  if (found.error !== undefined) throw new Error('find failed');\n  const files = composio(found).files || [];\n  const seen = new Set();\n  for (const f of files) {\n    if (!f || typeof f.id !== 'string' || typeof f.name !== 'string') continue;\n    // Gemini writes one doc per language for one meeting; the service dedupes them, so\n    // export only the first and save a Composio call.\n    const key = f.name.replace(/ \\([^()]*\\)$/, '');\n    if (seen.has(key)) continue;\n    seen.add(key);\n    jobs.push({ kind: 'gemini', doc: { id: f.id, name: f.name, createdTime: f.createdTime } });\n  }\n} catch (e) {\n  jobs.push({ failed: true, what: 'gemini_list' });\n}\nif (jobs.length === 0) jobs.push({ noop: true });\nreturn jobs.map((json) => ({ json }));"
+      },
+      "name": "Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 100],
+      "id": "jobs"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1200, 100],
+      "id": "loop"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "fireflies",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "fireflies"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "gemini",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "gemini"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "name": "Kind",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1440, 100],
+      "id": "kind"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"query($id: String!) { transcript(id: $id) { id title date duration transcript_url organizer_email participants meeting_attendees { displayName email name } sentences { speaker_name text start_time } } }\", variables: { id: $json.id } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Fetch Fireflies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, -100],
+      "id": "fetch-fireflies",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Fireflies API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fireflies transcript to a meeting body. The calendar window is the recording +/- 30 minutes.\nconst r = $input.first().json;\nconst body = r.body !== undefined ? r.body : r;\nconst t = body && body.data ? body.data.transcript : null;\nif (r.error !== undefined || r.statusCode >= 400 || !t || typeof t.date !== 'number') {\n  return [{ json: { failed: true, what: 'fireflies_fetch' } }];\n}\nconst min = new Date(t.date - 30 * 60000).toISOString();\nconst max = new Date(t.date + (t.duration || 0) * 60000 + 30 * 60000).toISOString();\nreturn [{ json: { body: { source: 'fireflies', transcript: t }, window: { min, max } } }];"
+      },
+      "name": "Fireflies job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, -100],
+      "id": "fireflies-job"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "={{ $('Settings').first().json.composio_mcp_url }}",
+        "authentication": "headerAuth",
+        "tool": {
+          "__rl": true,
+          "mode": "id",
+          "value": "COMPOSIO_MULTI_EXECUTE_TOOL"
+        },
+        "inputMode": "json",
+        "jsonInput": "={{ JSON.stringify({ tools: [{ tool_slug: 'GOOGLEDRIVE_EXPORT_GOOGLE_WORKSPACE_FILE', account: $('Settings').first().json.drive_account, arguments: { fileId: $json.doc.id, mimeType: 'text/plain' } }], sync_response_to_workbench: false, thought: '2brain meetings import' }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Export doc",
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1.1,
+      "position": [1680, 100],
+      "id": "export-doc",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Composio MCP"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Composio answers through MCP: a text block holding JSON, with one result per tool call.\nfunction composio(json) {\n  let r = json;\n  if (r && Array.isArray(r.content)) {\n    const block = r.content.find((c) => c && c.type === 'text');\n    r = block ? block.text : undefined;\n  }\n  if (typeof r === 'string') r = JSON.parse(r);\n  const results = (r && r.data && r.data.results) || (r && r.results) || [];\n  const first = results[0];\n  if (!first || !first.response || first.response.successful !== true) throw new Error('composio call failed');\n  return first.response.data;\n}// Composio returns the exported text as a short-lived download link.\nconst r = $input.first().json;\ntry {\n  if (r.error !== undefined) throw new Error('export failed');\n  const data = composio(r);\n  const url = data && data.file && data.file.s3url;\n  if (typeof url !== 'string' || !url.startsWith('https://')) throw new Error('no link');\n  return [{ json: { url } }];\n} catch (e) {\n  return [{ json: { failed: true, what: 'gemini_export' } }];\n}"
+      },
+      "name": "Export link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 100],
+      "id": "export-link"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-link-c",
+              "leftValue": "={{ typeof $json.url === 'string' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has link",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2160, 200],
+      "id": "has-link"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "name": "Download text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 100],
+      "id": "download-text",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Exported doc to a meeting body. The service keeps the transcript part only. The doc is\n// created when the meeting ends, so the window looks back 6 hours from that.\nconst job = $('Loop').first().json;\nconst r = $input.first().json;\nif (r.failed || r.error !== undefined || typeof r.data !== 'string') {\n  return [{ json: { failed: true, what: 'gemini_download' } }];\n}\nconst created = Date.parse(job.doc.createdTime);\nif (!Number.isFinite(created)) return [{ json: { failed: true, what: 'gemini_doc' } }];\nconst body = { source: 'gemini_doc', doc: { id: job.doc.id, name: job.doc.name, text: r.data }, created_time: new Date(created).toISOString() };\nconst window = { min: new Date(created - 6 * 3600000).toISOString(), max: new Date(created + 30 * 60000).toISOString() };\nreturn [{ json: { body, window } }];"
+      },
+      "name": "Gemini job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 200],
+      "id": "gemini-job"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-body-c",
+              "leftValue": "={{ $json.body !== undefined && !$json.failed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has body",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2880, 0],
+      "id": "has-body"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "={{ $('Settings').first().json.composio_mcp_url }}",
+        "authentication": "headerAuth",
+        "tool": {
+          "__rl": true,
+          "mode": "id",
+          "value": "COMPOSIO_MULTI_EXECUTE_TOOL"
+        },
+        "inputMode": "json",
+        "jsonInput": "={{ JSON.stringify({ tools: [{ tool_slug: 'GOOGLECALENDAR_EVENTS_LIST', account: $('Settings').first().json.calendar_account, arguments: { calendarId: $('Settings').first().json.calendar_id, timeMin: $json.window.min, timeMax: $json.window.max, singleEvents: true, maxResults: 50 } }], sync_response_to_workbench: false, thought: '2brain meetings import' }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Calendar",
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1.1,
+      "position": [2880, -100],
+      "id": "calendar",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Composio MCP"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Composio answers through MCP: a text block holding JSON, with one result per tool call.\nfunction composio(json) {\n  let r = json;\n  if (r && Array.isArray(r.content)) {\n    const block = r.content.find((c) => c && c.type === 'text');\n    r = block ? block.text : undefined;\n  }\n  if (typeof r === 'string') r = JSON.parse(r);\n  const results = (r && r.data && r.data.results) || (r && r.results) || [];\n  const first = results[0];\n  if (!first || !first.response || first.response.successful !== true) throw new Error('composio call failed');\n  return first.response.data;\n}// Adds the calendar events to the body. A failed calendar call fails the meeting instead of\n// storing it with a wrong name: names are stable, and the next run tries again.\nconst job = $('Has body').first().json;\nconst r = $input.first().json;\ntry {\n  if (r.error !== undefined) throw new Error('calendar failed');\n  const items = composio(r).items || [];\n  const calendarId = $('Settings').first().json.calendar_id;\n  const events = items.slice(0, 50).map((e) => ({ ...e, title: e.summary, calendar_id: calendarId }));\n  return [{ json: { post: { ...job.body, calendar_events: events } } }];\n} catch (e) {\n  return [{ json: { failed: true, what: 'calendar' } }];\n}"
+      },
+      "name": "Build post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3120, -100],
+      "id": "build-post"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ready-c",
+              "leftValue": "={{ $json.post !== undefined }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3360, -100],
+      "id": "ready"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://brain:3000/meetings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.post) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "name": "Post meeting",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3600, -200],
+      "id": "post-meeting",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "2brain ingest"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One answer for the whole run: stored and already stored paths, counts of skipped and failed.\nconst stored = [];\nconst already = [];\nlet skipped = 0;\nlet failed = 0;\nfor (const { json } of $input.all()) {\n  if (json.noop) continue;\n  if (json.failed) { failed++; continue; }\n  const body = json.body || {};\n  if (json.statusCode === 201 && typeof body.path === 'string') stored.push(body.path);\n  else if (json.statusCode === 200 && body.already_stored && typeof body.path === 'string') already.push(body.path);\n  else if (json.statusCode === 200 && body.skipped) skipped++;\n  else failed++;\n}\nreturn [{ json: { stored, already_stored: already, skipped, failed } }];"
+      },
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 400],
+      "id": "summary"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "from-request-c",
+              "leftValue": "={{ $('Import request').isExecuted }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "From request",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1680, 400],
+      "id": "from-request"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "name": "Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1920, 400],
+      "id": "answer"
+    }
+  ],
+  "connections": {
+    "Import request": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily sweep": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "List Fireflies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Fireflies": {
+      "main": [
+        [
+          {
+            "node": "Find Gemini docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Gemini docs": {
+      "main": [
+        [
+          {
+            "node": "Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobs": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kind",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kind": {
+      "main": [
+        [
+          {
+            "node": "Fetch Fireflies",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Export doc",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Fireflies": {
+      "main": [
+        [
+          {
+            "node": "Fireflies job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fireflies job": {
+      "main": [
+        [
+          {
+            "node": "Has body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export doc": {
+      "main": [
+        [
+          {
+            "node": "Export link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export link": {
+      "main": [
+        [
+          {
+            "node": "Has link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has link": {
+      "main": [
+        [
+          {
+            "node": "Download text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download text": {
+      "main": [
+        [
+          {
+            "node": "Gemini job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini job": {
+      "main": [
+        [
+          {
+            "node": "Has body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has body": {
+      "main": [
+        [
+          {
+            "node": "Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar": {
+      "main": [
+        [
+          {
+            "node": "Build post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build post": {
+      "main": [
+        [
+          {
+            "node": "Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready": {
+      "main": [
+        [
+          {
+            "node": "Post meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post meeting": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary": {
+      "main": [
+        [
+          {
+            "node": "From request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "From request": {
+      "main": [
+        [
+          {
+            "node": "Answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

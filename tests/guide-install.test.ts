@@ -27,6 +27,7 @@ const HEADINGS = [
   "Save a first note",
   "n8n credential",
   "Updates",
+  "After a host restart",
   "Troubleshooting",
 ];
 

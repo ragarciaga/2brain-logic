@@ -61,6 +61,7 @@ describe(".env.example", () => {
       "ALLOWED_REDIRECT_HOSTS=",
       "AUTH_STORE_DIR=/data/auth",
       "TRUST_PROXY_HOPS=0",
+      "MEETINGS_IMPORT_URL=",
       "ANTHROPIC_API_KEY=",
       "N8N_NETWORK=n8n",
     ]);

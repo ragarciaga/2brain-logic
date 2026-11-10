@@ -17,6 +17,7 @@ import { CONFIG_FILE, ConfigInvalidError, type VaultConfig } from "../src/config
 import { defaultGit, ensureClone, type GitApi, GitError } from "../src/git/index.js";
 import { createMcpServer, MCP_TOOLS, type McpServerDeps } from "../src/mcp/server.js";
 import { createInfoTools } from "../src/mcp/tools/info.js";
+import { createMeetingTools } from "../src/mcp/tools/meetings.js";
 import { createReadTools, READ_TOOLS } from "../src/mcp/tools/read.js";
 import { buildRecipe, createWriteTools, slugify, WRITE_TOOLS } from "../src/mcp/tools/write.js";
 import { createApp } from "../src/server/app.js";
@@ -99,6 +100,7 @@ async function connect(writer: VaultWriter = makeWriter(), scrubber?: Scrubber) 
       ...(scrubber ? { scrubber } : {}),
     }),
     ...createInfoTools(),
+    ...createMeetingTools(),
   ];
   const fetchLike = async (input: string | URL | Request, init?: RequestInit) => {
     const incoming = new Request(input, init);
@@ -1001,7 +1003,7 @@ describe("update_properties (R9.3, R9.4)", () => {
 });
 
 describe("R9.5: the registry", () => {
-  it("lists exactly search, read, recent, save_note, save_recipe, update_properties and vault_info", async () => {
+  it("lists exactly search, read, recent, save_note, save_recipe, update_properties, vault_info and import_meetings", async () => {
     const { client } = await connect();
     const listed = await client.listTools();
     expect(listed.tools.map((t) => t.name)).toEqual([
@@ -1012,6 +1014,7 @@ describe("R9.5: the registry", () => {
       "save_recipe",
       "update_properties",
       "vault_info",
+      "import_meetings",
     ]);
     expect(MCP_TOOLS.map((t) => t.name)).toEqual(listed.tools.map((t) => t.name));
     expect(READ_TOOLS.map((t) => t.name)).toEqual(["search", "read", "recent"]);

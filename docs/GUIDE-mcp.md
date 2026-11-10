@@ -8,7 +8,7 @@ and Codex or ChatGPT. The examples use `https://brain.example.com`; use your own
 
 The service exposes one HTTPS origin (`PUBLIC_BASE_URL`) and the MCP endpoint is
 `<PUBLIC_BASE_URL>/mcp`, for example `https://brain.example.com/mcp`. Clients sign in with your
-owner passphrase through OAuth. After that they can use seven tools:
+owner passphrase through OAuth. After that they can use eight tools:
 
 - `search`: find notes in the vault.
 - `read`: read one note by its vault path.
@@ -18,6 +18,8 @@ owner passphrase through OAuth. After that they can use seven tools:
 - `update_properties`: change the properties of an existing note.
 - `vault_info`: read only; describe the vault's areas, property names, note types with their
   folders, and the archive folder.
+- `import_meetings`: bring the meetings of the last days from Fireflies and Gemini into the vault,
+  through n8n. It needs `MEETINGS_IMPORT_URL`; see [GUIDE-meetings.md](GUIDE-meetings.md).
 
 There is no delete tool: nothing can be removed over MCP. To get rid of a note, archive it from
 Obsidian (move it to your archive folder).

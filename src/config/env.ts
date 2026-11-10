@@ -9,6 +9,13 @@ const EnvSchema = z.object({
   INGEST_TOKEN: z.string().min(32),
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   HOST: z.string().min(1).default("127.0.0.1"),
+  /** n8n webhook of the meetings import workflow (docs/adr/0021-meetings-on-demand.md). */
+  MEETINGS_IMPORT_URL: z
+    .url({ protocol: /^https?$/, error: "must be an http or https URL" })
+    .refine((v) => new URL(v).username === "" && new URL(v).password === "", {
+      error: "must not carry a user name or password",
+    })
+    .optional(),
 });
 
 /**
