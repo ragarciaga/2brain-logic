@@ -515,7 +515,9 @@ describe("D2: every meeting path is checked before file work", () => {
 });
 
 describe("D2: the plain path is checked too", () => {
-  it("a Windows-unsafe area gives 400 unsafe_path and writes nothing", async () => {
+  // Since #37 the config itself refuses a Windows-unsafe area, so the owner sees the config as the
+  // cause (503 config_invalid) instead of a 400 on every meeting.
+  it("a Windows-unsafe area gives 503 config_invalid and writes nothing", async () => {
     pushFiles(fixture, {
       ".2brain/config.yaml": readFileSync(CONFIG_TEMPLATE, "utf8").replace(
         "areas: [personal, work]",
@@ -524,8 +526,8 @@ describe("D2: the plain path is checked too", () => {
     });
     const head = remoteHead();
     const response = await post(makeApp(), firefliesBody());
-    expect(response.status).toBe(400);
-    expect(response.json).toEqual({ ok: false, error: "unsafe_path" });
+    expect(response.status).toBe(503);
+    expect(response.json).toMatchObject({ ok: false, error: "config_invalid" });
     expect(remoteHead()).toBe(head);
     expect(git(fixture.vaultDir, ["rev-parse", "HEAD"])).toBe(head);
     expect(git(fixture.vaultDir, ["status", "--porcelain"])).toBe("");
