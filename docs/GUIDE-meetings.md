@@ -151,6 +151,10 @@ other writes keep working.
 - A meeting whose calendar lookup fails is not posted and counts as failed, so it is never stored
   under a wrong name. The next import tries it again.
 - A failed Fireflies list or Drive search counts as one failure; the other source still runs.
+- The answer names the step where each failure stopped, in `failures`: `fireflies_list`,
+  `gemini_list`, `fireflies_fetch`, `gemini_export`, `gemini_download`, `gemini_doc`, `calendar`,
+  `ingest_<status>` (the service refused the post) or `ingest_unreachable`. For `calendar`, check
+  `calendar_account` and `calendar_id` in `Settings`; for the others, open the execution in n8n.
 
 ## Privacy
 

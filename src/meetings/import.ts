@@ -15,6 +15,8 @@ const MAX_PATHS = 100;
 const path = z.string().max(1024);
 const paths = z.array(path).max(1000).optional();
 const count = z.number().int().min(0).max(100_000).optional();
+/** Step names from the workflow, such as `calendar` or `ingest_400`. Never free text. */
+const failure = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/);
 
 /** The summary the n8n import workflow answers with. Unknown keys are dropped. */
 const SummarySchema = z.object({
@@ -22,6 +24,7 @@ const SummarySchema = z.object({
   already_stored: paths,
   skipped: count,
   failed: count,
+  failures: z.array(failure).max(1000).optional(),
 });
 
 export type ImportOutcome =
@@ -31,6 +34,8 @@ export type ImportOutcome =
       already_stored: string[];
       skipped: number;
       failed: number;
+      /** The workflow step where each failed meeting stopped, one entry per failure. */
+      failures: string[];
     }
   | { ok: true; pending: true }
   | { ok: false; error: "import_not_configured" | "import_failed" | "import_refused" };
@@ -89,6 +94,7 @@ export function createMeetingsImporter(options: ImporterOptions): MeetingsImport
         already_stored: (parsed.already_stored ?? []).slice(0, MAX_PATHS),
         skipped: parsed.skipped ?? 0,
         failed: parsed.failed ?? 0,
+        failures: (parsed.failures ?? []).slice(0, MAX_PATHS),
       };
     },
   };
