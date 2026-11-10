@@ -97,6 +97,7 @@ describe("vault_info over the SDK client", () => {
       "save_note",
       "save_recipe",
       "update_properties",
+      "append_to_note",
       "vault_info",
       "import_meetings",
     ]);

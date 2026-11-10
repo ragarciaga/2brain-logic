@@ -1038,7 +1038,7 @@ describe("update_properties (R9.3, R9.4)", () => {
 });
 
 describe("R9.5: the registry", () => {
-  it("lists exactly search, read, recent, save_note, save_recipe, update_properties, vault_info and import_meetings", async () => {
+  it("lists exactly the eight read, write, info and meeting tools, and nothing that deletes", async () => {
     const { client } = await connect();
     const listed = await client.listTools();
     expect(listed.tools.map((t) => t.name)).toEqual([
@@ -1048,6 +1048,7 @@ describe("R9.5: the registry", () => {
       "save_note",
       "save_recipe",
       "update_properties",
+      "append_to_note",
       "vault_info",
       "import_meetings",
     ]);
@@ -1057,6 +1058,7 @@ describe("R9.5: the registry", () => {
       "save_note",
       "save_recipe",
       "update_properties",
+      "append_to_note",
     ]);
     for (const tool of listed.tools) {
       expect(tool.name).not.toMatch(/delete|move|archive|remove|rename/i);
@@ -1076,5 +1078,67 @@ describe("#251: write tool descriptions point to vault_info", () => {
       .frontmatter;
     expect(fm?.description).toMatch(/vault_info/);
     expect(update?.description).toMatch(/vault_info/);
+  });
+});
+
+describe("append_to_note (docs/adr/0023-mcp-append.md)", () => {
+  const TOOL = "append_to_note";
+  const BODY = "Line one\r\nLine two \r\n";
+  function seed(files: Record<string, string>): void {
+    push(files);
+    git(fixture.vaultDir, ["pull", "--ff-only"]);
+  }
+
+  it("adds text after a blank line, keeps every earlier byte and commits", async () => {
+    const original = stringifyNote({ ...FM, title: "alpha" }, BODY);
+    seed({ "inbox/a.md": original });
+    const { call } = await connect();
+    const r = await call(TOOL, { path: "inbox/a.md", text: "## 2026-11-10\n- New fact." });
+    expect(r.isError).toBe(false);
+    expect(r.data).toMatchObject({
+      ok: true,
+      path: "inbox/a.md",
+      commit: head(),
+      unchanged: false,
+    });
+    expect(remoteHead()).toBe(head());
+    const stored = remoteFile("inbox/a.md");
+    expect(stored.startsWith(original)).toBe(true);
+    expect(stored.slice(original.length)).toBe("\r\n## 2026-11-10\n- New fact.");
+  });
+
+  it("scrubs the text and turns a remote image into a link", async () => {
+    seed({ "inbox/b.md": stringifyNote({ ...FM, title: "beta" }, "Body\n") });
+    const { call } = await connect();
+    const r = await call(TOOL, {
+      path: "inbox/b.md",
+      text: `token ${GHP}\n![x](https://example.com/x.png?d=leak)`,
+    });
+    expect(r.isError).toBe(false);
+    const stored = remoteFile("inbox/b.md");
+    expect(stored).not.toContain(GHP);
+    expect(stored).toContain("[REDACTED:");
+    expect(stored).not.toContain("![x](https://example.com");
+    expect(stored).toContain("[x](https://example.com/x.png?d=leak)");
+    expect(r.text).not.toContain(GHP);
+  });
+
+  it("refuses a meeting transcript and leaves it byte for byte", async () => {
+    const text = stringifyNote({ ...FM, type: "meeting", title: "weekly" }, "Transcript line\n");
+    seed({ "personal/meetings/m.md": text });
+    const { call } = await connect();
+    const before = remoteHead();
+    const r = await call(TOOL, { path: "personal/meetings/m.md", text: "extra" });
+    expect(r.isError).toBe(true);
+    expect(remoteHead()).toBe(before);
+    expect(remoteFile("personal/meetings/m.md")).toBe(text);
+  });
+
+  it("refuses a missing note, blank text, extra keys are ignored, and nothing is written", async () => {
+    const { call } = await connect();
+    const before = remoteHead();
+    expect((await call(TOOL, { path: "inbox/none.md", text: "x" })).isError).toBe(true);
+    expect((await call(TOOL, { path: "inbox/none.md", text: "   " })).isError).toBe(true);
+    expect(remoteHead()).toBe(before);
   });
 });
