@@ -219,6 +219,31 @@ describe("save_note (R9.1)", () => {
     expect(logs.join("\n")).not.toContain(ANT);
   });
 
+  it("issue 135: stores remote image embeds as links, keeps local ones, reports and logs the count", async () => {
+    const { call } = await connect();
+    const body = [
+      "![](https://example.com/x.png?d=secret)",
+      '<img src="https://example.com/y.png">',
+      "![local](attachments/x.png) ![[note]] [link](https://example.com)",
+      "",
+    ].join("\n");
+    const r = await call("save_note", noteArgs({}, "inbox/embeds.md", body));
+    expect(r.isError).toBe(false);
+    expect(r.data.redactions).toEqual([{ rule: "remote_embed", count: 2 }]);
+    const stored = parseNote(remoteFile("inbox/embeds.md")).content;
+    expect(stored).toBe(
+      [
+        "[](https://example.com/x.png?d=secret)",
+        '&lt;img src="https://example.com/y.png">',
+        "![local](attachments/x.png) ![[note]] [link](https://example.com)",
+        "",
+      ].join("\n"),
+    );
+    expect(logs).toContain("mcp save_note: redacted: remote_embed=2");
+    const again = await call("save_note", noteArgs({}, "inbox/embeds.md", body));
+    expect(again.data).toMatchObject({ ok: true, unchanged: true });
+  });
+
   describe("R9.4: every rejection has the ingest code and detail fields", () => {
     const leaky = (extra: Record<string, unknown> = {}, path = "inbox/leak.md") =>
       noteArgs({ leak_field: SENTINEL, ...extra }, path, `${SENTINEL} body\n`);
@@ -473,6 +498,16 @@ describe("save_recipe (R9.2)", () => {
     });
     expect(stored.content).toBe(
       "## Problem\n\nThe test fails on CI.\n\n## Solution\n\nWait for the port.\n",
+    );
+  });
+
+  it("issue 135: a remote image in a recipe becomes a link", async () => {
+    const { call } = await connect();
+    const r = await call("save_recipe", recipe({ problem: "See ![a](https://example.com/a.png)" }));
+    expect(r.isError).toBe(false);
+    expect(r.data.redactions).toEqual([{ rule: "remote_embed", count: 1 }]);
+    expect(remoteFile("recipes/fix-flaky-test-ci.md")).toContain(
+      "See [a](https://example.com/a.png)",
     );
   });
 

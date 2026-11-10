@@ -97,6 +97,14 @@ either case. A missing path, a directory, or a file the repository does not trac
 are those of `PATCH /notes`. There is no delete: the service has no route or operation that removes a
 vault file, and "remove" means archive.
 
+After the scrub, remote embeds in the body are neutralized so that viewing a note never loads
+anything from the network: a Markdown image with a remote destination becomes a plain link
+(`![a](https://example.com/x.png)` is stored as `[a](https://example.com/x.png)`), and an HTML tag
+such as `<img src="https://example.com/x.png">` is stored with its `<` written as `&lt;`, so it shows as text.
+Local embeds (`![](attachments/x.png)`, `![[note]]`) and links are kept. Each one counts as the
+redaction rule `remote_embed`. Meeting transcripts are stored verbatim. Details:
+docs/adr/0022-remote-embeds.md.
+
 When the scrub redacted anything, the 201 body also carries `"redactions":[{"rule":"<id>","count":<n>}]`
 (rule ids and counts only, sorted by rule id) and the service logs one `redacted: <rule>=<count>` line (several pairs are joined with ", " on that one line);
 without redactions the key is absent.

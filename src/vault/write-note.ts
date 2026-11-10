@@ -1,10 +1,12 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
+import { DEFAULT_VAULT_CONFIG } from "../config/defaults.js";
 import { loadVaultConfig, type VaultConfig } from "../config/vault-config.js";
 import type { GitApi, GitAuthor } from "../git/index.js";
 import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../git/sync.js";
 import type { MeetingInput, MeetingOk } from "../meetings/types.js";
+import { appendOpensStoredTag, neutralizeRemoteEmbeds, REMOTE_EMBED_RULE } from "./embeds.js";
 import { parseNote, stringifyNote } from "./frontmatter.js";
 import { restoreInterruptedMeeting } from "./meeting-recovery.js";
 import type { NoteArchive, NoteInput, NotePatch } from "./note-schema.js";
@@ -225,6 +227,26 @@ export function scrubText(
   }
 }
 
+/**
+ * Neutralize the remote embeds of a body text (docs/adr/0022-remote-embeds.md), reported as the
+ * redaction rule `remote_embed`. `context` is the stored body an append goes after: read, never
+ * changed. Any exception becomes `ScrubFailedError` without a cause.
+ */
+export function neutralizeEmbeds(
+  text: string,
+  context = "",
+): { text: string; redactions: Redaction[] } {
+  try {
+    const result = neutralizeRemoteEmbeds(text, context);
+    return {
+      text: result.text,
+      redactions: result.count > 0 ? [{ rule: REMOTE_EMBED_RULE, count: result.count }] : [],
+    };
+  } catch {
+    throw new ScrubFailedError();
+  }
+}
+
 /** Merge redaction lists, adding the counts of equal rules, sorted by rule id. */
 export function combineRedactions(...lists: Redaction[][]): Redaction[] {
   return toRedactions(...lists.map((list) => new Map(list.map((r) => [r.rule, r.count]))));
@@ -343,8 +365,15 @@ export function createNoteWriter({
 }: NoteWriterOptions): VaultWriter {
   const root = resolve(vaultDir);
   let queue: Promise<unknown> = Promise.resolve();
+  /** The vault config of the last write; a conflict copy is prepared before this write reads it. */
+  let lastConfig: VaultConfig | undefined;
 
-  /** Scrub a conflict copy like a created note. Any failure is `ScrubFailedError`. */
+  /**
+   * Scrub a conflict copy like a created note and neutralize its remote embeds, except in the
+   * body of a type configured `immutable_body` (a transcript is kept verbatim). The type is judged
+   * with the config of the last write, or the default config before the first one. Any failure is
+   * `ScrubFailedError`.
+   */
   function prepareCopy(text: string): string {
     let parsed: ReturnType<typeof parseNote>;
     try {
@@ -353,8 +382,15 @@ export function createNoteWriter({
       throw new ScrubFailedError();
     }
     const scrubbed = scrubNote(scrubber, parsed.data, parsed.content);
-    if (scrubbed.redactions.length === 0) return text;
-    return stringifyNote(scrubbed.frontmatter, scrubbed.body);
+    let body = scrubbed.body;
+    let changed = scrubbed.redactions.length > 0;
+    if (!isImmutableBody(parsed.data, lastConfig ?? DEFAULT_VAULT_CONFIG)) {
+      const neutralized = neutralizeEmbeds(body);
+      changed ||= neutralized.text !== body;
+      body = neutralized.text;
+    }
+    if (!changed) return text;
+    return stringifyNote(scrubbed.frontmatter, body);
   }
 
   /**
@@ -391,7 +427,8 @@ export function createNoteWriter({
   /** Pull, log what the sync did, and read the vault config as it is after the pull. */
   async function syncAndLoadConfig(): Promise<VaultConfig> {
     await syncAndLog();
-    return loadVaultConfig(root);
+    lastConfig = await loadVaultConfig(root);
+    return lastConfig;
   }
 
   /** The lexical and the real location of the target's parent must both be inside the vault. */
@@ -430,12 +467,16 @@ export function createNoteWriter({
 
     const scrubbed = scrubNote(scrubber, note.frontmatter, note.body);
     assertValid(scrubbed.frontmatter, note.path, config);
+    // Every created body, whatever its type: a caller that declares a transcript type does not
+    // get its remote embeds stored. The meeting flow (writeMeetingInSlot) keeps transcripts
+    // verbatim and does not come through here.
+    const body = neutralizeEmbeds(scrubbed.body);
+    const redactions = combineRedactions(scrubbed.redactions, body.redactions);
 
     const { target, parent, realRoot } = await resolveParent(note.path);
 
-    const bytes = stringifyNote(scrubbed.frontmatter, scrubbed.body);
-    const redactionsPart =
-      scrubbed.redactions.length > 0 ? { redactions: scrubbed.redactions } : {};
+    const bytes = stringifyNote(scrubbed.frontmatter, body.text);
+    const redactionsPart = redactions.length > 0 ? { redactions } : {};
     // The parent is inside the vault, so this never reads outside it. A final symlink is never
     // followed (lstat), and the file is read only when its size matches.
     let existing: Stats | undefined;
@@ -513,9 +554,7 @@ export function createNoteWriter({
       throw error;
     }
     await pushOrPending(note.path);
-    return scrubbed.redactions.length > 0
-      ? { path: note.path, commit, redactions: scrubbed.redactions }
-      : { path: note.path, commit };
+    return { path: note.path, commit, ...redactionsPart };
   }
 
   /** Reset one index entry to HEAD, with one retry; a second failure is swallowed. */
@@ -687,16 +726,30 @@ export function createNoteWriter({
       input.set === undefined
         ? { data: {}, redactions: [] as Redaction[] }
         : scrubProperties(scrubber, input.set);
-    const added =
-      input.append === undefined
-        ? { text: "", redactions: [] as Redaction[] }
-        : scrubText(scrubber, input.append);
+    let added = { text: "", redactions: [] as Redaction[] };
+    if (input.append !== undefined) {
+      const clean = scrubText(scrubber, input.append);
+      const neutralized = neutralizeEmbeds(clean.text, body);
+      added = {
+        text: neutralized.text,
+        redactions: combineRedactions(clean.redactions, neutralized.redactions),
+      };
+    }
     const merged = mergeProperties(data, scrubbed.data);
     assertValid(merged, input.path, config);
     const allRedactions = combineRedactions(scrubbed.redactions, added.redactions);
     const redactionsPart = allRedactions.length > 0 ? { redactions: allRedactions } : {};
 
     const newBody = appendBody(body, added.text);
+    // A tag left open at the end of the stored body would take its attributes from the append;
+    // stored bytes never change, so such an append is refused.
+    let opensTag: boolean;
+    try {
+      opensTag = newBody !== body && appendOpensStoredTag(body, newBody);
+    } catch {
+      throw new ScrubFailedError();
+    }
+    if (opensTag) throw new ScrubFailedError();
     const bytes = propertiesUnchanged(data, scrubbed.data)
       ? appendedBytes(original, stored, newBody)
       : Buffer.from(stringifyNote(merged, newBody));

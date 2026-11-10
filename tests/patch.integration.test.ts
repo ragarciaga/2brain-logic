@@ -662,6 +662,36 @@ describe("PATCH /notes against a real remote", () => {
       expect(remoteFile("inbox/h.md")).toBe(`${text}\ntail`);
     });
 
+    it("issue 135: a remote image in the appended text is stored as a link and reported", async () => {
+      const original = Buffer.from(seedIdea());
+      const response = await patch(makeApp(), {
+        path: "inbox/a.md",
+        append: "see ![chart](https://example.com/c.png?d=summary) and ![[local]]",
+      });
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { redactions: unknown }).redactions).toEqual([
+        { rule: "remote_embed", count: 1 },
+      ]);
+      const stored = vaultFile("inbox/a.md");
+      expect(stored.subarray(0, original.length).equals(original)).toBe(true);
+      expect(stored.subarray(original.length).toString("utf8")).toBe(
+        "\nsee [chart](https://example.com/c.png?d=summary) and ![[local]]",
+      );
+    });
+
+    it("issue 135: an append that would close a tag left open in the stored body is refused", async () => {
+      const original = Buffer.from(seedIdea("inbox/a.md", {}, "<pre>\n<img "));
+      const before = head();
+      gitCalls = [];
+      const response = await patch(makeApp(), {
+        path: "inbox/a.md",
+        append: "src=https://example.com/x.png>",
+      });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ ok: false, error: "scrub_failed" });
+      expectNothingWritten(before, original, "inbox/a.md");
+    });
+
     it("R6.3: append to a meeting is 409 immutable_body and writes nothing, empty append too", async () => {
       const original = Buffer.from(seedMeeting());
       const before = head();

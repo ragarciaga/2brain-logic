@@ -1,4 +1,5 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "../src/config/vault-config.js";
 import { defaultGit, ensureClone, type GitApi } from "../src/git/index.js";
@@ -95,6 +96,19 @@ describe("writeMeeting skips", () => {
     expect(result).toMatchObject({ ok: true, path: expect.stringMatching(/\.md$/u) });
     expect(result).not.toHaveProperty("skipped");
     expect(typeof (result as { commit: unknown }).commit).toBe("string");
+  });
+
+  it("issue 135: a transcript is stored verbatim, a remote image in it included", async () => {
+    const text =
+      'Look at ![chart](https://example.com/c.png) and <img src="https://example.com/d">';
+    const result = await makeWriter().writeMeeting(
+      meetingInput(46, { segments: [{ speaker: "Ana Example", offsetSeconds: 0, text }] }),
+    );
+    expect(result).toMatchObject({ ok: true });
+    expect(result).not.toHaveProperty("redactions");
+    const path = (result as { path: string }).path;
+    const stored = readFileSync(join(fixture.vaultDir, path), "utf8");
+    expect(stored).toContain(text);
   });
 
   it("each skip logs exactly one line with the source and reason and no input text", async () => {
