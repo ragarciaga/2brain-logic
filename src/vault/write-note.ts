@@ -6,6 +6,7 @@ import type { GitApi, GitAuthor } from "../git/index.js";
 import { pushIfAhead, pushWithRetry, syncBeforeWrite, trackedAtHead } from "../git/sync.js";
 import type { MeetingInput, MeetingOk } from "../meetings/types.js";
 import { parseNote, stringifyNote } from "./frontmatter.js";
+import { restoreInterruptedMeeting } from "./meeting-recovery.js";
 import type { NoteArchive, NoteInput, NotePatch } from "./note-schema.js";
 import {
   AlreadyArchivedError,
@@ -370,8 +371,18 @@ export function createNoteWriter({
     if (pathHasSecret) throw new UnsafePathError();
   }
 
-  /** Pull and log what the sync did. */
+  /**
+   * Pull and log what the sync did. First, what a crash in the middle of a meeting commit left
+   * behind is put back (`restoreInterruptedMeeting`), so it cannot block the pull. That step is
+   * best effort: if it fails, the pull runs and reports as before.
+   */
   async function syncAndLog(): Promise<void> {
+    try {
+      const restored = await restoreInterruptedMeeting(root, () => loadVaultConfig(root));
+      if (restored > 0) log(`interrupted_meeting_restored: ${restored}`);
+    } catch {
+      // swallowed on purpose: the pull below reports the state
+    }
     const { conflicts, recovered } = await syncBeforeWrite(root, { git, author, now, prepareCopy });
     if (recovered) log("rebuild_recovered");
     if (conflicts > 0) log(`conflicts_kept: ${conflicts}`);
@@ -520,7 +531,9 @@ export function createNoteWriter({
   }
 
   /**
-   * Create a meeting note: the create branch of `writeOne` without adoption. Anything already at
+   * Create a meeting note, like the create branch of `writeOne`. A regular file already at the
+   * path that HEAD does not track and whose bytes equal `bytes` (left by a crash between write and
+   * commit) is adopted: committed as it is, and kept if the commit fails. Anything else already at
    * the path is `NoteExistsError`. Returns the commit; a push that does not land is
    * `PushPendingError`.
    *
@@ -528,8 +541,9 @@ export function createNoteWriter({
    * commit: it must be a regular file (a symlink is `UnsafePathError`) whose bytes still equal
    * `link.original` (else `NoteExistsError`). Both paths are staged and committed together with
    * `message`. If that fails, both index entries are reset to HEAD (one retry each) whatever HEAD
-   * did; if HEAD did not move, the new file is removed and the other note gets `link.original`
-   * back. The other note is written without following a symlink swapped in after the check.
+   * did; if HEAD did not move, the new file (unless adopted) is removed and the other note gets
+   * `link.original` back. The other note is written without following a symlink swapped in after
+   * the check.
    */
   async function createMeetingNote(
     path: string,
@@ -547,29 +561,39 @@ export function createNoteWriter({
       if (!info.isFile()) throw new NoteExistsError();
       if (!(await readFile(linkTarget)).equals(link.original)) throw new NoteExistsError();
     }
-    let taken = true;
+    let existing: Stats | undefined;
     try {
-      await lstat(target);
+      existing = await lstat(target);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      taken = false;
     }
-    if (taken) throw new NoteExistsError();
+    // An identical regular file that HEAD does not track was left by a crash between write and
+    // commit: it is committed as it is. Anything else at the path is taken.
+    const adopted = existing !== undefined;
+    if (existing !== undefined) {
+      if (!existing.isFile() || existing.size !== Buffer.byteLength(bytes)) {
+        throw new NoteExistsError();
+      }
+      if (!(await readFile(target)).equals(Buffer.from(bytes))) throw new NoteExistsError();
+      if (await trackedAtHead(root, path)) throw new NoteExistsError();
+    }
     const head = await git.headSha(root);
-    try {
-      await mkdir(parent, { recursive: true });
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
-      throw error;
-    }
-    if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
-    try {
-      await writeFile(target, bytes, { flag: "wx" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
-      throw error;
+    if (!adopted) {
+      try {
+        await mkdir(parent, { recursive: true });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" || code === "ENOTDIR") throw new NoteExistsError();
+        throw error;
+      }
+      if (!isInside(realRoot, await realpath(parent))) throw new UnsafePathError();
+      try {
+        await writeFile(target, bytes, { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new NoteExistsError();
+        throw error;
+      }
     }
     let commit: string;
     try {
@@ -599,9 +623,10 @@ export function createNoteWriter({
       }
       if (!moved) {
         try {
-          await unlink(target).catch((e: NodeJS.ErrnoException) => {
-            if (e.code !== "ENOENT") throw e;
-          });
+          if (!adopted)
+            await unlink(target).catch((e: NodeJS.ErrnoException) => {
+              if (e.code !== "ENOENT") throw e;
+            });
         } catch {
           // swallowed on purpose
         }

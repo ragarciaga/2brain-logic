@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { posix, resolve, sep } from "node:path";
 import { requireMeetingSetup, type VaultConfig } from "../config/vault-config.js";
@@ -156,16 +156,28 @@ function assertMeetingPath(path: string, deps: MeetingWriterDeps): void {
   deps.refuseSecretPath(path);
 }
 
-/** True when something (anything, a symlink included) exists at the vault-relative path. */
-async function isTaken(root: string, path: string): Promise<boolean> {
+/**
+ * What sits at the vault-relative path: nothing (`free`), a regular file that HEAD does not track
+ * and whose bytes equal `bytes` (`same`: the file of a write that crashed before its commit), or
+ * anything else, a symlink included (`taken`).
+ */
+async function occupancy(
+  root: string,
+  path: string,
+  bytes: string,
+): Promise<"free" | "same" | "taken"> {
+  const target = resolve(root, path);
+  let info: Stats;
   try {
-    await lstat(resolve(root, path));
-    return true;
+    info = await lstat(target);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    if (code === "ENOENT" || code === "ENOTDIR") return "free";
     throw error;
   }
+  if (!info.isFile() || info.size !== Buffer.byteLength(bytes)) return "taken";
+  if (!(await readFile(target)).equals(Buffer.from(bytes))) return "taken";
+  return (await trackedAtHead(root, path)) ? "taken" : "same";
 }
 
 /**
@@ -206,8 +218,8 @@ async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
 /**
  * The meeting write, run inside the writer's queue slot. Order: pull and load the config, check
  * the meeting setup, skip short or empty recordings, look the source id up (a known id answers
- * `already_stored` only for a note tracked at HEAD, else `NoteExistsError`, after pushing a waiting
- * commit; `PushPendingError` when it does not land), and for a new one: pick
+ * `already_stored` for a note tracked at HEAD, after pushing a waiting commit; `PushPendingError`
+ * when it does not land), and for a new one, or one whose holder HEAD does not track: pick
  * the calendar event, route the area, then look for the other version of the meeting among the
  * stored meeting notes (`matchVersion`: same calendar event or enough overlap, other source, no
  * `versions` yet). With a match the new note is `<other base> (<source label>).md` in the other
@@ -217,9 +229,12 @@ async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
  * and if the commit fails both go back. Without a match the path is `<date> · <title>.md`; if
  * another note holds it, ` HH-MM` is added, and if that is taken too the answer is
  * `NoteExistsError`. Every path passes `NotePath` and the scrub rules before any file work
- * (`UnsafePathError`). Then: list the person base names, build the frontmatter, scrub once,
- * validate the scrubbed result once, create the file, commit `2brain: add meeting <path>` and
- * push. A merged frontmatter of the other note that fails validation rejects the request and
+ * (`UnsafePathError`). The person base names are listed and the frontmatter is built and scrubbed
+ * once before a path is taken, because a path that holds a regular file HEAD does not track with
+ * exactly these bytes (a write that crashed before its commit) is not taken: that file is adopted
+ * and committed. An untracked holder of the source id at any other path stays `NoteExistsError`.
+ * Then: validate the scrubbed result once, create the file, commit `2brain: add meeting <path>`
+ * and push. A merged frontmatter of the other note that fails validation rejects the request and
  * writes nothing. The log line of a skip holds only the source and the reason, never a title, a
  * name or transcript text.
  */
@@ -244,9 +259,15 @@ export async function writeMeetingInSlot(
   const id = `${cfg.meetings.sources[input.source].value}:${input.sourceId}`;
   const head = await deps.git.headSha(deps.root);
   const found = await deps.sourceIndex.lookup(deps.root, head, cfg.properties.source_id, id);
+  // A holder that HEAD does not track may be the file of a write that crashed before its commit:
+  // it is adopted below only when it sits at the path this write picks, with identical bytes.
+  let leftover: string | undefined;
   if (found !== undefined) {
-    await deps.deliverStored(found);
-    return { ok: true, path: found, commit: null, already_stored: true };
+    if (await trackedAtHead(deps.root, found)) {
+      await deps.deliverStored(found);
+      return { ok: true, path: found, commit: null, already_stored: true };
+    }
+    leftover = found;
   }
 
   const event = pickEvent(input.calendarEvents, input.start, input.end);
@@ -256,34 +277,27 @@ export async function writeMeetingInSlot(
   const { candidates, areas } = await listVersionCandidates(deps.root, cfg, newDate);
   const other = matchVersion(input, event?.id, candidates);
 
-  let path: string;
+  let versionPath: string | undefined;
   let area = routedArea;
   let otherBase = "";
   if (other !== undefined) {
     area = areas.get(other) ?? routedArea;
-    const otherName = posix.basename(other, ".md");
-    otherBase = otherName;
-    path = `${posix.dirname(other)}/${otherName} (${cfg.meetings.sources[input.source].label}).md`;
-    assertMeetingPath(path, deps);
-    if (await isTaken(deps.root, path)) throw new NoteExistsError();
-  } else {
-    const planned = meetingPath(event, input.start, area, cfg);
-    path = planned.path;
-    assertMeetingPath(path, deps);
-    if (await isTaken(deps.root, path)) {
-      path = `${planned.folder}/${withTimeSuffix(planned.base, input.start, cfg)}.md`;
-      assertMeetingPath(path, deps);
-      if (await isTaken(deps.root, path)) throw new NoteExistsError();
+    otherBase = posix.basename(other, ".md");
+    versionPath = `${posix.dirname(other)}/${otherBase} (${cfg.meetings.sources[input.source].label}).md`;
+    assertMeetingPath(versionPath, deps);
+    if (
+      WIKILINK_BREAKERS.test(posix.basename(versionPath, ".md")) ||
+      WIKILINK_BREAKERS.test(otherBase)
+    ) {
+      throw new UnsafePathError();
     }
   }
+  const planned = other === undefined ? meetingPath(event, input.start, area, cfg) : undefined;
+  if (planned !== undefined) assertMeetingPath(planned.path, deps);
 
   const persons = await listPersons(deps.root, cfg);
   const frontmatter = meetingFrontmatter(input, { event, area }, cfg, persons);
-  const newBase = posix.basename(path, ".md");
   if (other !== undefined) {
-    if (WIKILINK_BREAKERS.test(newBase) || WIKILINK_BREAKERS.test(otherBase)) {
-      throw new UnsafePathError();
-    }
     Object.defineProperty(frontmatter, cfg.meetings.properties.versions, {
       value: [`[[${otherBase}]]`],
       enumerable: true,
@@ -292,6 +306,26 @@ export async function writeMeetingInSlot(
     });
   }
   const scrubbed = scrubNote(deps.scrubber, frontmatter, body);
+  const bytes = stringifyNote(scrubbed.frontmatter, scrubbed.body);
+
+  let path: string;
+  if (versionPath !== undefined) {
+    path = versionPath;
+    if ((await occupancy(deps.root, path, bytes)) === "taken") throw new NoteExistsError();
+  } else if (planned !== undefined) {
+    path = planned.path;
+    if ((await occupancy(deps.root, path, bytes)) === "taken") {
+      path = `${planned.folder}/${withTimeSuffix(planned.base, input.start, cfg)}.md`;
+      assertMeetingPath(path, deps);
+      if ((await occupancy(deps.root, path, bytes)) === "taken") throw new NoteExistsError();
+    }
+  } else {
+    throw new Error("no meeting path");
+  }
+  // Another file holds the source id: this is not its retry.
+  if (leftover !== undefined && leftover !== path) throw new NoteExistsError();
+
+  const newBase = posix.basename(path, ".md");
   const verdict = validateFrontmatter(scrubbed.frontmatter, path, cfg);
   if (!verdict.ok) deps.rejectInvalid(verdict);
 
@@ -312,7 +346,6 @@ export async function writeMeetingInSlot(
     link = { path: other, bytes: otherBytes, original };
   }
 
-  const bytes = stringifyNote(scrubbed.frontmatter, scrubbed.body);
   const message =
     other === undefined
       ? `2brain: add meeting ${path}`

@@ -208,6 +208,70 @@ describe("meeting push failures", () => {
   });
 });
 
+describe("#233 item 1: a crash between write and commit", () => {
+  /** A writer whose commit fails and whose HEAD read fails after it: the file stays untracked. */
+  function crashingApp(): App {
+    let armed = false;
+    const writer = createNoteWriter({
+      vaultDir: fixture.vaultDir,
+      author: TEST_AUTHOR,
+      git: {
+        ...defaultGit,
+        commitFile: () => {
+          armed = true;
+          return Promise.reject(new Error("crash"));
+        },
+        headSha: (dir) => {
+          if (armed) return Promise.reject(new Error("crash"));
+          return defaultGit.headSha(dir);
+        },
+      },
+      log: () => undefined,
+      sleep: () => Promise.resolve(),
+    });
+    return createApp({ writer, meetings: writer, ingestToken: TOKEN, log: () => undefined });
+  }
+
+  /** The one untracked file of the vault clone, as a vault-relative path. */
+  function untracked(): string {
+    return git(fixture.vaultDir, ["-c", "core.quotepath=false", "ls-files", "--others"]);
+  }
+
+  it("an identical untracked meeting file is adopted and committed, not 409", async () => {
+    const crashed = await post(crashingApp(), fixtureBody());
+    expect(crashed.status).toBe(500);
+    const leftover = untracked();
+    expect(leftover).not.toBe("");
+    const headBefore = head();
+
+    const response = await post(makeApp(), fixtureBody());
+    const json = (await response.json()) as { path: string; commit: string };
+    expect(response.status).toBe(201);
+    expect(json.path).toBe(leftover);
+    expect(json.commit).toBe(head());
+    expect(git(fixture.vaultDir, ["rev-list", "--count", `${headBefore}..HEAD`])).toBe("1");
+    expect(remoteMain()).toBe(json.commit);
+    expect(git(fixture.remote, ["cat-file", "-e", `main:${json.path}`])).toBe("");
+    expect(status()).toBe("");
+    // A redelivery is now already_stored.
+    const again = await post(makeApp(), fixtureBody());
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { already_stored: boolean }).already_stored).toBe(true);
+  });
+
+  it("an untracked file at the path that differs by one byte is still 409 and kept", async () => {
+    await post(crashingApp(), fixtureBody());
+    const target = join(fixture.vaultDir, untracked());
+    const edited = `${readFileSync(target, "utf8")}x`;
+    writeFileSync(target, edited);
+    const headBefore = head();
+    const response = await post(makeApp(), fixtureBody());
+    expect(response.status).toBe(409);
+    expect(readFileSync(target, "utf8")).toBe(edited);
+    expect(head()).toBe(headBefore);
+  });
+});
+
 describe("meeting config", () => {
   it("R8.5: an unknown meetings key is 503 config_invalid with nothing changed", async () => {
     const seeded = pushFiles(fixture, { ".2brain/config.yaml": "meetings:\n  colour: blue\n" });
