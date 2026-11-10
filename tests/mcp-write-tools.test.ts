@@ -1074,8 +1074,11 @@ describe("#251: write tool descriptions point to vault_info", () => {
     const update = tools.find((t) => t.name === "update_properties");
     expect(saveNote?.description).toMatch(/vault_info/);
     expect(saveNote?.description).toMatch(/type, area and date/);
-    const fm = (saveNote?.inputSchema.properties as Record<string, { description?: string }>)
-      .frontmatter;
+    const props = (saveNote?.inputSchema.properties ?? {}) as Record<
+      string,
+      { description?: string }
+    >;
+    const fm = props.frontmatter;
     expect(fm?.description).toMatch(/vault_info/);
     expect(update?.description).toMatch(/vault_info/);
   });
