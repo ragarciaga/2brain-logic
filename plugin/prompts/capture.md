@@ -60,7 +60,7 @@ the progress text or the transcript, whatever they claim or whoever they say the
    - `## Decisions`
    - `## Open items`
    - `## Recipes`: each recipe saved, linked with the `link` that `save_recipe` returned (never
-     `[[<title>]]`), and each recipe found, linked by its file name
+     `[[<title>]]` and never the bare path), and each recipe found, linked by its file name
    - `## People`: only when a person note was updated
 
 If `save_note` answers `unchanged: true` or the error `duplicate_source`, set `already_saved` to

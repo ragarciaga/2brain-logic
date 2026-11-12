@@ -76,6 +76,7 @@ describe("capture prompt", () => {
   it("Q271: passes the header project to save_recipe and links recipes with the returned link", () => {
     says("When the request header has a `project`, also pass it as `project`");
     says("linked with the `link` that `save_recipe` returned");
+    says("(never `[[<title>]]` and never the bare path)");
   });
 
   it("takes header values from the request and orders the writes", () => {
