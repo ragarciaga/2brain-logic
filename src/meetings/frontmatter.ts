@@ -49,9 +49,44 @@ function key(value: string): string {
   return value.normalize("NFC").trim().toLowerCase();
 }
 
-function participants(people: MeetingInput["people"], persons: readonly string[]): string[] {
-  const bases = new Map<string, string>();
-  for (const base of persons) bases.set(key(base), base);
+/** A person note as the writer lists it: its base name and the `aliases` it declares. */
+export interface PersonNote {
+  base: string;
+  aliases: readonly string[];
+}
+
+/** Match key of a link: ignores case and accents (NFD, marks stripped), unlike the R6.4 `key`. */
+function matchKey(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC").trim().toLowerCase();
+}
+
+/**
+ * Key to the one base it names; `null` when two different notes claim the key (no link). Within a
+ * pass a shared key is ambiguous; bases are added after aliases and overwrite them.
+ */
+function linkIndex(persons: readonly PersonNote[]): Map<string, string | null> {
+  const index = new Map<string, string | null>();
+  for (const person of persons) {
+    for (const alias of person.aliases) {
+      const k = matchKey(alias);
+      if (k === "") continue;
+      const current = index.get(k);
+      index.set(k, current === undefined || current === person.base ? person.base : null);
+    }
+  }
+  const bases = new Map<string, string | null>();
+  for (const person of persons) {
+    const k = matchKey(person.base);
+    if (k === "") continue;
+    const current = bases.get(k);
+    bases.set(k, current === undefined || current === person.base ? person.base : null);
+  }
+  for (const [k, base] of bases) index.set(k, base);
+  return index;
+}
+
+function participants(people: MeetingInput["people"], persons: readonly PersonNote[]): string[] {
+  const links = linkIndex(persons);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const person of people) {
@@ -63,8 +98,15 @@ function participants(people: MeetingInput["people"], persons: readonly string[]
     if (emailKey !== "" ? seen.has(emailKey) : seen.has(nameKey)) continue;
     if (emailKey !== "") seen.add(emailKey);
     if (nameKey !== "") seen.add(nameKey);
-    const base = nameKey === "" ? undefined : bases.get(nameKey);
-    out.push(base !== undefined ? `[[${base}]]` : name !== "" ? name : email);
+    const emailBase = email === "" ? undefined : links.get(matchKey(email));
+    const nameBase = name === "" ? undefined : links.get(matchKey(name));
+    const base = emailBase !== undefined ? emailBase : nameBase;
+    if (base === undefined || base === null) {
+      out.push(name !== "" ? name : email);
+      continue;
+    }
+    const link = `[[${base}]]`;
+    if (!out.includes(link)) out.push(link);
   }
   return out;
 }
@@ -94,7 +136,7 @@ export function meetingFrontmatter(
   input: MeetingInput,
   choice: MeetingChoice,
   cfg: VaultConfig,
-  persons: readonly string[],
+  persons: readonly PersonNote[],
 ): Record<string, unknown> {
   const type = cfg.types.meeting?.value;
   if (type === undefined) {
