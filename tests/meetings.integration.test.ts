@@ -99,9 +99,9 @@ describe("POST /meetings stores a note", () => {
     });
   }
 
-  it("R6.3: person link comes from the folder listing only", async () => {
+  it("R6.3: an unreadable person note links by its base name only", async () => {
     pushFiles(fixture, {
-      // Not YAML on purpose: a read of this file would break or leak.
+      // Not YAML on purpose: the read fails and the note still counts by its base name.
       "people/Ana Ruiz.md": "\u0000not: [yaml\n",
       "topics/Bo Chen.md": "x\n",
     });
