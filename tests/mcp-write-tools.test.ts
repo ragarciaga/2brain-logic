@@ -530,6 +530,29 @@ describe("buildRecipe link properties (B265)", () => {
     const refused = buildRecipe({ ...args, topics: ["A"] }, config, "2026-10-31", "dup");
     expect(refused.ok).toBe(false);
   });
+
+  it("refuses the name title for a project link without overwriting the title", () => {
+    // Bypasses config load: the title is only added when no core property is called title.
+    const refused = buildRecipe(
+      { ...args, project: "P" },
+      withProps({ project: "title" }),
+      "2026-10-31",
+      "dup",
+    );
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.failure.body.error).toBe("config_invalid");
+  });
+
+  it("refuses the name __proto__ for a topics link", () => {
+    const refused = buildRecipe(
+      { ...args, topics: ["A"] },
+      withProps({ topics: "__proto__" }),
+      "2026-10-31",
+      "dup",
+    );
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.failure.body.error).toBe("config_invalid");
+  });
 });
 
 describe("isLinkName and recipeLink (B265)", () => {
