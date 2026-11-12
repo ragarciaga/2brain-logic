@@ -14,7 +14,7 @@ owner passphrase through OAuth. After that they can use nine tools:
 - `read`: read one note by its vault path.
 - `recent`: list the notes most recently committed.
 - `save_note`: create a note.
-- `save_recipe`: save a recipe note.
+- `save_recipe`: save a recipe note. Optionally give a project and topics as note names; they are stored as links. The file is named after the title slug, so link the recipe only with the `link` field of the result, never by its title.
 - `update_properties`: change the properties of an existing note.
 - `append_to_note`: add text at the end of an existing note. What the note already says is never
   changed, and meeting transcripts are refused.

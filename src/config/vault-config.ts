@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { parseYamlConfig } from "../vault/frontmatter.js";
 import { isSafePathSegment } from "../vault/note-schema.js";
-import { DEFAULT_VAULT_CONFIG } from "./defaults.js";
+import { DEFAULT_LINK_PROPERTIES, DEFAULT_VAULT_CONFIG } from "./defaults.js";
 
 export const CONFIG_FILE = ".2brain/config.yaml";
 
@@ -72,6 +72,21 @@ const VaultSectionSchema = z.strictObject({
   inbox_folder: safeFolder.default(DEFAULT_VAULT_CONFIG.vault.inbox_folder),
 });
 
+/** Names a link property must not take: the title and the keys that touch an object's prototype. */
+export const FORBIDDEN_LINK_NAMES: ReadonlySet<string> = new Set([
+  "title",
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+/** A link property name (optional, no default): non-empty and not a forbidden name. */
+const linkPropertyName = nonEmpty
+  .refine((name) => !FORBIDDEN_LINK_NAMES.has(name), {
+    message: "must not be title, __proto__, constructor or prototype",
+  })
+  .optional();
+
 const PropertiesSchema = z
   .strictObject({
     type: nonEmpty.default(DEFAULT_VAULT_CONFIG.properties.type),
@@ -79,10 +94,16 @@ const PropertiesSchema = z
     date: nonEmpty.default(DEFAULT_VAULT_CONFIG.properties.date),
     source: nonEmpty.default(DEFAULT_VAULT_CONFIG.properties.source),
     source_id: nonEmpty.default(DEFAULT_VAULT_CONFIG.properties.source_id),
+    project: linkPropertyName,
+    topics: linkPropertyName,
   })
-  .refine((props) => new Set(Object.values(props)).size === Object.keys(props).length, {
-    message: "property names must be distinct",
-  });
+  .refine(
+    (props) => {
+      const names = Object.values(props).filter((name) => name !== undefined);
+      return new Set(names).size === names.length;
+    },
+    { message: "property names must be distinct" },
+  );
 
 const TypesSchema = z
   .record(z.string().regex(/^[a-z][a-z0-9_]*$/, "type keys are lowercase words"), TypeEntrySchema)
@@ -224,7 +245,17 @@ export interface TypeEntry {
 export interface VaultConfig {
   version: 1;
   vault: { archive_folder: string; inbox_folder: string };
-  properties: { type: string; area: string; date: string; source: string; source_id: string };
+  properties: {
+    type: string;
+    area: string;
+    date: string;
+    source: string;
+    source_id: string;
+    /** Optional: the property that holds a recipe's project link (see `linkPropertyNames`). */
+    project?: string | undefined;
+    /** Optional: the property that holds a recipe's topic links (see `linkPropertyNames`). */
+    topics?: string | undefined;
+  };
   areas: string[];
   sources: string[];
   types: Record<string, TypeEntry>;
@@ -274,7 +305,10 @@ export const VaultConfigSchema: z.ZodType<VaultConfig, unknown> = z
     if (new Set(names).size !== names.length) {
       add(["properties"], "meeting property names must be distinct");
     }
-    const reserved = new Set<string>([...Object.values(config.properties), "analysis"]);
+    const reserved = new Set<string>([
+      ...(Object.values(config.properties).filter((name) => name !== undefined) as string[]),
+      "analysis",
+    ]);
     for (const key of MEETING_PROPERTY_KEYS) {
       if (reserved.has(meetings.properties[key])) {
         add(["properties", key], `"${meetings.properties[key]}" is reserved by another property`);
@@ -346,6 +380,17 @@ export function requireMeetingSetup(config: VaultConfig): void {
       }
     }
   }
+}
+
+/**
+ * The property names a recipe's project and topic links are stored under: the configured ones, or
+ * the words `project` and `topics`.
+ */
+export function linkPropertyNames(config: VaultConfig): { project: string; topics: string } {
+  return {
+    project: config.properties.project ?? DEFAULT_LINK_PROPERTIES.project,
+    topics: config.properties.topics ?? DEFAULT_LINK_PROPERTIES.topics,
+  };
 }
 
 /**
