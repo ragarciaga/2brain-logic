@@ -7,6 +7,7 @@ Autonomy: auto
 Parallel: auto
 Max parallel: 3
 Max tasks per run: 6
+Branch protection: declined (2026-11-12, owner keeps main unprotected for now)
 
 This file is the project contract. Every coding agent (Claude Code, Cursor, Codex) reads it, and
 the Rockbuilt harness (`node tools/rockbuilt/rb.mjs`) parses its header lines and sections. Keep
