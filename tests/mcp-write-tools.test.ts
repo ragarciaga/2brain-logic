@@ -19,7 +19,14 @@ import { createMcpServer, MCP_TOOLS, type McpServerDeps } from "../src/mcp/serve
 import { createInfoTools } from "../src/mcp/tools/info.js";
 import { createMeetingTools } from "../src/mcp/tools/meetings.js";
 import { createReadTools, READ_TOOLS } from "../src/mcp/tools/read.js";
-import { buildRecipe, createWriteTools, slugify, WRITE_TOOLS } from "../src/mcp/tools/write.js";
+import {
+  buildRecipe,
+  createWriteTools,
+  isLinkName,
+  recipeLink,
+  slugify,
+  WRITE_TOOLS,
+} from "../src/mcp/tools/write.js";
 import { createApp } from "../src/server/app.js";
 import { mapWriteError } from "../src/server/errors.js";
 import { parseNote, stringifyNote } from "../src/vault/frontmatter.js";
@@ -478,6 +485,93 @@ describe("buildRecipe", () => {
   });
 });
 
+describe("buildRecipe link properties (B265)", () => {
+  const args = { title: "Dup", area: "work", problem: "p", solution: "s" };
+  const withProps = (extra: Record<string, string>): VaultConfig => ({
+    ...DEFAULT_VAULT_CONFIG,
+    properties: { ...DEFAULT_VAULT_CONFIG.properties, ...extra },
+  });
+
+  it("uses the configured names and keeps topic order", () => {
+    const built = buildRecipe(
+      { ...args, project: "P", topics: ["B", "A"] },
+      withProps({ project: "proyecto", topics: "temas" }),
+      "2026-10-31",
+      "dup",
+    );
+    expect(built.ok && built.note.frontmatter).toMatchObject({
+      proyecto: "[[P]]",
+      temas: ["[[B]]", "[[A]]"],
+    });
+  });
+
+  it("writes nothing for no project and an empty topics list", () => {
+    const built = buildRecipe({ ...args, topics: [] }, DEFAULT_VAULT_CONFIG, "2026-10-31", "dup");
+    expect(built.ok && Object.keys(built.note.frontmatter)).toEqual([
+      "type",
+      "area",
+      "date",
+      "source",
+      "title",
+    ]);
+  });
+
+  it("refuses an implicit name that collides with another property, only when given", () => {
+    const config = withProps({ source_id: "project" });
+    const ok = buildRecipe(args, config, "2026-10-31", "dup");
+    expect(ok.ok).toBe(true);
+    const refused = buildRecipe({ ...args, project: "P" }, config, "2026-10-31", "dup");
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.failure.body.error).toBe("config_invalid");
+  });
+
+  it("refuses a link name equal to the other link name", () => {
+    const config = withProps({ project: "topics" });
+    const refused = buildRecipe({ ...args, topics: ["A"] }, config, "2026-10-31", "dup");
+    expect(refused.ok).toBe(false);
+  });
+});
+
+describe("isLinkName and recipeLink (B265)", () => {
+  it.each([
+    "",
+    " a",
+    "a ",
+    "a[b",
+    "a]b",
+    "a|b",
+    "a#b",
+    "a^b",
+    "a\nb",
+    "a\u0085b",
+    "a\u2028b",
+    "a\u202eb",
+    "a\u200bb",
+    "a\ufeffb",
+    "a".repeat(201),
+  ])("refuses %j", (name) => {
+    expect(isLinkName(name)).toBe(false);
+  });
+
+  it("accepts a plain name and the 200 character limit", () => {
+    expect(isLinkName("Example Project")).toBe(true);
+    expect(isLinkName("a".repeat(200))).toBe(true);
+  });
+
+  it("cleans the alias and falls back to the slug", () => {
+    expect(recipeLink("x", " A [b] | c \n d ")).toBe("[[x|A b c d]]");
+    expect(recipeLink("x", "[|]")).toBe("[[x|x]]");
+  });
+
+  it("scrubs last: a secret split by brackets is not rejoined into the alias", () => {
+    const split = `${GHP.slice(0, 10)}[${GHP.slice(10, 20)}]${GHP.slice(20)}`;
+    const link = recipeLink("x", `Fix ${split}`);
+    expect(link).not.toContain(GHP);
+    expect(link).not.toContain(GHP.slice(0, 20));
+    expect(link).not.toMatch(/[|[\]]{3}/);
+  });
+});
+
 describe("save_recipe (R9.2)", () => {
   const recipe = (extra: Record<string, unknown> = {}) => ({
     title: "Fix: Flaky Test (CI)",
@@ -494,6 +588,7 @@ describe("save_recipe (R9.2)", () => {
     expect(r.data).toEqual({
       ok: true,
       path: "recipes/fix-flaky-test-ci.md",
+      link: "[[fix-flaky-test-ci|Fix: Flaky Test (CI)]]",
       commit: head(),
       unchanged: false,
       redactions: [],
@@ -529,6 +624,96 @@ describe("save_recipe (R9.2)", () => {
     const stored = parseNote(remoteFile("recipes/example-deploy.md"));
     expect(stored.data.project).toBe("[[Example Project]]");
     expect(stored.data.topics).toEqual(["[[Topic A]]"]);
+  });
+
+  it("B265: the alias drops brackets and pipes from the title", async () => {
+    const { call } = await connect();
+    const r = await call("save_recipe", recipe({ title: "Use [[a|b]]  here" }));
+    expect(r.data.link).toBe("[[use-a-b-here|Use ab here]]");
+  });
+
+  it("B265: a repeat is unchanged and still carries the link", async () => {
+    const { call } = await connect();
+    await call("save_recipe", recipe());
+    const again = await call("save_recipe", recipe());
+    expect(again.data).toMatchObject({ ok: true, unchanged: true });
+    expect(again.data.link).toBe("[[fix-flaky-test-ci|Fix: Flaky Test (CI)]]");
+  });
+
+  it("B265: save_note has no link in its result", async () => {
+    const { call } = await connect();
+    const r = await call("save_note", noteArgs({}, "inbox/plain.md"));
+    expect(r.isError).toBe(false);
+    expect(Object.hasOwn(r.data, "link")).toBe(false);
+  });
+
+  it("B265: the description tells clients to link only with the returned link", async () => {
+    const { client } = await connect();
+    const tools = (await client.listTools()).tools;
+    const description = tools.find((t) => t.name === "save_recipe")?.description ?? "";
+    expect(description).toContain("link field of the result");
+    expect(description).toContain("never the title");
+  });
+
+  it("B265: 20 topics and a 200 character project are accepted", async () => {
+    const { call } = await connect();
+    const topics = Array.from({ length: 20 }, (_, i) => `Topic ${i}`);
+    const r = await call("save_recipe", recipe({ project: "p".repeat(200), topics }));
+    expect(r.isError).toBe(false);
+    const stored = parseNote(remoteFile(r.data.path as string));
+    expect(stored.data.topics).toHaveLength(20);
+  });
+
+  it("B265: renamed link properties come from the config", async () => {
+    push({ [CONFIG_FILE]: "properties:\n  project: proyecto\n  topics: temas\n" });
+    const { call } = await connect();
+    const r = await call("save_recipe", recipe({ project: "P", topics: ["T"] }));
+    const stored = parseNote(remoteFile(r.data.path as string));
+    expect(stored.data.proyecto).toBe("[[P]]");
+    expect(stored.data.temas).toEqual(["[[T]]"]);
+    expect(stored.data.project).toBeUndefined();
+  });
+
+  describe("B265: refused names write nothing", () => {
+    it.each([
+      ["empty", { project: "" }],
+      ["201 characters", { project: "a".repeat(201) }],
+      ["edge whitespace", { project: " P" }],
+      ["a newline", { project: "a\nb" }],
+      ["an opening bracket", { project: "a[b" }],
+      ["a closing bracket", { project: "a]b" }],
+      ["a pipe", { project: "a|b" }],
+      ["a hash", { project: "a#b" }],
+      ["a caret", { project: "a^b" }],
+      ["a wrapped link", { topics: ["[[Topic A]]"] }],
+      ["an empty topic", { topics: [""] }],
+      ["a bad topic", { topics: ["ok", "a|b"] }],
+      ["21 topics", { topics: Array.from({ length: 21 }, (_, i) => `T${i}`) }],
+      ["duplicate topics", { topics: ["A", "A"] }],
+    ])("%s", async (_n, extra) => {
+      const { call } = await connect();
+      const sha = head();
+      const r = await call("save_recipe", recipe(extra));
+      expect(r.isError).toBe(true);
+      expect(head()).toBe(sha);
+      expect(remoteHead()).toBe(sha);
+    });
+
+    it.each([
+      ["project", (s: string) => ({ project: s }), "project"],
+      ["topics", (s: string) => ({ topics: ["Fine", s] }), "topics"],
+    ])("a secret in %s is invalid_body and never leaks", async (_n, make, path) => {
+      const { call } = await connect();
+      const sha = head();
+      const r = await call("save_recipe", recipe(make(`Key ${GHP}`)));
+      expect(r.isError).toBe(true);
+      expect(r.data.error).toBe("invalid_body");
+      expect((r.data.issues as Array<{ path: string }>)[0]?.path).toBe(path);
+      expect(r.text).not.toContain(GHP);
+      expect(logs.join("\n")).not.toContain(GHP);
+      expect(head()).toBe(sha);
+      expect(remoteHead()).toBe(sha);
+    });
   });
 
   it("issue 135: a remote image in a recipe becomes a link", async () => {

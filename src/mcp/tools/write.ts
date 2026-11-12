@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   CONFIG_FILE,
   ConfigInvalidError,
+  FORBIDDEN_LINK_NAMES,
+  linkPropertyNames,
   loadVaultConfig,
   type VaultConfig,
 } from "../../config/vault-config.js";
@@ -30,7 +32,8 @@ import type { McpServerDeps, McpToolDefinition } from "../server.js";
  *   the vault or git directly.
  * - Every answer is `{ ok: true, ... }` or the body `mapWriteError` gives the ingest API for the
  *   same error, so codes and detail fields cannot drift. Handlers never throw, and no result or
- *   log line carries note content, a request value, an error message or a stack.
+ *   log line carries note content, a request value, an error message or a stack. The one
+ *   exception is the `link` of a `save_recipe` result, whose alias is the scrubbed title.
  * - `append_to_note` goes through the same `VaultWriter.patch` path with `append` only: the
  *   stored bytes are kept, the text is scrubbed and its remote embeds neutralized, and a note of a
  *   type with an immutable body (a transcript) is refused.
@@ -42,6 +45,8 @@ const TITLE_MAX = 200;
 const AREA_MAX = 100;
 const SOURCE_MAX = 100;
 const PATH_MAX = 1024;
+const LINK_NAME_MAX = 200;
+const TOPICS_MAX = 20;
 /** Most text one append may add: a long section, far below the 2 MiB MCP body cap. */
 export const APPEND_MAX = 100_000;
 
@@ -60,6 +65,8 @@ export interface WriteToolOptions {
 export type SavedNote = {
   ok: true;
   path: string;
+  /** Only a recipe: `[[<slug>|<title>]]`, the one link that resolves to the saved file. */
+  link?: string;
   commit: string | null;
   unchanged: boolean;
   redactions: { rule: string; count: number }[];
@@ -101,6 +108,45 @@ export interface RecipeArgs {
   problem: string;
   solution: string;
   source?: string | undefined;
+  /** One note name, stored as a `[[...]]` link. */
+  project?: string | undefined;
+  /** Note names, each stored as a `[[...]]` link. */
+  topics?: string[] | undefined;
+}
+
+/** Code point ranges a link name must not hold: C0 and C1 controls, zero-width, separators, bidi, BOM. */
+const LINK_NAME_FORBIDDEN_RANGES: readonly (readonly [number, number])[] = [
+  [0x0000, 0x001f],
+  [0x007f, 0x009f],
+  [0x200b, 0x200d],
+  [0x2028, 0x2029],
+  [0x202a, 0x202e],
+  [0x2066, 0x2069],
+  [0xfeff, 0xfeff],
+];
+const LINK_NAME_FORBIDDEN_CHARS = "[]|#^";
+
+function hasLinkNameBreaker(name: string): boolean {
+  for (const char of name) {
+    const code = char.codePointAt(0) as number;
+    if (LINK_NAME_FORBIDDEN_CHARS.includes(char)) return true;
+    if (LINK_NAME_FORBIDDEN_RANGES.some(([from, to]) => code >= from && code <= to)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a string is usable as the name inside a `[[...]]` link: 1 to 200 characters, no edge
+ * whitespace, no control, bidi or zero-width character, and none of `[ ] | # ^` (which would wrap,
+ * alias, or point into the note).
+ */
+export function isLinkName(name: string): boolean {
+  return (
+    name.length >= 1 &&
+    name.length <= LINK_NAME_MAX &&
+    name === name.trim() &&
+    !hasLinkNameBreaker(name)
+  );
 }
 
 /** A refusal built by `buildRecipe`: the ingest-shaped body to return. */
@@ -132,16 +178,39 @@ const invalidTitle = (): RecipeRefusal => ({
 export function recipeSlug(
   title: string,
   scrubber: Scrubber,
-): { ok: true; slug: string } | RecipeRefusal {
-  let scrubbed: string;
+): { ok: true; slug: string; link: string } | RecipeRefusal {
+  let slug: string;
+  let link: string;
   try {
-    scrubbed = scrubText(scrubber, title).text;
+    slug = slugify(scrubText(scrubber, title).text);
+    link = recipeLink(slug, title, scrubber);
   } catch (error) {
     return { ok: false, failure: mapWriteError(error) };
   }
-  const slug = slugify(scrubbed);
   if (slug === "" || !isSafePathSegment(`${slug}.md`)) return invalidTitle();
-  return { ok: true, slug };
+  return { ok: true, slug, link };
+}
+
+/**
+ * The link a client uses to point at a saved recipe: `[[<slug>|<title>]]`. The file is named after
+ * the slug, so a link by title does not resolve. The alias is cleaned first (no `[`, `]` or `|`,
+ * whitespace collapsed, trimmed) and scrubbed last, so a secret split by a bracket cannot be
+ * rejoined into the alias; an empty alias falls back to the slug. Throws `ScrubFailedError`.
+ */
+export function recipeLink(
+  slug: string,
+  title: string,
+  scrubber: Scrubber = defaultScrubber,
+): string {
+  const cleaned = title
+    .replace(/[[\]|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // The scrubber's own `[REDACTED:<rule>]` placeholders are the only brackets left to drop.
+  const alias = scrubText(scrubber, cleaned)
+    .text.replace(/[[\]|]/g, "")
+    .trim();
+  return `[[${slug}|${alias === "" ? slug : alias}]]`;
 }
 
 /**
@@ -179,7 +248,46 @@ export function buildRecipe(
     [props.date]: today,
     [props.source]: args.source ?? "mcp",
   };
-  if (!(Object.values(props) as string[]).includes("title")) frontmatter.title = args.title;
+  const core = [props.type, props.area, props.date, props.source, props.source_id];
+  if (!core.includes("title")) frontmatter.title = args.title;
+
+  const names = linkPropertyNames(config);
+  const wanted: { key: "project" | "topics"; name: string; value: unknown }[] = [];
+  if (args.project !== undefined) {
+    wanted.push({ key: "project", name: names.project, value: `[[${args.project}]]` });
+  }
+  if (args.topics !== undefined && args.topics.length > 0) {
+    wanted.push({
+      key: "topics",
+      name: names.topics,
+      value: args.topics.map((topic) => `[[${topic}]]`),
+    });
+  }
+  // A link name that collides with another property, the title or the other link name is refused,
+  // and only when the call gives that argument (an implicit default is never checked at load).
+  for (const { key, name } of wanted) {
+    const other = key === "project" ? names.topics : names.project;
+    if (FORBIDDEN_LINK_NAMES.has(name) || core.includes(name) || name === other) {
+      return {
+        ok: false,
+        failure: mapWriteError(
+          new ConfigInvalidError(
+            CONFIG_FILE,
+            `properties.${key}`,
+            "the link property name is used by another property",
+          ),
+        ),
+      };
+    }
+  }
+  for (const { name, value } of wanted) {
+    Object.defineProperty(frontmatter, name, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
 
   return {
     ok: true,
@@ -200,6 +308,12 @@ const text = (what: string, max: number) =>
     .min(1, { message: `${what} must not be empty` })
     .max(max, { message: `${what} is too long` });
 
+/** One note name for a `[[...]]` link; the message never repeats the value. */
+const linkName = (what: string) =>
+  z.string({ message: `${what} must be a string` }).refine(isLinkName, {
+    message: `${what} must be 1 to ${LINK_NAME_MAX} characters, without edge whitespace, control characters, brackets, | # or ^`,
+  });
+
 /** The three write tools. Options are test seams; production passes none. */
 export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinition[] {
   const now = options.now ?? (() => new Date());
@@ -207,12 +321,51 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
   const scrubber = options.scrubber ?? defaultScrubber;
 
   /** What one write operation gives back: the writer's result or the refusal to answer with. */
-  type Outcome = { ok: true; result: WriteResult } | { ok: false; failure: Refusal };
+  type Outcome = { ok: true; result: WriteResult; link?: string } | { ok: false; failure: Refusal };
 
   const invalidBody = (issues: unknown): Outcome => ({
     ok: false,
     failure: { status: 400, body: { ok: false, error: "invalid_body", issues }, log: undefined },
   });
+
+  /**
+   * Refuse a project or topic name the scrubber changes (it held a secret): `invalid_body` with
+   * the path only, so the value is in no result or log line. A scrubber failure is `scrub_failed`.
+   */
+  function refuseScrubbed(
+    project: string | undefined,
+    topics: string[] | undefined,
+  ): RecipeRefusal | undefined {
+    const checks: [string, string[]][] = [
+      ["project", project === undefined ? [] : [project]],
+      ["topics", topics ?? []],
+    ];
+    for (const [path, names] of checks) {
+      for (const name of names) {
+        let changed: boolean;
+        try {
+          changed = scrubText(scrubber, name).text !== name;
+        } catch (error) {
+          return { ok: false, failure: mapWriteError(error) };
+        }
+        if (changed) {
+          return {
+            ok: false,
+            failure: {
+              status: 400,
+              body: {
+                ok: false,
+                error: "invalid_body",
+                issues: [{ path, message: `${path} must not contain a secret` }],
+              },
+              log: undefined,
+            },
+          };
+        }
+      }
+    }
+    return undefined;
+  }
 
   /**
    * Run one write operation and shape the answer; the only place that turns a writer result or
@@ -234,6 +387,7 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
       return toResult({
         ok: true,
         path: result.path,
+        ...(outcome.link === undefined ? {} : { link: outcome.link }),
         commit: result.commit,
         unchanged: result.unchanged === true,
         redactions,
@@ -255,21 +409,24 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
 
   type BuildStep = (
     loadConfig: () => Promise<VaultConfig>,
-  ) => Promise<ReturnType<typeof buildRecipe>>;
+  ) => Promise<ReturnType<typeof buildRecipe> & { link?: string }>;
 
   /** Create a note from the call's input, or from the note a build step makes of it. */
   function save(tool: string, deps: McpServerDeps, input: unknown, build?: BuildStep) {
     return run(tool, async () => {
       let candidate = input;
+      let link: string | undefined;
       if (build !== undefined) {
         const root = resolve(deps.config.vaultDir);
         const built = await build(() => deps.writer.withPulled(() => loadVaultConfig(root)));
         if (!built.ok) return built;
         candidate = built.note;
+        link = built.link;
       }
       const parsed = NoteInput.safeParse(candidate);
       if (!parsed.success) return invalidBody(issuesOf(parsed.error));
-      return viaWriter(() => deps.writer.write(parsed.data));
+      const written = await viaWriter(() => deps.writer.write(parsed.data));
+      return written.ok && link !== undefined ? { ...written, link } : written;
     });
   }
 
@@ -305,7 +462,7 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
         "save_recipe",
         {
           description:
-            "Save something that worked as a recipe note: a title, the area, the problem and the steps or code that solved it.",
+            "Save something that worked as a recipe note: a title, the area, the problem and the steps or code that solved it. Optionally give the project and the topics the recipe belongs to, as note names (without brackets); they are stored as links. The file is named after the title slug, not the title: to link the recipe from another note, use only the link field of the result and never the title.",
           inputSchema: z.object({
             title: text("title", TITLE_MAX).refine((t) => !CONTROL.test(t), {
               message: "title must not contain control characters",
@@ -318,6 +475,15 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
               .string({ message: "solution must be a string" })
               .min(1, { message: "solution must not be empty" }),
             source: text("source", SOURCE_MAX).optional(),
+            project: linkName("project").optional(),
+            topics: z
+              .array(linkName("topics"), { message: "topics must be a list of note names" })
+              .max(TOPICS_MAX, { message: "topics has too many entries" })
+              .refine((list) => new Set(list).size === list.length, {
+                message: "topics must not repeat a name",
+              })
+              .describe("Note names of the topics, without brackets; stored as links.")
+              .optional(),
           }),
         },
         (args) =>
@@ -325,13 +491,17 @@ export function createWriteTools(options: WriteToolOptions = {}): McpToolDefinit
             // The slug check comes before the config pull: a bad title costs no git work.
             const slug = recipeSlug(args.title, scrubber);
             if (!slug.ok) return slug;
+            // A name the scrubber changes held a secret: refused, the value never echoed.
+            const unsafe = refuseScrubbed(args.project, args.topics);
+            if (unsafe !== undefined) return unsafe;
             let config: VaultConfig;
             try {
               config = await loadConfig();
             } catch (error) {
               return { ok: false, failure: mapWriteError(error) };
             }
-            return buildRecipe(args, config, now().toISOString().slice(0, 10), slug.slug);
+            const built = buildRecipe(args, config, now().toISOString().slice(0, 10), slug.slug);
+            return built.ok ? { ...built, link: slug.link } : built;
           }),
       );
     },

@@ -6,6 +6,7 @@ import { DEFAULT_VAULT_CONFIG } from "../src/config/defaults.js";
 import {
   ConfigInvalidError,
   expandTypeFolders,
+  linkPropertyNames,
   loadVaultConfig,
 } from "../src/config/vault-config.js";
 
@@ -301,5 +302,34 @@ describe("config folders and areas follow the note path rule (#37)", () => {
       'vault:\n  inbox_folder: "00 inbox"\ntypes:\n  idea: { value: idea, folder: "{area}/ideas" }\n',
     );
     expect((await loadVaultConfig(dir)).vault.inbox_folder).toBe("00 inbox");
+  });
+});
+
+describe("B265: project and topics property names", () => {
+  it("load when set and are not added when absent", async () => {
+    writeConfig("properties:\n  project: proyecto\n  topics: temas\n");
+    const config = await loadVaultConfig(dir);
+    expect(config.properties.project).toBe("proyecto");
+    expect(config.properties.topics).toBe("temas");
+    expect(linkPropertyNames(config)).toStrictEqual({ project: "proyecto", topics: "temas" });
+    expect(Object.hasOwn(DEFAULT_VAULT_CONFIG.properties, "project")).toBe(false);
+    expect(linkPropertyNames(DEFAULT_VAULT_CONFIG)).toStrictEqual({
+      project: "project",
+      topics: "topics",
+    });
+  });
+
+  it.each([
+    ["equal to each other", "properties:\n  project: x\n  topics: x\n", "properties"],
+    ["equal to another property", "properties:\n  project: area\n", "properties"],
+    ["empty (project)", 'properties:\n  project: ""\n', "properties.project"],
+    ["empty (topics)", 'properties:\n  topics: ""\n', "properties.topics"],
+    ["title", "properties:\n  project: title\n", "properties.project"],
+    ["__proto__", 'properties:\n  topics: "__proto__"\n', "properties.topics"],
+    ["constructor", "properties:\n  project: constructor\n", "properties.project"],
+    ["prototype", "properties:\n  topics: prototype\n", "properties.topics"],
+    ["a meeting property name", "properties:\n  project: start\n", "meetings.properties.start"],
+  ])("rejects a name %s", async (_name, yaml, keyPath) => {
+    await expectInvalid(yaml, keyPath);
   });
 });

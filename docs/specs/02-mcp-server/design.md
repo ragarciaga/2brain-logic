@@ -94,10 +94,10 @@ type ToolResult = { ok: true; [field: string]: unknown } | { ok: false; error: s
 | `read` | `path` | `{ path, frontmatter, body }` | `unsafe_path`, `note_not_found` | R8.2 |
 | `recent` | `days?`, `limit?` | `{ notes: { path, title, type, date }[] }` | `git_failed` | R8.3 |
 | `save_note` | `path`, `frontmatter`, `body` | create outcome | every `POST /notes` error code | R9.1, R9.4 |
-| `save_recipe` | `title`, `area`, `problem`, `solution`, `source?` | create outcome | same | R9.2, R9.4 |
+| `save_recipe` | `title`, `area`, `problem`, `solution`, `source?`, `project?`, `topics?` | create outcome plus `link` (`[[<slug>|<title>]]`) | same | R9.2, R9.4 |
 | `update_properties` | `path`, `set` | patch outcome | every `PATCH /notes` error code | R9.3, R9.4 |
 
-`save_recipe` builds `recipes/<slug of title>.md` (the configured folder of the `recipe` type) with frontmatter type, area, today's date, source (`mcp` when absent) and title, and a body of `## Problem` and `## Solution` sections. `update_properties` needs the F1 PATCH path (F1 T13); its F2 task depends on that.
+`save_recipe` builds `recipes/<slug of title>.md` (the configured folder of the `recipe` type) with frontmatter type, area, today's date, source (`mcp` when absent) and title, plus `[[...]]` links under the `project` and `topics` property names when the call gives them (names checked and scrubbed; the secret check refuses, it does not redact), and a body of `## Problem` and `## Solution` sections. `update_properties` needs the F1 PATCH path (F1 T13); its F2 task depends on that.
 
 ## Error handling
 - OAuth errors use RFC 6749 and RFC 7591 codes; error descriptions are fixed strings, never Zod issue lists or request values (research: library A leaked raw Zod JSON) (R3.3, R4.3, R5.2).

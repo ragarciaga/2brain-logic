@@ -13,6 +13,9 @@ properties:
   date: date
   source: source
   source_id: source_id
+  # Optional: where save_recipe stores a recipe's project and topic links (these words by default).
+  # project: project
+  # topics: topics
 
 # Your areas. Each one becomes a top-level folder.
 areas: [personal, work]

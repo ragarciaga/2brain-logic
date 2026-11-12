@@ -1,6 +1,13 @@
 import type { VaultConfig } from "./vault-config.js";
 
 /**
+ * The property names a recipe's project and topic links use when the config sets none. Kept out of
+ * `DEFAULT_VAULT_CONFIG` on purpose: the two names are optional config keys, and an implicit name
+ * that collides with another property is refused when a recipe is built, not when the config loads.
+ */
+export const DEFAULT_LINK_PROPERTIES = { project: "project", topics: "topics" } as const;
+
+/**
  * The config a vault gets when `.2brain/config.yaml` is absent or leaves a section out. The file
  * vault-template/.2brain/config.yaml spells out the same values and a test keeps them equal.
  */
