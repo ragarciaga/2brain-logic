@@ -189,7 +189,10 @@ type CaptureResult = {
 // vault_info MCP tool (R10.1, R10.2)
 type VaultInfo = {
   areas: string[];
-  properties: { type: string; area: string; date: string; source: string; source_id: string };
+  properties: {
+    type: string; area: string; date: string; source: string; source_id: string;
+    project: string; topics: string; // recipe link property names (config value or default)
+  };
   types: { key: string; value: string; folder: string | null }[];
   archive_folder: string;
 };

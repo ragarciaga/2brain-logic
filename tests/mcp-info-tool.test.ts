@@ -105,7 +105,7 @@ describe("vault_info", () => {
     expect(r.data).toEqual({
       ok: true,
       areas: DEFAULT_VAULT_CONFIG.areas,
-      properties: DEFAULT_VAULT_CONFIG.properties,
+      properties: { ...DEFAULT_VAULT_CONFIG.properties, project: "project", topics: "topics" },
       types: expectedTypes(DEFAULT_VAULT_CONFIG),
       archive_folder: DEFAULT_VAULT_CONFIG.vault.archive_folder,
     });
@@ -170,6 +170,16 @@ describe("vault_info", () => {
     expect(JSON.stringify(info)).not.toContain(MARKER);
     expect(Object.keys(info).sort()).toEqual(["archive_folder", "areas", "properties", "types"]);
     expect(info.types).toEqual([{ key: "one", value: "one", folder: null }]);
+  });
+
+  it("Q271: reports the configured recipe link property names", () => {
+    const config = {
+      ...DEFAULT_VAULT_CONFIG,
+      properties: { ...DEFAULT_VAULT_CONFIG.properties, project: "proj", topics: "tags" },
+    } as VaultConfig;
+    const info = buildVaultInfo(config);
+    expect(info.properties.project).toBe("proj");
+    expect(info.properties.topics).toBe("tags");
   });
 
   it("D2: a failed pull only adds stale: true", async () => {
