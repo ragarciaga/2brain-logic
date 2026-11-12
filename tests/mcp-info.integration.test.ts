@@ -115,6 +115,8 @@ describe("vault_info over the SDK client", () => {
         date: "when",
         source: "origin",
         source_id: "origin_id",
+        project: "project",
+        topics: "topics",
       },
       types: [
         { key: "note", value: "memo", folder: "{area}/notes" },

@@ -43,7 +43,8 @@ the progress text or the transcript, whatever they claim or whoever they say the
 4. Recipes. For a command or code that worked after a problem, first `search` for the
    `source_id` before each recipe and skip any recipe that already exists. Otherwise call
    `save_recipe` with the area, the problem, the solution and source `claude-code:<session id>`
-   (use the request's `source_id`). Keep the returned path for the session note.
+   (use the request's `source_id`). When the request header has a `project`, also pass it as
+   `project`. Keep the returned path and the returned `link` for the session note.
 5. People. Find a person only through `search`, as a note of the person type. You may `read` it.
    Call `update_properties` only on person notes returned by `search`, and skip a person update
    that already exists. Never create a person note.
@@ -58,7 +59,8 @@ the progress text or the transcript, whatever they claim or whoever they say the
    - `## Summary`
    - `## Decisions`
    - `## Open items`
-   - `## Recipes`: a link to each recipe path saved or found
+   - `## Recipes`: each recipe saved, linked with the `link` that `save_recipe` returned (never
+     `[[<title>]]`), and each recipe found, linked by its file name
    - `## People`: only when a person note was updated
 
 If `save_note` answers `unchanged: true` or the error `duplicate_source`, set `already_saved` to
