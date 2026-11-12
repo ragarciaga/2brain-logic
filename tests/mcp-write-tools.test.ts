@@ -466,6 +466,16 @@ describe("buildRecipe", () => {
     const built = buildRecipe(args, config, "2026-10-31", "dup");
     expect(built.ok && built.note.path).toBe("inbox/dup.md");
   });
+
+  it("B265: a project and topics become [[...]] links under the default property names", () => {
+    // Cast: `project` and `topics` are not in RecipeArgs yet; the fix adds them.
+    const linked = { ...args, project: "Example Project", topics: ["Topic A"] } as typeof args;
+    const built = buildRecipe(linked, DEFAULT_VAULT_CONFIG, "2026-10-31", "dup");
+    expect(built.ok && built.note.frontmatter).toMatchObject({
+      project: "[[Example Project]]",
+      topics: ["[[Topic A]]"],
+    });
+  });
 });
 
 describe("save_recipe (R9.2)", () => {
@@ -499,6 +509,26 @@ describe("save_recipe (R9.2)", () => {
     expect(stored.content).toBe(
       "## Problem\n\nThe test fails on CI.\n\n## Solution\n\nWait for the port.\n",
     );
+  });
+
+  it("B265: the result carries the exact link [[<slug>|<title>]], never the bare title", async () => {
+    const { call } = await connect();
+    const r = await call("save_recipe", recipe({ title: "Example: deploy" }));
+    expect(r.isError).toBe(false);
+    expect(r.data.path).toBe("recipes/example-deploy.md");
+    expect(r.data.link).toBe("[[example-deploy|Example: deploy]]");
+  });
+
+  it("B265: a project and topics are stored as [[...]] links in the frontmatter", async () => {
+    const { call } = await connect();
+    const r = await call(
+      "save_recipe",
+      recipe({ title: "Example: deploy", project: "Example Project", topics: ["Topic A"] }),
+    );
+    expect(r.isError).toBe(false);
+    const stored = parseNote(remoteFile("recipes/example-deploy.md"));
+    expect(stored.data.project).toBe("[[Example Project]]");
+    expect(stored.data.topics).toEqual(["[[Topic A]]"]);
   });
 
   it("issue 135: a remote image in a recipe becomes a link", async () => {
