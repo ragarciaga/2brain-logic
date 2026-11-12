@@ -173,9 +173,11 @@ rely on.
   time zone's offset), duration in whole minutes (rounded down), participants, calendar event id
   (when an event was chosen), source title and source URL, under the configured meeting property
   names. `[unit]`
-- R6.3 When a participant's display name equals the base name of an existing person note
-  (case-insensitive), the system shall list that participant as a wikilink to the note; other
-  participants are listed as plain text, by name when the source gives one, otherwise by email.
+- R6.3 When a participant's display name or email equals, ignoring case and accents, the base name
+  of an existing person note or a value of its `aliases` property, the system shall list that
+  participant as a wikilink to the note; other participants are listed as plain text, by name when
+  the source gives one, otherwise by email. A person note that cannot be read counts by its base
+  name only. (Amended on issue #264.)
   `[integration]`
 - R6.4 The system shall list each participant once, in the order the source delivered them,
   removing duplicates by email and then by name (case-insensitive). `[unit]`
@@ -362,7 +364,8 @@ lists them as RESOLVED.
 - D7 A redelivered `source_id` is a 200 `already_stored`, not a 409, for the meeting route only.
 - D8 Meeting settings live in a new optional `meetings` section of `.2brain/config.yaml`
   (ADR 0020).
-- D9 Participants link only to existing person notes, by base name; no person notes are created.
+- D9 Participants link only to existing person notes, by base name or `aliases` value (amended on
+  issue #264); no person notes are created.
 - D10 Fireflies rename and delete are deferred (docs/v2.md).
 - D11 In webhook mode, the Fireflies webhook is not signature-checked; it carries only an id that
   n8n resolves with the owner's own API key, behind a random webhook path.

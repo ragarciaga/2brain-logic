@@ -263,7 +263,9 @@ keep their mapping unchanged.
   same moment are ordered by the queue; the second one sees the first (R7.2).
 - Cleanup: a failed commit leaves neither the new file nor a changed versions property (R8.3).
   No temporary files hold transcript text; the body exists only in memory and in the note.
-- Scan cost: persons are read from the person folder listing only (base names, no content);
+- Scan cost: persons are the person folder listing plus the frontmatter block of each person note
+  (at most 64 KiB per note and 2,000 notes, safe parser; a note that cannot be read counts by its
+  base name only; `aliases` capped at 50 per note);
   version candidates are the frontmatter blocks of meeting folders, filtered by date within one
   day (R6.3, R7.6). The existing source index limits (20,000 files) apply.
 
@@ -345,7 +347,8 @@ criteria), Fireflies at USD 0 on the current plan, Google Meet API at USD 0 (D13
 - RESOLVED D6: no calendar match gives `Untitled meeting HH-MM` (ADR 0004); source title kept.
 - RESOLVED D7: redelivery answers 200 `already_stored` on the meeting route.
 - RESOLVED D8: settings in an optional `meetings` config section (ADR 0020).
-- RESOLVED D9: participants link only to existing person notes, by base name.
+- RESOLVED D9: participants link only to existing person notes, by base name or `aliases` value,
+  ignoring case and accents, email before name (amended on issue #264).
 - RESOLVED D10: Fireflies rename and delete deferred (docs/v2.md).
 - RESOLVED D11: no Fireflies signature check in webhook mode; random webhook path, id-only payload.
 - RESOLVED D12: 4 MiB limit on `/meetings`, `/notes` keeps 1 MiB.

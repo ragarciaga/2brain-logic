@@ -4,7 +4,7 @@ import {
   type VaultConfig,
   VaultConfigSchema,
 } from "../src/config/vault-config.js";
-import { FIELD_MAX, meetingFrontmatter } from "../src/meetings/frontmatter.js";
+import { FIELD_MAX, meetingFrontmatter, type PersonNote } from "../src/meetings/frontmatter.js";
 import type { MeetingInput } from "../src/meetings/types.js";
 import { parseNote, stringifyNote } from "../src/vault/frontmatter.js";
 
@@ -176,8 +176,13 @@ describe("meetingFrontmatter time", () => {
 });
 
 describe("meetingFrontmatter participants", () => {
-  const fm = (people: MeetingInput["people"], persons: string[] = []) =>
-    meetingFrontmatter(input({ people }), CHOICE, BOGOTA, persons).participants;
+  const fm = (people: MeetingInput["people"], persons: (string | PersonNote)[] = []) =>
+    meetingFrontmatter(
+      input({ people }),
+      CHOICE,
+      BOGOTA,
+      persons.map((p) => (typeof p === "string" ? { base: p, aliases: [] } : p)),
+    ).participants;
 
   it("drops duplicate emails in a different case and keeps order", () => {
     expect(
@@ -211,6 +216,46 @@ describe("meetingFrontmatter participants", () => {
       "[[Ana Ruiz]]",
       "dev@example.com",
     ]);
+  });
+
+  it("links ignoring accents and case on the base name", () => {
+    expect(fm([{ name: "MARIA puch" }], ["María Puch"])).toEqual(["[[María Puch]]"]);
+  });
+
+  it("links a name or a mixed-case email found in the aliases", () => {
+    const persons = [{ base: "Ana Ruiz", aliases: ["A. Ruiz", "aruiz@example.com"] }];
+    expect(fm([{ name: "a. ruiz" }, { email: "ARuiz@Example.com" }], persons)).toEqual([
+      "[[Ana Ruiz]]",
+    ]);
+  });
+
+  it("lets the email win over the name", () => {
+    const persons = [
+      { base: "Ana Ruiz", aliases: ["ana@example.com"] },
+      { base: "Bo Chen", aliases: [] },
+    ];
+    expect(fm([{ name: "Bo Chen", email: "ana@example.com" }], persons)).toEqual(["[[Ana Ruiz]]"]);
+  });
+
+  it("lets a base name beat an alias of another note", () => {
+    const persons = [
+      { base: "Ana Ruiz", aliases: ["Bo Chen"] },
+      { base: "Bo Chen", aliases: [] },
+    ];
+    expect(fm([{ name: "Bo Chen" }], persons)).toEqual(["[[Bo Chen]]"]);
+  });
+
+  it("leaves an alias shared by two notes as plain text", () => {
+    const persons = [
+      { base: "Ana Ruiz", aliases: ["Sam"] },
+      { base: "Bo Chen", aliases: ["sam"] },
+    ];
+    expect(fm([{ name: "Sam" }], persons)).toEqual(["Sam"]);
+  });
+
+  it("writes one link when two participants resolve to the same note", () => {
+    const persons = [{ base: "Ana Ruiz", aliases: ["A. Ruiz"] }];
+    expect(fm([{ name: "Ana Ruiz" }, { name: "A. Ruiz" }], persons)).toEqual(["[[Ana Ruiz]]"]);
   });
 
   it("omits the key when nobody is known", () => {
@@ -289,7 +334,7 @@ describe("meetingFrontmatter YAML round trip", () => {
       input({ sourceTitle: "Plan: a # b 'c'\nsecond line", people: [{ name: "Ana Ruiz" }] }),
       CHOICE,
       BOGOTA,
-      ["Ana Ruiz"],
+      [{ base: "Ana Ruiz", aliases: [] }],
     );
     expect(parseNote(stringifyNote(fm, "")).data).toEqual(fm);
   });

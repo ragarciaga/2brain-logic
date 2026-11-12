@@ -6,7 +6,7 @@ import type { GitApi } from "../git/index.js";
 import { trackedAtHead } from "../git/sync.js";
 import { routeArea } from "../meetings/area.js";
 import { pickEvent } from "../meetings/calendar.js";
-import { meetingFrontmatter } from "../meetings/frontmatter.js";
+import { FIELD_MAX, meetingFrontmatter, type PersonNote } from "../meetings/frontmatter.js";
 import { localParts, meetingFolder, meetingPath, withTimeSuffix } from "../meetings/name.js";
 import { normalizeSegments } from "../meetings/normalize.js";
 import type { MeetingInput, MeetingOk } from "../meetings/types.js";
@@ -180,12 +180,35 @@ async function occupancy(
   return (await trackedAtHead(root, path)) ? "taken" : "same";
 }
 
+const MAX_PERSON_READS = 2000;
+const PERSON_FRONTMATTER_CAP = 64 * 1024;
+const MAX_ALIASES = 50;
+
+/** The usable `aliases` of a parsed frontmatter: trimmed, non-empty strings within the cap. */
+function aliasesOf(data: unknown): string[] {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return [];
+  if (!Object.hasOwn(data, "aliases")) return [];
+  const raw: unknown = (data as Record<string, unknown>).aliases;
+  const items: unknown[] = Array.isArray(raw) ? raw : [raw];
+  const out: string[] = [];
+  for (const item of items) {
+    if (typeof item !== "string") continue;
+    const text = item.trim();
+    if (text === "" || Array.from(text).length > FIELD_MAX) continue;
+    out.push(text);
+    if (out.length >= MAX_ALIASES) break;
+  }
+  return out;
+}
+
 /**
- * Base names (no `.md`) of the regular files directly inside the person folders of the vault. The
- * listing is names only: no file is read, a symlink is skipped, and a folder whose real location
- * is outside the vault is skipped. A missing folder gives nothing.
+ * The regular files directly inside the person folders of the vault, as their base name (no `.md`)
+ * and the `aliases` of their frontmatter. Only the frontmatter block is read (at most 64 KiB, for
+ * at most 2,000 notes) through the safe parser; a symlink is skipped, and a folder whose real
+ * location is outside the vault is skipped. A note that cannot be read or parsed contributes its
+ * base name only. A missing folder gives nothing.
  */
-async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
+async function listPersons(root: string, cfg: VaultConfig): Promise<PersonNote[]> {
   const template = cfg.types.person?.folder;
   if (template === undefined) return [];
   const folders = new Set(
@@ -194,7 +217,8 @@ async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
       : [template],
   );
   const realRoot = await realpath(root);
-  const names = new Set<string>();
+  const found = new Map<string, Set<string>>();
+  let reads = 0;
   for (const folder of folders) {
     const dir = resolve(root, folder);
     if (dir !== root && !dir.startsWith(root + sep)) continue;
@@ -208,11 +232,24 @@ async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
       if (code === "ENOENT" || code === "ENOTDIR") continue;
       throw error;
     }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith(".md")) names.add(entry.name.slice(0, -3));
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const base = entry.name.slice(0, -3);
+      const aliases = found.get(base) ?? new Set<string>();
+      found.set(base, aliases);
+      if (reads >= MAX_PERSON_READS) continue;
+      reads += 1;
+      try {
+        const block = await readFrontmatterBlock(resolve(dir, entry.name), PERSON_FRONTMATTER_CAP);
+        if (block === undefined) continue;
+        for (const alias of aliasesOf(parseNote(block).data)) aliases.add(alias);
+      } catch {
+        // unreadable or malformed: the base name alone
+      }
     }
   }
-  return [...names].sort();
+  return [...found.keys()].sort().map((base) => ({ base, aliases: [...(found.get(base) ?? [])] }));
 }
 
 /**
@@ -229,7 +266,7 @@ async function listPersons(root: string, cfg: VaultConfig): Promise<string[]> {
  * and if the commit fails both go back. Without a match the path is `<date> · <title>.md`; if
  * another note holds it, ` HH-MM` is added, and if that is taken too the answer is
  * `NoteExistsError`. Every path passes `NotePath` and the scrub rules before any file work
- * (`UnsafePathError`). The person base names are listed and the frontmatter is built and scrubbed
+ * (`UnsafePathError`). The person notes (base names and aliases) are listed and the frontmatter is built and scrubbed
  * once before a path is taken, because a path that holds a regular file HEAD does not track with
  * exactly these bytes (a write that crashed before its commit) is not taken: that file is adopted
  * and committed. An untracked holder of the source id at any other path stays `NoteExistsError`.
