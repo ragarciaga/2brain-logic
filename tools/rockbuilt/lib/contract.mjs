@@ -4,7 +4,7 @@ import { readText } from './util.mjs';
 
 export const HEADER_FIELDS = ['Docs language', 'Project type', 'Default branch', 'Autonomy', 'Parallel', 'Max parallel', 'Max tasks per run'];
 export const REQUIRED_SECTIONS = ['Goal', 'Stack', 'Conventions', 'Verification', 'Out of scope'];
-export const COMMAND_SECTIONS = ['Verification', 'E2E', 'Evals', 'Setup', 'Run'];
+export const COMMAND_SECTIONS = ['Verification', 'E2E', 'Evals', 'Setup', 'Run', 'Seed', 'Deploy check'];
 export const CONTRACT_FILES = ['AGENTS.md', 'CLAUDE.md'];
 export const PROJECT_TYPES = ['web', 'ai', 'automation'];
 export const AUTONOMY_MODES = ['auto', 'supervised'];
@@ -138,6 +138,9 @@ export function contractInfo(root) {
     parallel: headerField(text, 'Parallel') || 'auto',
     maxParallel: intField(text, 'Max parallel', 3),
     maxTasksPerRun: intField(text, 'Max tasks per run', 6),
+    // rockbuilt #64: the owner's recorded refusal of branch protection (it costs money on a
+    // private repo). Anything else, or no line, means protection is still pending.
+    protectionDeclined: /^declined\b/i.test(headerField(text, 'Branch protection') || ''),
     ...parseAutonomy(text),
   };
 }

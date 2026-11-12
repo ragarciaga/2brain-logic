@@ -55,6 +55,8 @@ GitHub reads go through `rb gh <op>` (REST, JSON); never `gh issue`, `gh pr` or 
    - `rb gh issue-list --label rb:blocked --state open`
    - `rb gh issue-list --label rb:in-progress --state open`
    - `rb gh issue-list --label rb:task --state open` and `--label rb:bug`
+   - `rb gh issue-list --label rb:quick --state open`: a quick batch (`/rb-quick`) with no PR,
+     or whose PR lacks a passing verifier line, is work that nobody reviewed yet.
    - `rb gh pr-list --state open --head-prefix rb/`; for each: labels (tier), and
      `rb gh checks <head sha>` only for PRs you will mention.
    For each escalation, `rb gh issue-view <n>` and take the latest escalation comment: the
@@ -82,6 +84,9 @@ Take the first rule that matches:
 | Tier C PR waiting (`rb:tier-c`, or any PR under `Autonomy: supervised`) | Review PR #n; merge it, or say "merge PR #n" to `/rb-merge` |
 | Baseline has new failures on the default branch | The stabilization issue, or `/rb-fix` |
 | Uncommitted non-bookkeeping files on the default branch | Move them to a branch and PR (never push to the default branch) |
+| Open quick batch not reviewed (`rb:quick`) | `/rb-quick` to close it: one review of the batch, then the PR; never call it done before |
+| Skeleton not yet run in the real environment (open `rb:skeleton` + `rb:needs-local`) | Do the steps in issue #n: features wait for it |
+| Doctor `progress` WARN (merges progress.md never recorded) | Refresh docs/progress.md from those merges (offer it; write on approval) before trusting its objective |
 | Lock held and fresh | A run is in progress: wait for its digest |
 | Spec with requirements or design `draft` | `/rb-spec <folder>` to finish approval |
 | Spec PR (`rb/spec-*`) open | Merge it so the cycle can build its tasks |
@@ -106,6 +111,7 @@ Needs you
 - #<n> needs-human: <question in one line>. Recommended: <option>. <Cost: estimate, if any>
 - #<n> needs-local: <what to run, one line>
 - PR #<n> (tier C): <title>, CI <green|red>
+- Branch protection off: `rb protect` (free on this repo) | needs GitHub Pro, your decision
 
 Merged since last digest
 - PR #<n> <title> (tier <A|B>)  revert: rb revert <n>
@@ -117,7 +123,9 @@ Next
 <one action>  (<one-line reason>)
 ```
 
-Omit empty sections. Mention doctor WARN/FAIL lines only if they affect the next action. A
+Omit empty sections. Mention doctor WARN/FAIL lines only if they affect the next action, except
+protection: `rb-only` without a recorded `Branch protection: declined` always goes under Needs
+you (rockbuilt #64: a merge in the GitHub UI skips `rb merge-gate`). A
 GitHub Actions quota warning is always worth one line (without Actions, nothing merges). If
 progress.md is stale, offer to refresh it; write only on approval.
 

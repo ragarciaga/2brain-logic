@@ -6,8 +6,8 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acceptBaseline, checkBaseline, runBaseline } from './lib/baseline.mjs';
-import { COMMAND_SECTIONS, headerField, readContract, sectionCommands } from './lib/contract.mjs';
-import { acquireLock, ensureControl, escalate, listFlaky, lockStatus, postDigest, recordFlaky, releaseLock, stopStatus } from './lib/control.mjs';
+import { COMMAND_SECTIONS, contractInfo, headerField, readContract, sectionCommands } from './lib/contract.mjs';
+import { acquireLock, digestWithStanding, ensureControl, escalate, listFlaky, lockStatus, postDigest, recordFlaky, releaseLock, standingItems, stopStatus } from './lib/control.mjs';
 import { runDoctor } from './lib/doctor.mjs';
 import { GH_OPS, GhError, makeGh, ops, replaceMachineLine, runGhOp } from './lib/gh.mjs';
 import { DEFAULTS as HOURS_DEFAULTS, HOURS_TITLE, UNATTENDED_TAG, computeHours, makeResolver, manualComment, parseAttention, parseBaseline, parseWindow, readMarks, readState, readManualLocal, recordManualLocal, recordMark, renderCsv, renderHours, sessionComments, writeState } from './lib/hours.mjs';
@@ -33,7 +33,7 @@ export const COMMANDS = {
   vendor: 'Install or update the harness  [--tools claude,cursor,codex] [--type web,ai,automation] [--lang es] [--from <harness root>]',
   init: 'Alias of vendor',
   doctor: 'Environment, contract, vendored version, CI, protection mode, labels, control issue',
-  'verify-cmds': 'Commands from an AGENTS.md section  [Verification|E2E|Evals|Setup]; E2E only: [--shard i/n] (CI) or [--only a.spec.ts,b.spec.ts] [--grep "title"] (local)',
+  'verify-cmds': 'Commands from an AGENTS.md section  [Verification|E2E|Evals|Setup|Run|Seed|"Deploy check"]; E2E only: [--shard i/n] (CI) or [--only a.spec.ts,b.spec.ts] [--grep "title"] (local)',
   'e2e-plan': 'CI: has E2E, shard count and matrix from AGENTS.md (key=value lines for GITHUB_OUTPUT)',
   'review-delta': 'Task change since the reviewed head, by content: identical | test-only | different  --reviewed <sha> [--base origin/<default>] [--line --task <id>: print the verifier identity line, exit 3 unless identical after merges only] (exit 3 when different)',
   baseline: 'Run Verification and ratchet against docs/rockbuilt/known-failures.json  [--check] [--accept]',
@@ -42,7 +42,7 @@ export const COMMANDS = {
   worktree: 'add <task> [--base main] [--slug s] [--title t] [--spec dir] | remove <task> [--force] | list',
   timing: 'start|end <task> <phase> | line <task> [--est <hours>] [--pr <n>] | report [--write]',
   hours: 'Your attention hours by feature and task  [report] [--repos a/b,c/d] [--since d] [--until d] [--gap 10] [--tail 5] [--csv f] | log <minutes> [--ref T3] [--spec dir] [--at iso] [--note t] | mark|flush --hook',
-  risk: 'Autonomy tier of a diff  [--pr <n>] [--base <ref>] [--files a,b]',
+  risk: 'Autonomy tier of a diff, security need and quick-mode limits  [--pr <n>] [--base <ref>] [--files a,b]',
   bookkeeping: 'The day\'s bookkeeping PR: carry (apply the open one at run start) | save [--final] (push tasks.md, progress.md, LESSONS.md to rb/bookkeeping-<date>)  --run <id>',
   ci: 'CI on a commit: wait <sha> [--timeout <min>] (until rockbuilt-ci, and rockbuilt-e2e when the project has E2E, exist and every check completed; exit 0 green, 1 red, 3 timed out) | logs <sha> [--job <name>] [--tail <n>] (log tail, or annotations when the log is not readable)',
   browser: 'Print the Chromium executable for PW_CHROMIUM_PATH (exit 3 when none is found)',
@@ -786,8 +786,13 @@ const handlers = {
 
   digest({ cwd, positionals, flags, io }) {
     if (positionals[0] !== 'post') throw new CliError('usage: rb digest post --file <md>', 2);
-    const r = postDigest(client(projectRoot(cwd), flags, io), bodyFile(cwd, flags, 'file'));
-    return { data: r, text: `digest posted on #${r.control}`, code: 0 };
+    const root = projectRoot(cwd);
+    const c = client(root, flags, io);
+    let protection = null;
+    try { protection = ops.protection(c, defaultBranch(root)); } catch { protection = null; }
+    const items = standingItems({ protection, protectionDeclined: contractInfo(root).protectionDeclined });
+    const r = postDigest(c, digestWithStanding(bodyFile(cwd, flags, 'file'), items));
+    return { data: { ...r, standing: items }, text: `digest posted on #${r.control}${items.length ? ` (${items.length} standing item(s))` : ''}`, code: 0 };
   },
 
   protect({ cwd, flags, io }) {
