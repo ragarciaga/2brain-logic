@@ -1,0 +1,142 @@
+# <Project name>
+
+Docs language: <es|en>
+Project type: <web, ai, automation>
+Default branch: main
+Autonomy: auto
+Parallel: auto
+Max parallel: 3
+Max tasks per run: 6
+Kickback budget: 2
+Profile: full
+Feature review: off
+Launch: not set
+
+This file is the project contract. Every coding agent (Claude Code, Cursor, Codex) reads it, and
+the Rockbuilt harness (`node tools/rockbuilt/rb.mjs`) parses its header lines and sections. Keep
+the headings exactly as written.
+
+## Goal
+<Business goal: why this exists, in terms of value for the user or the business.>
+<Current problem: the manual or slow process this replaces, in time and effort.>
+<System objective: inputs, processing, outputs.>
+
+Product context: docs/brief.md (greenfield) or docs/current-state.md (adopted repo).
+
+## Stack
+- <Language> <pinned version> (<link to docs>)
+- <Framework> <pinned version> (<link to docs>)
+- <Test runner> <pinned version> (<link to docs>)
+- <Data store / hosting / key services, with versions and links>
+
+Stack decisions and their reasons: docs/adr/.
+
+## Conventions
+<Only what is not obvious from the code. Delete any line a reader could learn in ten seconds.>
+- <Pattern or naming rule>
+- <Data rule, e.g. "every query goes through src/db/, never raw SQL in routes">
+- <Security rule, e.g. "secrets only in .env, never logged">
+- <Scope limit, e.g. "never modify X", "only use library Y for Z">
+
+## Verification
+```bash
+# One command per line; all must pass. Replace with the project's real commands.
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+## E2E
+```bash
+# Delete this section if the project has no browser flows.
+npm run test:e2e
+```
+When the suite passes about 15 minutes in CI, add the header line `E2E shards: 2` (up to 8): CI
+then runs it in that many parallel jobs, each with `--shard=i/n` (public repos run Actions free;
+private ones spend more Actions minutes, each shard repeats setup).
+
+## Run
+```bash
+# Web projects: the one command that starts the app on $PORT (default 3000) for browser checks.
+# The orchestrator starts it for the blind auditor; delete this section if there is no app to run.
+npm run dev
+```
+
+## Seed
+```bash
+# Web projects whose data comes from files: load the committed fixtures and create a test
+# identity the blind auditor signs in with (never a real credential). Delete if there is nothing to seed.
+npm run seed
+```
+
+## Deploy check
+```bash
+# Only when the host deploys the default branch on merge: one command that exits 0 once the merged
+# commit is live (a version or health route that returns it, retried up to a time limit).
+# Run after every merge; a failure opens an rb:bug issue. Keep it an npm script: unattended runs
+# only run commands the permission list allows. Delete if nothing deploys on merge.
+npm run deploy:check
+```
+
+## Evals
+```bash
+# Delete this section if the project has no AI behavior to grade.
+npm run evals
+```
+
+## Setup
+```bash
+npm ci
+```
+
+## Autonomy
+Sensitive paths: <globs that always get the full review (level 3), e.g. src/pricing/**, or "none">
+Tier A paths: <globs that count as level 1 (merge on CI), e.g. content/**, or "none">
+Paid services: <none, or "service (monthly cap USD)" for each one the owner already approved>
+
+How the harness decides (computed by `rb risk` from the real diff; the highest level wins):
+
+- **Level 1** (docs, styles, copy, tests that only add, plus `Tier A paths`): merged on green CI,
+  no agent review.
+- **Level 2** (normal production code): the verifier reviews it; the blind auditor too when
+  something the user sees changes, and on one PR in five by sampling. Merged when CI is green.
+- **Level 3** (`Sensitive paths`, auth, permissions, payments, personal data, deletion, schema,
+  CI and deploy, harness files, large diffs): verifier, blind auditor and security reviewer.
+- **Profile** (header): `full` is the above. `minimal` merges levels 1 and 2 on green CI and gives
+  level 3 the verifier and the security reviewer. `none` means the project runs without the harness.
+- **Launch** (header, `YYYY-MM-DD` or `not set`): the day real users arrive. Before it, `/rb-attack`
+  attacks the live system once within a scope you approve; critical findings carry
+  `rb:launch-blocker` and every report lists them first.
+- **Feature review** (header, `on` or `off`): with `on`, level 2 tasks of a spec merge into
+  `rb/feature-<NN-slug>` with CI and the verifier, and the blind auditor and the security reviewer
+  review the whole feature once, in its PR to the default branch. Level 3 tasks never go there.
+- **The owner approves the plan** only for schema and migrations, architecture (ADR, a new spec,
+  a design decision), the auth model, a cost outside `Paid services` or over its cap, and anything
+  irreversible. Everything else takes a safe default and is reported. The harness sets the item
+  aside (`rb:approval-pending`), keeps working, and sends one message per run with every decision.
+  Once approved, the merge is automatic.
+
+How to approve: write "aprobado" (or "approved") on the issue, after the plan. To hand approvals
+over for a while, say so in a session ("delego todo hasta el viernes", "full auto del milestone
+MVP"): it is recorded on the control issue with your words (`rb delegate`), for 14 days by
+default, without cost or irreversible items unless you name them.
+An approval covers the plan as posted; a revised plan asks again. `Kickback budget` (0 to 3) is how
+many review rounds a task gets before it is marked blocked. Items labelled `rb:needs-local`
+need your machine (for example a browser or local credentials) and include exact steps.
+
+To stop all autonomous work, add the `rb:stop` label to any open issue (or to the
+`Rockbuilt control` issue); remove it to resume. `Autonomy: supervised` in the header makes every
+pull request wait for the human.
+
+## Security probes
+```bash
+# Read-only diagnostics of the live system, one per line (run by /rb-attack before launch).
+# Examples: a SQL file under docs/security/probes/ run against production with a read-only role,
+# a grep of the built bundle for key-shaped strings. Never a command that writes.
+```
+
+## Out of scope
+Deferred scope with reasons: docs/v2.md.
+- <Hard non-goal 1>
+- <Hard non-goal 2>

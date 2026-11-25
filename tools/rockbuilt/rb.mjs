@@ -19,10 +19,20 @@ import { findingsText, scanBranch } from './lib/secrets.mjs';
 import { identityLine, reviewDelta } from './lib/delta.mjs';
 import { e2ePlan, onlyCommands, parseShard, shardCommands } from './lib/e2e.mjs';
 import { mergeGate, prKind, revertPr } from './lib/merge.mjs';
+import { parseDelegations, recordDelegation, revokeDelegations } from './lib/approval.mjs';
+import { projectState, stateText } from './lib/state.mjs';
+import { dependencyCheck, depsText } from './lib/deps.mjs';
+import { logPermission, permissionReport, permissionText } from './lib/permissions.mjs';
+import { inventoryProblems } from './lib/inventory.mjs';
+import { treeCheck, treeText } from './lib/treecheck.mjs';
+import { safetyCheck } from './lib/safety.mjs';
+import { addIteration, calibrationLine, calibrationState, calibrationText, entriesFromComments, readCalibration } from './lib/calibration.mjs';
+import { checkExploration, exploreText, startExploration } from './lib/explore.mjs';
+import { inScope, probeList, recordScope, revokeScope, showScope } from './lib/attack.mjs';
 import { planBatches } from './lib/parallel.mjs';
 import { currentBranch, defaultBranch, mainCheckoutRoot } from './lib/repo.mjs';
 import { computeRisk, riskText } from './lib/risk.mjs';
-import { coverage, loadSpec, taskProblems } from './lib/spec.mjs';
+import { coverage, loadSpec, taskCriteria, taskProblems } from './lib/spec.mjs';
 import { claimIssue, syncProject, syncText } from './lib/sync.mjs';
 import { addRows, aggregate, appendEvent, autoPhase, localRow, markPublished, mergeReports, parseBlock, parseTimingLines, readEvents, renderTable, taskMarker, timingLine, writeProgressBlock } from './lib/timing.mjs';
 import { CliError, git, listFlag, parseArgs, projectRoot, readText, requireRepoRoot, sleepMs, stringFlag } from './lib/util.mjs';
@@ -33,7 +43,7 @@ export const COMMANDS = {
   vendor: 'Install or update the harness  [--tools claude,cursor,codex] [--type web,ai,automation] [--lang es] [--from <harness root>]',
   init: 'Alias of vendor',
   doctor: 'Environment, contract, vendored version, CI, protection mode, labels, control issue',
-  'verify-cmds': 'Commands from an AGENTS.md section  [Verification|E2E|Evals|Setup|Run|Seed|"Deploy check"]; E2E only: [--shard i/n] (CI) or [--only a.spec.ts,b.spec.ts] [--grep "title"] (local)',
+  'verify-cmds': 'Commands from an AGENTS.md section  [Verification|E2E|Evals|Setup|Run|Seed|"Deploy check"|"Security probes"]; E2E only: [--shard i/n] (CI) or [--only a.spec.ts,b.spec.ts] [--grep "title"] (local)',
   'e2e-plan': 'CI: has E2E, shard count and matrix from AGENTS.md (key=value lines for GITHUB_OUTPUT)',
   'review-delta': 'Task change since the reviewed head, by content: identical | test-only | different  --reviewed <sha> [--base origin/<default>] [--line --task <id>: print the verifier identity line, exit 3 unless identical after merges only] (exit 3 when different)',
   baseline: 'Run Verification and ratchet against docs/rockbuilt/known-failures.json  [--check] [--accept]',
@@ -58,6 +68,17 @@ export const COMMANDS = {
   lock: 'acquire --run <id> | release --run <id> | status',
   stop: 'status: exit 3 when the stop switch is on',
   escalate: '<issue|new> --kind human|local --title <t> --body-file <f>',
+  delegate: 'Delegated approval on the control issue: --words "<owner words>" [--scope all|milestone:<name>|issues:12,15] [--until YYYY-MM-DD] [--include cost,irreversible] [--run <id>] | revoke [--words t] | list',
+  deps: 'Runtime dependencies the branch adds outside the design: license, deprecation, maintenance  [--base <ref>] (exit 3 when one needs the owner)',
+  'safety-check': 'Before the verifier: every Safety step of the plan has its test and the report shows it fails without the step  --plan <file> --report <file> (exit 3 with what is missing)',
+  criteria: 'The criteria a task covers, verbatim from requirements.md, with their Decisions  <spec-dir> <task id> (exit 3 when a covered id is missing)',
+  'tree-check': 'After a reviewer: the working tree equals the reviewed head (bookkeeping and .rockbuilt/ aside)  [--restore] (exit 3 when it did not)',
+  spec: 'check <spec-dir>: the decision inventory of requirements.md is complete (exit 3 with the gaps)',
+  attack: 'Pre-launch attack scope on the control issue (/rb-attack): scope --words "<owner words>" --targets a.example.com,supabase:<ref> [--until YYYY-MM-DD] | scope show (exit 3 when none in force) | scope revoke | probes (the ## Security probes commands, exit 3 unless approved with the scope) | check <target> (exit 3 outside the scope)',
+  explore: 'Exploration time box on rb/explore-<slug> (never merged): start <slug> [--hours 2] (max 8) | check <slug> (exit 3 when the time is up)',
+  calibration: 'Calibration loop, the eval is the gate: add <task> --score <n> --cost <usd> --cap <usd> --ref <sha> [--lower-is-better] [--issue <n>] (kept only when it beats the best; exit 3 at the cap or after 3 without improvement) | show <task> [--issue <n>] (--issue keeps the history on the task issue, for a new session)',
+  permissions: 'Permission prompts Claude Code showed in this project: log --hook (PermissionRequest hook, reads stdin) | report (proposed allow rules)',
+  state: 'What waits for the owner and what the harness will do on its own, from GitHub (exit 3 when a query failed)',
   digest: 'post --file <md>: append the run digest to the control issue',
   flaky: 'record <test> [--pr <n>] [--note t] | list: flaky candidates on the control issue (a failure that passed on re-run)',
   protect: 'Require the rockbuilt-ci check on the default branch (exit 3 when the plan does not allow it)',
@@ -65,7 +86,7 @@ export const COMMANDS = {
   help: 'Show this help',
 };
 
-const BOOLEAN_FLAGS = ['json', 'check', 'write', 'force', 'help', 'accept', 'dry-run', 'human-approved', 'draft', 'hook'];
+const BOOLEAN_FLAGS = ['json', 'check', 'write', 'force', 'help', 'accept', 'dry-run', 'human-approved', 'draft', 'hook', 'restore', 'lower-is-better'];
 
 function makeIo(io) {
   return {
@@ -165,7 +186,7 @@ function flushSession(root, session, flags, io) {
 // Each handler returns { data, text, code }.
 const handlers = {
   help() {
-    return { data: { commands: COMMANDS, ghOps: GH_OPS }, text: helpText(), code: 0 };
+    return { data: { commands: COMMANDS, ops: GH_OPS }, text: helpText(), code: 0 };
   },
 
   doctor({ cwd, io }) {
@@ -378,7 +399,8 @@ const handlers = {
       }
       report = { tasks: rows, open: local.open };
       const table = renderTable(report);
-      const written = flags.write ? writeProgressBlock(root, table) : null;
+      // PLAN-1.0 F7: a run that timed nothing writes nothing (no empty table in progress.md).
+      const written = flags.write && report.tasks.length ? writeProgressBlock(root, table) : null;
       const text = `${table}${written ? `\n\nwritten to ${written}` : ''}\n\nGitHub: ${github}`;
       return { data: { ...report, table, written, github }, text, code: 0 };
     }
@@ -668,20 +690,28 @@ const handlers = {
         try { risk = computeRisk(root, { base: `origin/${base}` }); } catch { risk = null; }
         const file = typeof flags['body-file'] === 'string' ? path.resolve(cwd, flags['body-file']) : null;
         const text = file ? readText(file) : typeof flags.body === 'string' ? flags.body : null;
-        const declared = text && (text.match(/<!--\s*rockbuilt:tier\s+([ABC])\s*-->/i) || [])[1];
-        const rank = (t) => 'ABC'.indexOf(String(t || 'A').toUpperCase());
-        if (risk && text !== null && rank(risk.tier) > rank(declared)) {
-          raised = { from: declared ? declared.toUpperCase() : null, to: risk.tier, reasons: risk.reasons.filter((r) => r.rule !== 'tier-b').slice(0, 5).map((r) => `${r.rule} ${r.path} ${r.detail || ''}`.trim()) };
-          const marker = `<!-- rockbuilt:tier ${risk.tier} -->`;
-          flags.body = declared ? text.replace(/<!--\s*rockbuilt:tier\s+[ABC]\s*-->/i, marker) : `${text.trimEnd()}\n${marker}\n`;
+        const lv = text && (text.match(/<!--\s*rockbuilt:level\s+([123])\s*-->/i) || [])[1];
+        const tv = text && (text.match(/<!--\s*rockbuilt:tier\s+([ABC])\s*-->/i) || [])[1];
+        const declared = lv ? Number(lv) : tv ? 'ABC'.indexOf(tv.toUpperCase()) + 1 : null;
+        if (risk && text !== null && risk.level > (declared || 1)) {
+          raised = { from: declared, to: risk.level, reasons: (risk.levelReasons || []).slice(0, 5).map((r) => `${r.rule} ${r.path || ''} ${r.detail || ''}`.trim()) };
+          const marker = `<!-- rockbuilt:level ${risk.level} -->`;
+          let body = text.replace(/<!--\s*rockbuilt:tier\s+[ABC]\s*-->\n?/i, '');
+          body = lv ? body.replace(/<!--\s*rockbuilt:level\s+[123]\s*-->/i, marker) : `${body.trimEnd()}\n${marker}\n`;
+          flags.body = body;
           delete flags['body-file'];
-          if (typeof flags.label === 'string') flags.label = flags.label.split(',').filter((l) => !/^rb:tier-[abc]$/i.test(l.trim())).join(',') || undefined;
+          if (typeof flags.label === 'string') flags.label = flags.label.split(',').filter((l) => !/^rb:(tier-[abc]|level-[123])$/i.test(l.trim())).join(',') || undefined;
           if (flags.label === undefined) delete flags.label;
+        }
+        // PLAN-1.0 A8: a PR whose plan waits for the owner says so on GitHub.
+        if (risk && risk.approvals && risk.approvals.length) {
+          const extra = 'rb:approval-pending';
+          flags.label = typeof flags.label === 'string' ? `${flags.label},${extra}` : extra;
         }
       }
     }
     const data = runGhOp(client(root, flags, io), op, rest, flags, { cwd, defaultBranch: () => defaultBranch(root) });
-    if (raised) data.tierRaised = raised;
+    if (raised) data.levelRaised = raised;
     if (op === 'pr-create') {
       const bodyText = typeof flags.body === 'string' ? flags.body : typeof flags['body-file'] === 'string' ? readText(path.resolve(cwd, flags['body-file'])) : null;
       const t = taskMarker(bodyText);
@@ -695,6 +725,8 @@ const handlers = {
     const pr = positionals[0];
     if (!pr) throw new CliError('usage: rb merge-gate <pr> --run <id> | --human-approved [--dry-run]', 2);
     const r = mergeGate(root, client(root, flags, io), pr, { dryRun: Boolean(flags['dry-run']), run: stringFlag(flags, 'run') || null, humanApproved: Boolean(flags['human-approved']) });
+    // PLAN-1.0 C4: a PR held for the owner starts the human-wait phase; CI minutes stop counting.
+    if (!r.merged && !flags['dry-run'] && r.task && (r.reasons || []).some((x) => (x.rule === 'approval' && /needs the owner|does not name/.test(x.detail)) || x.rule === 'human-only' || (x.rule === 'blocking-label' && /needs-human|hold/.test(x.detail)))) autoPhase(mainCheckoutRoot(root), r.task, 'wait');
     if (r.merged && r.task) {
       // Close the task's phases and publish its minutes on the merged PR, so the numbers live on
       // GitHub even when the orchestrator never ran `rb timing line` (rockbuilt #49).
@@ -760,6 +792,160 @@ const handlers = {
     if (positionals[0] !== 'status') throw new CliError('usage: rb stop status', 2);
     const r = stopStatus(client(projectRoot(cwd), flags, io));
     return { data: r, text: r.stop ? `STOP: ${r.issues.map((i) => `#${i.number} ${i.title}`).join(', ')}` : 'stop switch off', code: r.stop ? 3 : 0 };
+  },
+
+  delegate({ cwd, positionals, flags, io }) {
+    const c = client(projectRoot(cwd), flags, io);
+    const [sub] = positionals;
+    const wrap = (fn) => { try { return fn(); } catch (e) { throw new CliError(e.message, 2); } };
+    if (sub === 'revoke') {
+      const r = wrap(() => revokeDelegations(c, ops, ensureControl, { words: stringFlag(flags, 'words') || '' }));
+      return { data: r, text: `every delegation revoked on #${r.control}`, code: 0 };
+    }
+    if (sub === 'list') {
+      const ctl = ensureControl(c, { create: false });
+      const list = ctl ? parseDelegations(ops.issueComments(c, ctl.number)) : [];
+      return { data: list, text: list.length ? list.map((d) => `${d.scope}${d.run ? ` (run ${d.run})` : ''} until ${d.until}: ${d.words}`).join('\n') : 'no delegation in force', code: 0 };
+    }
+    if (sub) throw new CliError('usage: rb delegate --words "<owner words>" [--scope ...] | revoke | list', 2);
+    const r = wrap(() => recordDelegation(c, ops, ensureControl, { scope: stringFlag(flags, 'scope') || 'all', until: stringFlag(flags, 'until') || null, include: listFlag(flags.include), run: stringFlag(flags, 'run') || null, words: stringFlag(flags, 'words') }));
+    return { data: r, text: `delegation recorded on #${r.control}: ${r.scope} until ${r.until}`, code: 0 };
+  },
+
+  deps({ cwd, flags }) {
+    const root = requireRepoRoot(cwd);
+    const risk = computeRisk(root, { base: stringFlag(flags, 'base') || undefined });
+    const r = dependencyCheck(root, risk);
+    return { data: r, text: depsText(r), code: r.ok ? 0 : 3 };
+  },
+
+  'safety-check'({ cwd, flags }) {
+    const root = requireRepoRoot(cwd);
+    const plan = readText(path.resolve(cwd, stringFlag(flags, 'plan', { required: true })));
+    if (plan === null) throw new CliError('--plan file not found', 2);
+    const report = readText(path.resolve(cwd, stringFlag(flags, 'report', { required: true }))) || '';
+    const r = safetyCheck(root, plan, report);
+    return { data: r, text: r.ok ? `${r.steps.length} safety step(s) pinned by a test` : r.problems.join('\n'), code: r.ok ? 0 : 3 };
+  },
+
+  criteria({ cwd, positionals }) {
+    const [dir, task] = positionals;
+    if (!dir || !task) throw new CliError('usage: rb criteria <spec-dir> <task id>', 2);
+    const r = taskCriteria(path.resolve(cwd, dir), task);
+    const text = [...r.criteria, ...r.missing.map((m) => `MISSING in requirements.md: ${m}`), ...r.decisions.flatMap((d) => [`${d.requirement} decisions:`, ...d.lines.map((l) => `  ${l}`)])].join('\n');
+    return { data: r, text, code: r.missing.length ? 3 : 0 };
+  },
+
+  'tree-check'({ cwd, flags }) {
+    const t = treeCheck(requireRepoRoot(cwd), { restore: Boolean(flags.restore) });
+    return { data: t, text: treeText(t), code: t.clean ? 0 : 3 };
+  },
+
+  spec({ cwd, positionals }) {
+    const [sub, dir] = positionals;
+    if (sub !== 'check' || !dir) throw new CliError('usage: rb spec check <spec-dir>', 2);
+    const root = requireRepoRoot(cwd);
+    const file = path.join(path.resolve(cwd, dir), 'requirements.md');
+    const text = readText(file);
+    if (text === null) throw new CliError(`no requirements.md in ${dir}`, 2);
+    const problems = inventoryProblems(text);
+    void root;
+    return { data: { spec: dir, problems }, text: problems.length ? problems.join('\n') : 'decision inventory complete', code: problems.length ? 3 : 0 };
+  },
+
+  attack({ cwd, positionals, flags, io }) {
+    const [sub, arg] = positionals;
+    const root = requireRepoRoot(cwd);
+    const c = client(root, flags, io);
+    if (sub === 'scope' && !arg) {
+      const r = recordScope(c, { root, words: stringFlag(flags, 'words', { required: true }), targets: stringFlag(flags, 'targets', { required: true }), until: flags.until === undefined ? null : String(flags.until) });
+      return { data: r, text: `attack scope recorded on #${r.control}: ${r.targets.join(', ')} until ${r.until}`, code: 0 };
+    }
+    if (sub === 'scope' && arg === 'show') {
+      const r = showScope(c);
+      let priv = null;
+      try { priv = ops.repoInfo(c).private; } catch { priv = null; }
+      return { data: { scope: r, repoPrivate: priv }, text: r ? `in force until ${r.until}: ${r.targets.join(', ')} ("${r.words}")` : 'no attack scope in force: ask the owner once and record their words', code: r ? 0 : 3 };
+    }
+    if (sub === 'scope' && arg === 'revoke') {
+      const r = revokeScope(c);
+      return { data: r, text: `attack scope revoked on #${r.control}`, code: 0 };
+    }
+    if (sub === 'probes' && !arg) {
+      const scope = showScope(c);
+      const p = probeList(root);
+      const ok = Boolean(scope) && p.commands.length > 0 && scope.probes === p.hash;
+      const why = !scope ? 'no attack scope in force' : !p.commands.length ? 'no ## Security probes commands in AGENTS.md' : `the probe list changed since the owner approved the scope (${scope.probes} then, ${p.hash} now): show the owner the new list and record the scope again`;
+      return { data: { ok, commands: ok ? p.commands : [], hash: p.hash, approved: scope ? scope.probes : null }, text: ok ? p.commands.join('\n') : why, code: ok ? 0 : 3 };
+    }
+    if (sub === 'check' && arg) {
+      const scope = showScope(c);
+      const ok = inScope(scope, arg);
+      return { data: { target: arg, inScope: ok, scope }, text: ok ? `${arg} is in the approved scope` : `${arg} is NOT in the approved scope: do not touch it`, code: ok ? 0 : 3 };
+    }
+    throw new CliError('usage: rb attack scope --words "<owner words>" --targets a,b [--until YYYY-MM-DD] | scope show | scope revoke | check <target>', 2);
+  },
+
+  explore({ cwd, positionals, flags }) {
+    const [sub, slug] = positionals;
+    const root = requireRepoRoot(cwd);
+    if (sub === 'start' && slug) {
+      const r = startExploration(root, slug, { hours: flags.hours === undefined ? undefined : flags.hours });
+      return { data: r, text: exploreText(r), code: 0 };
+    }
+    if (sub === 'check' && slug) {
+      const r = checkExploration(root, slug);
+      return { data: r, text: exploreText(r), code: r.over ? 3 : 0 };
+    }
+    throw new CliError('usage: rb explore start <slug> [--hours 2] | check <slug>', 2);
+  },
+
+  calibration({ cwd, positionals, flags, io }) {
+    const [sub, task] = positionals;
+    const root = requireRepoRoot(cwd);
+    if (sub === 'add' && task) {
+      // --issue: the task issue keeps the history (a new container starts with no local file).
+      const issue = flags.issue === undefined ? null : Number(String(flags.issue).replace(/^#/, ''));
+      if (flags.issue !== undefined && !Number.isInteger(issue)) throw new CliError('--issue <n>', 2);
+      const c = issue ? client(root, flags, io) : null;
+      const prior = c ? entriesFromComments(ops.issueComments(c, issue), task) : [];
+      const r = addIteration(root, task, { score: flags.score, cost: flags.cost, cap: flags.cap, lowerIsBetter: Boolean(flags['lower-is-better']), ref: flags.ref === undefined || flags.ref === true ? null : String(flags.ref), prior });
+      if (c) ops.issueComment(c, issue, `${calibrationLine(task, r.entry)}\nCalibration ${task}, iteration ${r.iteration}: score ${r.score}, ${r.kept ? 'kept' : 'discarded'}; spent ${r.spent} of ${r.cap} USD${r.stop ? `; stopped (${r.stop})` : ''}.\n`);
+      return { data: r, text: calibrationText(r), code: r.stop ? 3 : 0 };
+    }
+    if (sub === 'show' && task) {
+      const issue = flags.issue === undefined ? null : Number(String(flags.issue).replace(/^#/, ''));
+      const local = readCalibration(root, task);
+      const remote = issue ? entriesFromComments(ops.issueComments(client(root, flags, io), issue), task) : [];
+      const entries = remote.length > local.length ? remote : local;
+      const r = { task, ...calibrationState(entries), entries };
+      return { data: r, text: entries.length ? calibrationText(r) : `no calibration ${task}`, code: r.stop ? 3 : 0 };
+    }
+    throw new CliError('usage: rb calibration add <task> --score <n> --cost <usd> --cap <usd> [--lower-is-better] [--ref <sha>] | show <task>', 2);
+  },
+
+  permissions({ cwd, positionals, flags, io }) {
+    const [sub = 'report'] = positionals;
+    if (sub === 'log') {
+      if (!flags.hook) throw new CliError('usage: rb permissions log --hook (reads the Claude Code hook JSON on stdin)', 2);
+      // A hook never fails the session and never decides: it only records.
+      try {
+        let input = {};
+        try { input = JSON.parse(io.stdin() || '{}') || {}; } catch { input = {}; }
+        const root = mainCheckoutRoot(projectRoot(process.env.CLAUDE_PROJECT_DIR || input.cwd || cwd));
+        if (existsSync(path.join(root, 'tools', 'rockbuilt', 'rb.mjs'))) logPermission(root, input);
+      } catch { /* never block */ }
+      return { data: { logged: true }, text: null, code: 0 };
+    }
+    if (sub !== 'report') throw new CliError('usage: rb permissions log --hook | report', 2);
+    const r = permissionReport(mainCheckoutRoot(requireRepoRoot(cwd)));
+    return { data: r, text: permissionText(r), code: 0 };
+  },
+
+  state({ cwd, flags, io }) {
+    const root = projectRoot(cwd);
+    const s = projectState(client(root, flags, io), { root });
+    return { data: s, text: stateText(s), code: s.complete ? 0 : 3 };
   },
 
   escalate({ cwd, positionals, flags, io }) {

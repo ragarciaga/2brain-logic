@@ -16,6 +16,10 @@ Autonomy: auto                       # or supervised (every PR waits for the hum
 Parallel: auto                       # "off" if the repo has heavy shared state (single migration folder churn, monolithic config)
 Max parallel: 3
 Max tasks per run: 6
+Kickback budget: 2
+Profile: full                        # or minimal (levels 1 and 2 on CI; level 3 verifier and security)
+Feature review: off                  # on: level 2 tasks merge into rb/feature-<NN-slug>, one audit per feature
+Launch: not set                      # YYYY-MM-DD when real users arrive, or live; /rb-attack runs before it
 ```
 
 ## Where each section comes from
@@ -39,7 +43,7 @@ stabilization issue.
 
 Commands that call paid services (a test suite that hits a live LLM, an eval run against a paid
 API) do not go into `## Verification`: the cycle runs Verification unattended, and paid calls are
-tier C (DESIGN.md section 14). Put them under `## Evals` and note that they need a budget in
+owner approval (DESIGN.md section 14). Put them under `## Evals` and note that they need a budget in
 `Paid services`; suggest a mocked variant for Verification.
 
 ## Existing CLAUDE.md

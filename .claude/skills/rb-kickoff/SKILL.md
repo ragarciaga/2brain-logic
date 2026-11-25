@@ -81,7 +81,8 @@ Follow `references/validation.md` (this skill's folder). In short:
 5. **Classify Project type:** any of `web`, `ai`, `automation`. It drives the verify gates (E2E
    for web, evals for ai) and what `rb vendor --type` installs.
 
-Close each ambiguous decision one at a time with a recommended answer. Unknown library with no
+Close the ambiguous decisions in one round: each numbered, with a recommended answer, so the user
+answers once (PLAN-1.0 E2). Unknown library with no
 prior experience? Mark a benchmark as DEFERRED for `/rb-spec` instead of guessing.
 
 ## Step 3: Interview the remaining areas (batched)
@@ -94,17 +95,27 @@ constraints, hosting, security and data sensitivity, and **operation** (Round E)
 
 - **Tools.** Which tools will they use besides Claude Code? Cursor, Codex (experimental). Default
   `claude` only. This becomes `rb vendor --tools`.
-- **Autonomy.** Default `auto`. Explain the tiers in two lines, in their language, for example:
-  "A (tests, docs, estilos) y B (código normal de un spec aprobado) se planean, construyen,
-  auditan y fusionan solos si CI está verde. C (arquitectura, datos, auth, dependencias, infra,
-  cualquier costo) espera tu decisión en un issue." Add that anything that can cost money always
+- **Autonomy.** Default `auto`. Explain the review levels in two lines, in their language, for example:
+  "Nivel 1 (docs, estilos, textos, pruebas nuevas) se fusiona solo con CI en verde; nivel 2
+  (código normal) lo revisa el verifier; nivel 3 (rutas sensibles, auth, datos, borrado) pasa por
+  las tres revisiones. Solo te pregunto por esquema, arquitectura, modelo de auth, costo o algo
+  irreversible, y lo agrupo en un mensaje." Add that anything that can cost money always
   asks first, in every mode. Offer `supervised` (every PR waits for them) as the alternative.
   **The harness is never deferred** (rockbuilt #54). "Activate it after the first version" or
   "less ceremony for now" means `Autonomy: supervised` from day one, never a later vendoring: a
   deferral written only in the brief was never acted on, and a month of production work ran with
   no review. Say so in one sentence and record `supervised` instead.
+- **Profile** (PLAN-1.0 G4). Recommend one, with the reason, and write it as `Profile:` in the
+  AGENTS.md header: `full` (default: real users, personal data, money, or a team), `minimal` (a
+  tool only the owner uses, low-risk automation: levels 1 and 2 merge on green CI, level 3 gets
+  the verifier and the security review) or `none` (a spike, a demo or a one-off script that never
+  reaches real users: AGENTS.md and the brief only, no vendored harness, and `/rb-adopt` the day
+  it gets users). A project headed to production is never `none` (rockbuilt #54).
+- **Launch with real users** (PLAN-1.0 H1). The date real users (or paying testers) arrive, or
+  `not set`. Written as `Launch: YYYY-MM-DD` in the AGENTS.md header; before it, `/rb-attack`
+  attacks the live system once, and `/rb-status` and the digest remind it until a report exists.
 - **Branch protection.** On a public repo (or a paid plan) `rb protect` is free and becomes part
-  of this approval. On a private free repo it needs GitHub Pro (cost, tier C): ask, and record a
+  of this approval. On a private free repo it needs GitHub Pro (cost, owner approval): ask, and record a
   refusal as the header line `Branch protection: declined (<date>, <reason>)` in AGENTS.md.
 - **Paid services** already approved, each with a monthly cap, or `none`.
 
@@ -121,7 +132,7 @@ Present in the chat, in one message, in the user's language:
    of data storage, auth model, hosting that were decided.
 4. **First feature list:** 3 to 7 vertical features in build order, one line each. These become
    `/rb-spec` runs, not issues yet.
-5. **Operation:** tools, Autonomy mode, Paid services, branch protection (on, or declined), and
+5. **Operation:** tools, Autonomy mode, Profile with its reason, Launch date, Paid services, branch protection (on, or declined), and
    that the nightly cloud routine is optional and set up by them.
 6. **Out of scope / v2** list and remaining ADVISORY defaults.
 
@@ -141,12 +152,14 @@ Read `references/setup.md` for exact commands and failure handling.
    access), turn on Settings, General, "Automatically delete head branches" (cloud sessions cannot
    delete remote branches or change repo settings), and give you its URL; then wire it as
    `origin`. Confirm the owner/name and default branch back.
-2. **Vendor the harness.** `rb vendor --type <types> --lang <lang> --tools <tools>` (plugin or
+2. **Vendor the harness** (skip it, and the labels, control issue and skeleton issue, when the
+   approved Profile is `none`; write AGENTS.md by hand from `harness/project/AGENTS.md`).
+   `rb vendor --type <types> --lang <lang> --tools <tools>` (plugin or
    `../rockbuilt` path, see above). Report what it created, merged and skipped. From now on use
    `node tools/rockbuilt/rb.mjs`.
 3. **AGENTS.md.** Fill the template vendor installed, exactly per DESIGN.md section 5: header
    lines (`Docs language`, `Project type`, `Default branch`, `Autonomy`, `Parallel`,
-   `Max parallel`, `Max tasks per run`), Goal, Stack (pinned, linked), Conventions (only
+   `Max parallel`, `Max tasks per run`, `Kickback budget`, `Profile`, `Feature review`, `Launch`), Goal, Stack (pinned, linked), Conventions (only
    non-obvious rules), Verification/E2E/Evals/Setup blocks with the intended commands,
    `## Autonomy` (`Sensitive paths`, `Tier A paths`, `Paid services` from Round E), Out of
    scope. Remove E2E, Evals, Seed or Deploy check sections that do not apply (Deploy check stays
@@ -167,7 +180,7 @@ Read `references/setup.md` for exact commands and failure handling.
    got.
 7. **Commit path.** Commit on `rb/kickoff` and push the branch; open the PR with
    `rb gh pr-create --head rb/kickoff --base <default> --title <t> --body-file <f>`. It touches
-   AGENTS.md, `.claude/`, `.github/` and `tools/rockbuilt/`: tier C, the user merges it. If the
+   AGENTS.md, `.claude/`, `.github/` and `tools/rockbuilt/`: owner approval, the user merges it. If the
    remote has no commits yet (repo created by `gh repo create`), the user makes the first push
    from their terminal instead (setup.md section 6).
 8. `rb protect` when the approval included it (exit 3: the plan does not allow it; tell the user
@@ -189,6 +202,7 @@ Tell the user, in their language:
   digest ends with it as a standing item: a merge in the GitHub UI skips `rb merge-gate`, and
   that is how two red PRs reached the default branch in rockbuilt #64. Never buy GitHub Pro on
   your own.
+- **Before real users:** `/rb-attack` once, on the live system (milestone `Launch:`).
 - The next steps in order: merge the kickoff PR; the skeleton issue runs through `/rb-build #<n>`
   (or the nightly `/rb-cycle` picks it up); then `/rb-spec <first feature>`.
 

@@ -7,6 +7,10 @@ Autonomy: auto
 Parallel: auto
 Max parallel: 3
 Max tasks per run: 6
+Kickback budget: 2
+Profile: full
+Feature review: off
+Launch: not set
 Branch protection: declined (2026-11-12, owner keeps main unprotected for now)
 
 This file is the project contract. Every coding agent (Claude Code, Cursor, Codex) reads it, and
@@ -81,21 +85,34 @@ Sensitive paths: src/auth/**, src/vault/scrub/**, src/sources/**/delete*.ts, Doc
 Tier A paths: vault-template/**
 Paid services: Anthropic API (monthly cap USD 20)
 
-How the harness decides (computed by `rb risk` from the real diff; the highest tier wins):
+How the harness decides (computed by `rb risk` from the real diff; the highest level wins):
 
-- **Tier A** (tests, docs, styles, copy, plus `Tier A paths`): planned, built, verified and
-  merged without the human.
-- **Tier B** (normal production code from an approved spec or an `rb:task` / `rb:bug` issue):
-  also verified by a blind auditor, then merged without the human when CI is green.
-- **Tier C** (architecture or design decisions, anything that can cost money, dependencies,
-  data and schema, auth, permissions, payments, CI and deploy, harness files, secrets, large
-  deletions, `Sensitive paths`): the harness stops on that item, labels the issue
-  `rb:needs-human`, posts the question with options, a recommendation and a cost estimate, and
-  moves on to other work. Tier C pull requests are merged by the human.
+- **Level 1** (docs, styles, copy, tests that only add, plus `Tier A paths`): merged on green CI,
+  no agent review.
+- **Level 2** (normal production code): the verifier reviews it; the blind auditor too when
+  something the user sees changes, and on one PR in five by sampling. Merged when CI is green.
+- **Level 3** (`Sensitive paths`, auth, permissions, payments, personal data, deletion, schema,
+  CI and deploy, harness files, large diffs): verifier, blind auditor and security reviewer.
+- **Profile** (header): `full` is the above. `minimal` merges levels 1 and 2 on green CI and gives
+  level 3 the verifier and the security reviewer. `none` means the project runs without the harness.
+- **Launch** (header, `YYYY-MM-DD` or `not set`): the day real users arrive. Before it, `/rb-attack`
+  attacks the live system once within a scope you approve; critical findings carry
+  `rb:launch-blocker` and every report lists them first.
+- **Feature review** (header, `on` or `off`): with `on`, level 2 tasks of a spec merge into
+  `rb/feature-<NN-slug>` with CI and the verifier, and the blind auditor and the security reviewer
+  review the whole feature once, in its PR to the default branch. Level 3 tasks never go there.
+- **The owner approves the plan** only for schema and migrations, architecture (ADR, a new spec,
+  a design decision), the auth model, a cost outside `Paid services` or over its cap, and anything
+  irreversible. Everything else takes a safe default and is reported. The harness sets the item
+  aside (`rb:approval-pending`), keeps working, and sends one message per run with every decision.
+  Once approved, the merge is automatic.
 
-How to answer an escalation: reply on the issue (an answer, or "approved") and remove the
-`rb:needs-human` label, or add the `rb:approved` label. The next run continues from there.
-Approval covers the plan as posted; a revised plan asks again. Items labelled `rb:needs-local`
+How to approve: write "aprobado" (or "approved") on the issue, after the plan. To hand approvals
+over for a while, say so in a session ("delego todo hasta el viernes", "full auto del milestone
+MVP"): it is recorded on the control issue with your words (`rb delegate`), for 14 days by
+default, without cost or irreversible items unless you name them.
+An approval covers the plan as posted; a revised plan asks again. `Kickback budget` (0 to 3) is how
+many review rounds a task gets before it is marked blocked. Items labelled `rb:needs-local`
 need your machine (for example a browser or local credentials) and include exact steps.
 
 To stop all autonomous work, add the `rb:stop` label to any open issue (or to the
