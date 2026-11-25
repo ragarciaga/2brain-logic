@@ -197,6 +197,24 @@ describe("docs/INSTALL.md", () => {
       expect(built, `Updates runs profiled service ${name} but never builds it`).toBe(true);
     }
     expect(checked).toBeGreaterThan(0);
+
+    const buildLines = commands.filter((c) => /--profile \S+/.test(c) && /\bbuild\b/.test(c));
+    expect(buildLines.length).toBeGreaterThan(0);
+    for (const line of buildLines) {
+      const profile = /--profile (\S+)/.exec(line)?.[1] ?? "";
+      const expected = Object.entries(services)
+        .filter(
+          ([, def]) =>
+            isRecord(def) && Array.isArray(def.profiles) && def.profiles.includes(profile),
+        )
+        .map(([name]) => name);
+      expect(expected.length).toBeGreaterThan(0);
+      for (const name of expected) {
+        expect(line, `build line omits profile service ${name}`).toMatch(
+          new RegExp(`\\b${name}\\b`),
+        );
+      }
+    }
   });
 
   describe("troubleshooting", () => {
