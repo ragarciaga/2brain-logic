@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHECK_IDS } from "../src/install/doctor.js";
 import { SETUP_USAGE } from "../src/install/setup.js";
+import { parseYamlConfig } from "../src/vault/frontmatter.js";
 import { type ScanFinding, scanOwnerData } from "./plugin/helpers/plugin-scan.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -51,6 +52,10 @@ const SETUP_CODES = [
 
 /** Codes the installer emits that are not setup results. */
 const ALLOWED_EXTRA = ["usage"];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 /** Body of the `## <name>` section, up to the next `## ` heading. */
 function section(text: string, name: string): string {
@@ -167,6 +172,55 @@ describe("docs/INSTALL.md", () => {
     expect(at[0]).toBeGreaterThan(-1);
     expect(at[1]).toBeGreaterThan(at[0] ?? 0);
     expect(at[2]).toBeGreaterThan(at[1] ?? 0);
+  });
+
+  it("Updates builds every profiled service it then runs (B273)", () => {
+    const compose = parseYamlConfig(read("compose.yaml"));
+    const services = isRecord(compose) && isRecord(compose.services) ? compose.services : {};
+    const commands = section(guide, "Updates")
+      .split("\n")
+      .filter((l) => l.startsWith("docker compose "));
+    let checked = 0;
+    for (const [name, def] of Object.entries(services)) {
+      const profiles = isRecord(def) && Array.isArray(def.profiles) ? def.profiles : [];
+      if (profiles.length === 0) continue;
+      const runs = commands.filter((c) => new RegExp(`\\brun\\b.*\\b${name}\\b`).test(c));
+      if (runs.length === 0) continue;
+      checked += 1;
+      const runAt = commands.findIndex((c) => runs.includes(c));
+      const built = commands.some(
+        (c, i) =>
+          (/\brun\b/.test(c) && c.includes("--build") && runs.includes(c)) ||
+          (i < runAt &&
+            /\bbuild\b/.test(c) &&
+            new RegExp(`\\b${name}\\b`).test(c) &&
+            profiles.some((p) => c.includes(`--profile ${String(p)}`))),
+      );
+      expect(built, `Updates runs profiled service ${name} but never builds it before`).toBe(true);
+    }
+    expect(checked).toBeGreaterThan(0);
+
+    const buildLines = commands.filter((c) => /--profile \S+/.test(c) && /\bbuild\b/.test(c));
+    expect(buildLines.length).toBeGreaterThan(0);
+    const updatesBody = section(guide, "Updates");
+    const prose = updatesBody.slice(updatesBody.lastIndexOf("```") + 3);
+    for (const line of buildLines) {
+      const profile = /--profile (\S+)/.exec(line)?.[1] ?? "";
+      expect(prose, `Updates prose does not name profile ${profile}`).toContain(`\`${profile}\``);
+      const expected = Object.entries(services)
+        .filter(
+          ([, def]) =>
+            isRecord(def) && Array.isArray(def.profiles) && def.profiles.includes(profile),
+        )
+        .map(([name]) => name);
+      expect(expected.length).toBeGreaterThan(0);
+      for (const name of expected) {
+        expect(line, `build line omits profile service ${name}`).toMatch(
+          new RegExp(`\\b${name}\\b`),
+        );
+        expect(prose, `Updates prose does not name service ${name}`).toContain(`\`${name}\``);
+      }
+    }
   });
 
   describe("troubleshooting", () => {

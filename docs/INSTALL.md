@@ -229,10 +229,12 @@ Docker network. To connect Fireflies and Google Meet recordings, follow
 ```bash
 git pull
 docker compose up -d --build
+docker compose --profile tools build setup doctor
 docker compose run --rm doctor
 ```
 
-Your `.env`, `secrets/` and vault are kept.
+`setup` and `doctor` run from their own images in the `tools` profile, which `up -d --build` does
+not rebuild, so the third line rebuilds them. Your `.env`, `secrets/` and vault are kept.
 
 ## After a host restart
 
