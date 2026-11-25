@@ -1,8 +1,11 @@
 // rb doctor: environment and contract checks. Exits 1 only on FAIL. Works offline (GitHub checks WARN).
 import { readdirSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { readBaseline } from './baseline.mjs';
-import { COMMAND_SECTIONS, HEADER_FIELDS, REQUIRED_SECTIONS, contractInfo, headerField, isTemplate, projectTypesFrom, readContract, sectionCommands, sectionHeadings } from './contract.mjs';
+import { COMMAND_SECTIONS, HEADER_FIELDS, REQUIRED_SECTIONS, contractInfo, headerField, isTemplate, parseAutonomy, projectTypesFrom, readContract, sectionCommands, sectionHeadings } from './contract.mjs';
+import { isTestPath } from './delta.mjs';
+import { matchAny } from './glob.mjs';
 import { CONTROL_TITLE } from './control.mjs';
 import { ghStatus, makeGh, ops } from './gh.mjs';
 import { defaultBranch, originSlug } from './repo.mjs';
@@ -25,6 +28,28 @@ function checkNode() {
 function checkGit() {
   const r = run('git', ['--version']);
   return r.ok ? pass('git', r.stdout.replace(/^git version\s*/, '')) : fail('git', 'git not found on PATH');
+}
+
+// PLAN-1.0 A10: what "update rockbuilt" owes a project from before 1.0. The contract text that
+// agents read must describe levels, not tiers; Kickback budget is explicit; and Sensitive paths is
+// reviewed once by the owner, because a glob over most of the code makes nearly every PR level 3
+// (Doorcas: 44 of 82 PRs, evals/results/2026-11-24-replay-levels.md).
+export const SENSITIVE_SHARE = 0.4;
+function levelsChecks(root, text) {
+  const out = [];
+  if (/highest tier wins|Tier C pull requests are merged by the human/.test(text)) out.push(warn('contract 1.0', 'AGENTS.md ## Autonomy still describes tiers A, B and C: replace the "How the harness decides" paragraphs with the level text from the template (tools/rockbuilt/project/AGENTS.md)'));
+  if (headerField(text, 'Kickback budget') === null) out.push(warn('contract 1.0', 'no `Kickback budget:` header line (0 to 3, default 2): add `Kickback budget: 2` under `Max tasks per run`'));
+  // PLAN-1.0 G4: the review profile. No line means full.
+  const profile = headerField(text, 'Profile');
+  if (profile !== null && !['full', 'minimal', 'none'].includes(profile.toLowerCase())) out.push(warn('profile', `Profile: ${profile} is not full, minimal or none; the gate applies full`));
+  if (profile !== null && profile.toLowerCase() === 'none') out.push(warn('profile', 'Profile: none means the project runs without the harness, yet it is vendored here; the gate applies full. Set `Profile: minimal` or `full`'));
+  if (headerField(text, 'Sensitive paths reviewed') === null) {
+    const globs = parseAutonomy(text).sensitivePaths;
+    const tracked = run('git', ['-C', root, 'ls-files']).stdout.split(/\r?\n/).filter((p) => /\.(c|m)?[jt]sx?$|\.(py|go|rb|rs|java|kt|php|cs|swift|vue|svelte|astro)$/.test(p) && !isTestPath(p) && !p.startsWith('tools/rockbuilt/'));
+    const hit = tracked.filter((p) => matchAny(p, globs)).length;
+    if (tracked.length >= 10 && hit / tracked.length > SENSITIVE_SHARE) out.push(warn('sensitive paths', `Sensitive paths covers ${hit} of ${tracked.length} source files (${Math.round((hit / tracked.length) * 100)}%): nearly every PR gets the full review. Review it once with the owner (narrow it to what is truly sensitive), then add \`Sensitive paths reviewed: <date>\` to the header`));
+  }
+  return out;
 }
 
 function checkContract(root) {
@@ -61,6 +86,7 @@ function checkContract(root) {
   }
   const lines = text.split(/\r?\n/).length;
   if (lines > 200) out.push(warn('contract length', `${lines} lines, keep under 200`));
+  out.push(...levelsChecks(root, text));
   return out;
 }
 
@@ -86,6 +112,45 @@ function checkSettings(root, types) {
   return [problems.length ? warn('settings.json', problems.join('; ')) : pass('settings.json', 'permissions and guard hook present')];
 }
 
+function installedPluginVersion(home = os.homedir()) {
+  const versions = [];
+  const walk = (dir, depth) => {
+    if (depth > 6) return;
+    let ents = [];
+    try { ents = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (!e.isDirectory()) continue;
+      const sub = path.join(dir, e.name);
+      if (e.name === '.claude-plugin') {
+        try { const j = JSON.parse(readFileSync(path.join(sub, 'plugin.json'), 'utf8')); if (j.name === 'rockbuilt' && j.version) versions.push(j.version); } catch { /* not a plugin */ }
+      } else if (e.name !== 'node_modules' && !e.name.startsWith('.git')) walk(sub, depth + 1);
+    }
+  };
+  walk(path.join(home, '.claude', 'plugins'), 0);
+  const key = (v) => v.split('.').map((n) => String(Number(n) || 0).padStart(6, '0')).join('.');
+  return versions.sort((a, b) => (key(a) < key(b) ? 1 : -1))[0] || null;
+}
+
+// PLAN-1.0 F8: { vendored, plugin, behind } for rb state and the digest (plugin null when the
+// plugin is not installed where this runs, as in a cloud routine).
+export function versionStatus(root) {
+  const vendored = (readText(path.join(root, 'tools', 'rockbuilt', 'VERSION')) || '').trim() || null;
+  const plugin = pluginRoot();
+  let pv = null;
+  if (plugin) { try { pv = JSON.parse(readFileSync(path.join(plugin, '.claude-plugin', 'plugin.json'), 'utf8')).version; } catch { pv = null; } }
+  // The vendored rb runs without CLAUDE_PLUGIN_ROOT: look for an installed rockbuilt plugin under
+  // ~/.claude/plugins (marketplace cache or synced), newest version wins (review of 1.3.0).
+  if (!pv) pv = installedPluginVersion();
+  const older = (a, b) => {
+    const x = String(a).split('.').map(Number);
+    const y = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+    return false;
+  };
+  const behind = Boolean(vendored && pv && older(vendored, pv));
+  return { vendored, plugin: pv, behind };
+}
+
 function checkVendored(root) {
   const vendored = readText(path.join(root, 'tools', 'rockbuilt', 'VERSION'));
   if (vendored === null) return [warn('vendored harness', 'tools/rockbuilt/ missing; run `rb vendor`')];
@@ -106,7 +171,21 @@ function checkCi(root) {
   if (setup.some((c) => /^npm ci\b/.test(c)) && !exists(path.join(root, 'package-lock.json'))) {
     return warn('CI workflow', 'Setup runs `npm ci` but there is no package-lock.json: CI will fail; commit the lockfile or change ## Setup');
   }
-  return pass('CI workflow', '.github/workflows/rockbuilt-ci.yml present');
+  // PLAN-1.0 F12 (from trail-blazer-flow's external audit): a third-party action pinned to a tag
+  // can change under the same name; a commit SHA cannot.
+  const unpinned = [];
+  let names = [];
+  try { names = readdirSync(path.join(root, '.github', 'workflows')).filter((n) => /\.ya?ml$/.test(n)); } catch { names = []; }
+  for (const n of names) {
+    const text = readText(path.join(root, '.github', 'workflows', n)) || '';
+    for (const m of text.matchAll(/^\s*-?\s*uses:\s*([^\s#]+)/gm)) {
+      const ref = m[1].replace(/^["']|["']$/g, '');
+      if (ref.startsWith('./') || ref.startsWith('docker://')) continue;
+      if (!/@[0-9a-f]{40}$/.test(ref)) unpinned.push(`${n}: ${ref}`);
+    }
+  }
+  if (unpinned.length) return warn('CI actions', `not pinned to a commit SHA: ${unpinned.slice(0, 4).join(', ')}${unpinned.length > 4 ? ` (+${unpinned.length - 4})` : ''}; \`rb vendor\` pins the harness workflow, pin the rest the same way (uses: owner/action@<sha> # vX.Y.Z)`);
+  return pass('CI workflow', '.github/workflows/rockbuilt-ci.yml present, actions pinned');
 }
 
 const DEPLOY_FILES = ['vercel.json', 'netlify.toml', 'fly.toml', 'render.yaml', 'wrangler.toml', 'railway.json', 'railway.toml', 'app.yaml', 'Procfile'];

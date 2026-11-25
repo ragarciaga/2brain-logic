@@ -46,12 +46,12 @@ round, plus tasks that depend on them. Unchanged tasks keep their previous verdi
 - Oscillation (a task split in round 1 and merged back in round 2): stop applying changes to
   those tasks, keep the round-1 version, report it.
 
-## Tier hints
+## Level hints
 
-- A task whose Files are all tests, docs or styles is likely tier A; keep it separate from code
+- A task whose Files are all tests, docs or styles is likely level 1; keep it separate from code
   so it can merge on its own.
 - A task touching migrations, schema, auth, payments, dependency manifests, infra, CI or harness
-  files is tier C by the floor (DESIGN.md section 6.1). Isolate it in its own task so the rest of
+  files needs the owner's approval by the floor (DESIGN.md section 6.1). Isolate it in its own task so the rest of
   the backlog does not wait for the human.
 
 ## Sizing hints
@@ -60,4 +60,4 @@ round, plus tasks that depend on them. Unchanged tasks keep their previous verdi
 - M: several modules or one layer stack (schema plus API) with tests.
 - L: only when splitting would leave a slice with no verifiable outcome. Expect reviewers to
   challenge every L.
-- More than about 8 files, or schema plus API plus UI that could ship separately, is a split.
+- More than about 10 production files (tests not counted), or schema plus API plus UI that could ship separately, is a split.

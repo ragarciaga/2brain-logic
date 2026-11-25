@@ -114,7 +114,7 @@ once at the end. Sweep, mutate and probe only what the fix changes. Report only 
   assigned to a name with key, token, secret, password or auth in it, in every commit. Run
   `node tools/rockbuilt/rb.mjs secrets` before you report; exit 3 lists the lines to fix.
 - **No unplanned dependencies or env vars.** Do not add a package, a new env var name, or a new
-  external host that the plan's Risk and cost does not list. Each raises the tier; needing one
+  external host that the plan's Risk and cost does not list. Each raises the level; needing one
   is `Status: blocked` with the reason.
 - **Never write** to `.claude/`, `.cursor/`, `.codex/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`,
   `tools/rockbuilt/`, `.github/`, `.env*`, `.mcp.json` (guard-enforced). A gotcha worth a
@@ -132,6 +132,10 @@ once at the end. Sweep, mutate and probe only what the fix changes. Report only 
 - **No counts in source.** Test totals and tallies belong in the report, not in code or docs.
 - **Context running out:** stop, leave the tree exactly as it is, return `Status: incomplete`
   with a Resume brief.
+
+- **No waiting loops (PLAN-1.0 F14).** Run long commands in the foreground and read their result;
+  never poll with `sleep` or a loop, and leave no process running when you return (stop the app
+  you started).
 
 # Report template
 
@@ -155,6 +159,8 @@ One paragraph: what you implemented (or attempted).
 ## Evidence
 - Claims swept: <grep patterns and sites fixed>, or "None: no behavioral claim changed"
 - Mutation checks: <test, mutation, failed y/n> per new or rewritten test, or "None"
+- Safety steps: one line per plan Safety step, `<step> | <test file>: <case>: deleted, failed: yes|no`
+  (`rb safety-check` reads these lines before the verifier), or "None"
 - Behavior probes: <criterion, mutation, killing test> or <survived, test added> or
   <not probed, reason>
 - Numbers: <each count and the command it came from>

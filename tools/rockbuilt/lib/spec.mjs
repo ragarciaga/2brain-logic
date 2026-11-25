@@ -1,5 +1,6 @@
 // tasks.md and requirements.md parsing (DESIGN.md section 15).
 import path from 'node:path';
+import { isTestPath } from './delta.mjs';
 import { matchAny } from './glob.mjs';
 import { FLOOR_PATHS } from './risk.mjs';
 import { CliError, readText } from './util.mjs';
@@ -172,8 +173,10 @@ export function coverage(criteria, tasks) {
   };
 }
 
-export const MAX_TASK_FILES = 8;
-export const MAX_TASK_CRITERIA = 4;
+// PLAN-1.0 D4: larger tasks, fewer PRs. Test files do not count (the size limit ignores them too).
+export const MAX_TASK_FILES = 10;
+export const MAX_TASK_CRITERIA = 6;
+const isTestFile = (f) => isTestPath(String(f).replace(/\\/g, '/')) || /_test\.go$/.test(String(f));
 
 export function taskProblems(tasks, errors = []) {
   const ids = new Set(tasks.map((t) => t.id));
@@ -187,7 +190,8 @@ export function taskProblems(tasks, errors = []) {
     // 30k to 44k characters). L needs the reason it cannot be split on the Size line.
     if (t.status !== 'todo') continue; // limits apply to work not started; done tasks stay as they are
     if (t.size === 'L' && !t.sizeNote) problems.push(`${t.id} is size L without a reason: split it, or write "Size: L (<why it cannot be split>)"`);
-    if (t.files.length > MAX_TASK_FILES) problems.push(`${t.id} lists ${t.files.length} files (max ${MAX_TASK_FILES}): split it`);
+    const prodFiles = t.files.filter((f) => !isTestFile(f));
+    if (prodFiles.length > MAX_TASK_FILES) problems.push(`${t.id} lists ${prodFiles.length} production files (max ${MAX_TASK_FILES}, tests not counted): split it`);
     if (t.covers.length > MAX_TASK_CRITERIA) problems.push(`${t.id} covers ${t.covers.length} criteria (max ${MAX_TASK_CRITERIA}): split it`);
   }
   // A minimum size (rockbuilt #41): every task pays the same review (planner, implementer,
@@ -216,7 +220,7 @@ export function taskProblems(tasks, errors = []) {
       if (paired.has(a.id) || paired.has(b.id)) continue;
       const shared = modules(a).find((d) => modules(b).includes(d));
       if (shared === undefined || tierFloor(a) !== tierFloor(b)) continue; // never merge across a tier boundary
-      const files = new Set([...a.files, ...b.files]);
+      const files = new Set([...a.files, ...b.files].filter((f) => !isTestFile(f)));
       const covers = new Set([...a.covers, ...b.covers]);
       if (files.size > MAX_TASK_FILES || covers.size > MAX_TASK_CRITERIA) continue;
       paired.add(a.id); paired.add(b.id);
@@ -224,6 +228,43 @@ export function taskProblems(tasks, errors = []) {
     }
   }
   return problems;
+}
+
+// rb criteria (PLAN-1.0 F2): the criteria a task covers, verbatim from requirements.md, with their
+// requirement's Decisions block. Agents quote these, never a paraphrase from an older plan; an
+// amendment is an edit to requirements.md, so the next call already prints it.
+export function taskCriteria(specDir, taskId) {
+  const tasksText = readText(path.join(specDir, 'tasks.md'));
+  const reqText = readText(path.join(specDir, 'requirements.md'));
+  if (tasksText === null || reqText === null) throw new CliError(`tasks.md and requirements.md are needed in ${specDir}`, 2);
+  const task = parseTasks(tasksText).tasks.find((t) => t.id.toLowerCase() === String(taskId).toLowerCase());
+  if (!task) throw new CliError(`no task ${taskId} in ${specDir}/tasks.md`, 2);
+  const lines = reqText.split(/\r?\n/);
+  const out = [];
+  const missing = [];
+  for (const id of task.covers) {
+    // The same shape parseRequirements accepts ("- R1.1", "- **R1.1**", "1. R1.1"), plus the
+    // indented lines that continue it, so the criterion is printed whole.
+    const re = new RegExp(`^\\s*(?:[-*]|\\d+\\.)?\\s*(?:\\*\\*)?${id.replace('.', '\\.')}\\b`);
+    const at = lines.findIndex((l) => re.test(l));
+    if (at === -1) { missing.push(id); continue; }
+    const parts = [lines[at].trim()];
+    for (let k = at + 1; k < lines.length && /^\s{2,}\S/.test(lines[k]) && !/^\s*(?:[-*]|\d+\.)\s*(?:\*\*)?R\d+\.\d+\b/.test(lines[k]); k++) parts.push(lines[k].trim());
+    out.push(parts.join(' '));
+  }
+  const reqs = [...new Set(task.covers.map((c) => c.split('.')[0]))];
+  const decisions = [];
+  for (const r of reqs) {
+    const start = lines.findIndex((l) => new RegExp(`^##\\s+${r}\\s*[:.]`).test(l));
+    if (start === -1) continue;
+    let i = lines.findIndex((l, k) => k > start && /^###\s+(Decisions|Decisiones)\s*$/i.test(l));
+    const next = lines.findIndex((l, k) => k > start && /^##\s/.test(l));
+    if (i === -1 || (next !== -1 && i > next)) continue;
+    const block = [];
+    for (i += 1; i < lines.length && !/^#{2,3}\s/.test(lines[i]); i++) if (lines[i].trim()) block.push(lines[i].trim());
+    decisions.push({ requirement: r, lines: block });
+  }
+  return { task: task.id, criteria: out, missing, decisions };
 }
 
 export function loadSpec(specDir) {

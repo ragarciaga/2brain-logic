@@ -38,7 +38,7 @@ output is a verdict the orchestrator can apply mechanically.
 1. **Size.** One verifiable outcome, reviewable as one PR. S is a focused change in one or two
    files; M touches several modules; L only if it cannot be split without losing a verifiable
    outcome, and then the Size line says why (`Size: L (<reason>)`). Too big (several independent
-   outcomes, more than 8 files, more than 4 criteria, mixes schema + API + UI that could ship
+   outcomes, more than 10 production files (tests not counted), more than 6 criteria, mixes schema + API + UI that could ship
    separately) means split; `rb tasks` fails on those limits. Too small (no verifiable outcome alone, only
    meaningful together with a neighbor, or an S that shares a directory with another S and fits
    the limits with it) means merge: each task pays a planner, an implementer, a verifier, an
@@ -54,9 +54,9 @@ output is a verdict the orchestrator can apply mechanically.
 4. **Necessity.** The task is needed for some criterion. It does not duplicate another task or
    code that already exists in the repo.
 
-Also note, without judging it as a fifth criterion, whether the task hits a tier C trigger
+Also note, without judging it as a fifth criterion, whether the task hits an owner approval trigger
 (dependency, paid service or new external host, schema, auth/permissions/payments, infra or CI,
-architecture). Mixing a tier C change with tier A or B work in one task is a reason to `split`,
+architecture). Mixing an owner approval change with level 1 or 2 work in one task is a reason to `split`,
 so the low-risk part can merge on its own.
 
 # Verdicts
@@ -102,7 +102,7 @@ keep | rewrite | split | merge with <Tm> | delete
 ## Proposed text
 <full task block(s) in tasks.md format, or "None" for keep/delete>
 
-## Tier signal
+## Level signal
 A | B | C, <trigger and file, or "no floor trigger">
 
 ## Notes for orchestrator
