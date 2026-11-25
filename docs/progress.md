@@ -1,9 +1,9 @@
 # Progress
 
-Updated: 2026-11-10
+Updated: 2026-11-25
 
 ## Current objective
-None open. F1 to F5 are merged and running on the reference install. The backlog is empty apart from the Rockbuilt control issue (#1). Next work comes from real use; deferred items with their revisit triggers are in docs/v2.md.
+Fix #273 (INSTALL "Updates" leaves the `doctor` image stale), the only open bug. F1 to F5 are merged and running on the reference install; next work comes from real use; deferred items with their revisit triggers are in docs/v2.md.
 
 ## Current state
 - Works, in production on the reference install since 2026-11-09:
@@ -12,10 +12,16 @@ None open. F1 to F5 are merged and running on the reference install. The backlog
   - Meetings (F5, reworked): on demand through `import_meetings` plus a daily sweep in one n8n workflow; Gemini from the "Notes by Gemini" doc via Composio; calendar lookup via Composio; area rules by title prefix; failure step names in the summary (#254, #256, #257, ADR 0021).
   - Vault safety: scrubber gaps closed (#127, #42), remote image embeds neutralized (#135, ADR 0022), recovery from a crash between a meeting write and its commit (#233), all in #259.
   - Docs: INSTALL from the first real deployment (#250), GUIDE-meetings rewritten, GUIDE-obsidian (#260).
-- Broken: nothing known.
+  - People and recipes in the graph (2026-11-12): meeting participants link to a person note by alias, email or accent-folded name (#268, B264); `save_recipe` takes `project` and `topics` and returns the `link` clients must use (#269, B265); `vault_info` reports those property names and the plugin capture passes the session's project (#272, Q271).
+  - Harness: Rockbuilt 1.5.1 since 2026-11-25 (#274): review levels 1 to 3 instead of tiers, owner approval only for schema, architecture, auth model, cost and irreversible changes, header lines `Kickback budget`, `Profile: full`, `Feature review: off`, `Launch: not set`. Branch protection stays declined (#270).
+- Broken: after an update, `docker compose up -d --build` does not rebuild the `doctor` image (tools profile), so doctor can fail on a config the new code accepts (#273, workaround in the issue).
 - Dropped by the owner (2026-11-09, docs/v2.md): Claude Code plugin capture beyond SessionEnd, Telegram, hourly meeting polling. Their manual checks (#109 to #114, #214, #215) were closed as not planned.
 
 ## Key decisions
+- 2026-11-25: Rockbuilt updated to 1.5.1, contract moved from tiers to review levels (#274)
+- 2026-11-12: recipes link to a project and topics through config property names, and clients link recipes only with the returned `link` (R9.2 amendment, #269, #272)
+- 2026-11-12: participants match person notes by base name or alias, email first, accent-insensitive; a base beats an alias and an ambiguous key links nothing (R6.3 and D9 amendment, #268)
+- 2026-11-12: branch protection declined by the owner (#270)
 - 2026-11-10: MCP clients may append to an existing note, see docs/adr/0023-mcp-append.md
 - 2026-11-10: remote image embeds are neutralized on every vault write, see docs/adr/0022-remote-embeds.md
 - 2026-11-09: meetings import on demand plus a daily sweep; Gemini from the notes doc through Composio, see docs/adr/0021-meetings-on-demand.md
@@ -45,9 +51,10 @@ None open. F1 to F5 are merged and running on the reference install. The backlog
 - 2026-10-31: skeleton bodies stored verbatim, 409 on an existing path, HOST defaults to 127.0.0.1, see PR #10
 
 ## Next steps
-1. Use it daily: "actualiza el cerebro" at the end of chats, "analiza mi reunión" after meetings, one ingest per claude.ai project with old chats.
-2. Watch the Composio managed-app cap (20,000 calls a month on the free plan); the import uses a few hundred.
-3. Open an `rb:task` or `rb:bug` issue for anything real use turns up.
+1. Fix #273 (the nightly cycle or `/rb-fix #273`): build the `doctor` service in the INSTALL update steps.
+2. Use it daily: "actualiza el cerebro" at the end of chats, "analiza mi reunión" after meetings, one ingest per claude.ai project with old chats.
+3. Watch the Composio managed-app cap (20,000 calls a month on the free plan); the import uses a few hundred.
+4. Open an `rb:task` or `rb:bug` issue for anything real use turns up.
 
 ## Timing
 <!-- rb:timing:start -->
