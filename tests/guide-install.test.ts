@@ -187,21 +187,26 @@ describe("docs/INSTALL.md", () => {
       const runs = commands.filter((c) => new RegExp(`\\brun\\b.*\\b${name}\\b`).test(c));
       if (runs.length === 0) continue;
       checked += 1;
+      const runAt = commands.findIndex((c) => runs.includes(c));
       const built = commands.some(
-        (c) =>
+        (c, i) =>
           (/\brun\b/.test(c) && c.includes("--build") && runs.includes(c)) ||
-          profiles.some(
-            (p) => c.includes(`--profile ${String(p)}`) && /\bbuild\b/.test(c) && c.includes(name),
-          ),
+          (i < runAt &&
+            /\bbuild\b/.test(c) &&
+            new RegExp(`\\b${name}\\b`).test(c) &&
+            profiles.some((p) => c.includes(`--profile ${String(p)}`))),
       );
-      expect(built, `Updates runs profiled service ${name} but never builds it`).toBe(true);
+      expect(built, `Updates runs profiled service ${name} but never builds it before`).toBe(true);
     }
     expect(checked).toBeGreaterThan(0);
 
     const buildLines = commands.filter((c) => /--profile \S+/.test(c) && /\bbuild\b/.test(c));
     expect(buildLines.length).toBeGreaterThan(0);
+    const updatesBody = section(guide, "Updates");
+    const prose = updatesBody.slice(updatesBody.lastIndexOf("```") + 3);
     for (const line of buildLines) {
       const profile = /--profile (\S+)/.exec(line)?.[1] ?? "";
+      expect(prose, `Updates prose does not name profile ${profile}`).toContain(`\`${profile}\``);
       const expected = Object.entries(services)
         .filter(
           ([, def]) =>
@@ -213,6 +218,7 @@ describe("docs/INSTALL.md", () => {
         expect(line, `build line omits profile service ${name}`).toMatch(
           new RegExp(`\\b${name}\\b`),
         );
+        expect(prose, `Updates prose does not name service ${name}`).toContain(`\`${name}\``);
       }
     }
   });
