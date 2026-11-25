@@ -3,7 +3,7 @@
 Updated: 2026-11-25
 
 ## Current objective
-Fix #273 (INSTALL "Updates" leaves the `doctor` image stale), the only open bug. F1 to F5 are merged and running on the reference install; next work comes from real use; deferred items with their revisit triggers are in docs/v2.md.
+None open. F1 to F5 are merged and running on the reference install; next work comes from real use; deferred items with their revisit triggers are in docs/v2.md.
 
 ## Current state
 - Works, in production on the reference install since 2026-11-09:
@@ -14,7 +14,8 @@ Fix #273 (INSTALL "Updates" leaves the `doctor` image stale), the only open bug.
   - Docs: INSTALL from the first real deployment (#250), GUIDE-meetings rewritten, GUIDE-obsidian (#260).
   - People and recipes in the graph (2026-11-12): meeting participants link to a person note by alias, email or accent-folded name (#268, B264); `save_recipe` takes `project` and `topics` and returns the `link` clients must use (#269, B265); `vault_info` reports those property names and the plugin capture passes the session's project (#272, Q271).
   - Harness: Rockbuilt 1.5.1 since 2026-11-25 (#274): review levels 1 to 3 instead of tiers, owner approval only for schema, architecture, auth model, cost and irreversible changes, header lines `Kickback budget`, `Profile: full`, `Feature review: off`, `Launch: not set`. Branch protection stays declined (#270).
-- Broken: after an update, `docker compose up -d --build` does not rebuild the `doctor` image (tools profile), so doctor can fail on a config the new code accepts (#273, workaround in the issue).
+  - Updates (2026-11-25): INSTALL "Updates" rebuilds the `tools` profile images (`setup`, `doctor`) before running doctor (#277, B273).
+- Broken: nothing known. A vault clone behind its remote still shows in doctor as missing write access; closed as not planned (#276), pull the vault first.
 - Dropped by the owner (2026-11-09, docs/v2.md): Claude Code plugin capture beyond SessionEnd, Telegram, hourly meeting polling. Their manual checks (#109 to #114, #214, #215) were closed as not planned.
 
 ## Key decisions
@@ -51,29 +52,118 @@ Fix #273 (INSTALL "Updates" leaves the `doctor` image stale), the only open bug.
 - 2026-10-31: skeleton bodies stored verbatim, 409 on an existing path, HOST defaults to 127.0.0.1, see PR #10
 
 ## Next steps
-1. Fix #273 (the nightly cycle or `/rb-fix #273`): build the `doctor` service in the INSTALL update steps.
-2. Use it daily: "actualiza el cerebro" at the end of chats, "analiza mi reunión" after meetings, one ingest per claude.ai project with old chats.
-3. Watch the Composio managed-app cap (20,000 calls a month on the free plan); the import uses a few hundred.
-4. Open an `rb:task` or `rb:bug` issue for anything real use turns up.
+1. Use it daily: "actualiza el cerebro" at the end of chats, "analiza mi reunión" after meetings, one ingest per claude.ai project with old chats.
+2. Watch the Composio managed-app cap (20,000 calls a month on the free plan); the import uses a few hundred.
+3. Open an `rb:task` or `rb:bug` issue for anything real use turns up.
 
 ## Timing
 <!-- rb:timing:start -->
-| Task | plan | implement | check | verify | audit | fix | security | pr | ci | merge | Total |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| i2 | 9.4 | 11.4 | 0.2 | 7.5 | 6.6 | 2.1 | 9.3 | 0.9 | 1.2 | 0.4 | 49.0 |
-| T1 | 4.4 | 4.1 |  | 1.2 | 2.3 | 0.8 | 2.0 |  |  |  | 14.8 |
-| T2 | 4.4 | 1.4 |  | 3.3 | 1.8 | 0.7 | 2.0 |  |  |  | 13.6 |
-| T6 | 2.8 | 2.0 |  | 2.0 | 2.4 |  | 2.1 |  |  |  | 11.3 |
-| T16 | 3.3 | 2.4 |  | 3.0 | 1.9 | 1.2 |  |  |  |  | 11.8 |
-| T3 | 3.7 | 4.7 |  | 2.4 | 3.0 |  | 3.5 |  |  |  | 17.3 |
-| T4 | 3.2 | 3.7 |  | 2.8 | 1.7 |  | 0.8 |  |  |  | 12.2 |
-| T7 | 3.7 | 3.2 |  | 3.7 | 2.4 |  |  |  |  |  | 13.0 |
-| T17 | 2.7 | 2.1 |  | 2.1 | 12.8 |  | 1.3 |  |  |  | 21.0 |
-| T5 | 10.1 | 32.6 |  |  |  |  | 14.9 |  |  |  | 57.6 |
-| T8 |  |  |  |  |  |  |  |  |  |  | 0.0 |
+| Task | plan | implement | check | verify | audit | fix | security | pr | ci | Total |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| i2 | 9.4 | 11.4 | 0.2 | 7.5 | 6.6 | 2.1 | 9.3 |  |  | 46.5 |
+| T1 | 4.4 | 4.1 |  | 1.2 | 2.3 | 0.8 | 2.0 |  |  | 14.8 |
+| T2 | 4.4 | 1.4 |  | 3.3 | 1.8 | 0.7 | 2.0 |  |  | 13.6 |
+| T6 | 2.8 | 2.0 |  | 2.0 | 2.4 |  | 2.1 |  |  | 11.3 |
+| T16 | 3.3 | 2.4 |  | 3.0 | 1.9 | 1.2 |  |  |  | 11.8 |
+| T3 | 3.7 | 4.7 |  | 2.4 | 3.0 |  | 3.5 |  |  | 17.3 |
+| T4 | 3.2 | 3.7 |  | 2.8 | 1.7 |  | 0.8 |  |  | 12.2 |
+| T7 | 3.7 | 3.2 |  | 3.7 | 2.4 |  |  |  |  | 13.0 |
+| T17 | 2.7 | 2.1 |  | 2.1 | 12.8 |  | 1.3 |  |  | 21.0 |
+| T8 | 4.4 |  |  | 4.7 |  |  |  |  |  | 9.1 |
+| F2-T1 | 4.5 | 5.1 |  | 4.1 |  | 1.6 |  |  |  | 15.3 |
+| F2-T2 |  | 4.1 |  | 4.4 |  |  |  |  |  | 8.5 |
+| F2-T5 |  | 7.0 |  | 8.9 |  | 3.3 |  |  |  | 19.2 |
+| F2-T3 |  | 6.7 |  | 5.0 |  |  |  |  |  | 11.7 |
+| F2-T7 |  | 11.5 |  | 10.1 |  | 3.4 |  |  |  | 25.0 |
+| F2-T7 |  | 11.5 |  | 10.1 |  | 3.4 |  |  |  | 25.0 |
+| T5 | 10.1 | 32.6 |  | 57.3 | 4.8 | 81.8 | 29.1 |  |  | 215.7 |
+| F2-T4 |  | 18.1 |  | 147.0 |  | 3.5 |  |  |  | 168.6 |
+| F2-T16 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T9 |  | 145.1 |  | 16.2 |  | 4.8 |  |  |  | 166.1 |
+| F2-T6 |  | 7.3 |  | 6.4 |  | 5.1 |  |  |  | 18.8 |
+| T10 |  | 7.5 |  | 10.4 |  |  |  |  |  | 17.9 |
+| F2-T8 |  |  |  |  |  |  |  |  |  | 0.0 |
+| F2-T9 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T11 |  |  |  |  |  |  |  |  |  | 0.0 |
+| F2-T10 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T12 |  |  |  |  |  |  |  |  |  | 0.0 |
+| F2-T11 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T13 |  |  |  |  |  |  |  |  |  | 0.0 |
+| F2-T12 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T14 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T15 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T13 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T14 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T15 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T17 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T1 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T2 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T3 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T4 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T5 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T6 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T6 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T8 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T7 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T10 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T11 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T12 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T14 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T13 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T9 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T19 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T15 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T16 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T17 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T18 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T20 |  |  |  |  |  |  |  |  |  | 0.0 |
+| L142 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T1 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T2 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T3 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T7 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T5 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T10 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T4 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T9 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T14 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T11 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T8 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T6 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T12 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T15 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T16 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T13 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T17 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T18 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T19 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T20 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T21 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T22 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T2 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T1 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T3 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T7 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T6 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T8 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T4 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T9 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T5 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T14 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T10 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T15 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T11 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T16 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T12 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T17 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T13 |  |  |  |  |  |  |  |  |  | 0.0 |
+| T18 |  |  |  |  |  |  |  |  |  | 0.0 |
+| B264 | 9.0 | 7.9 |  |  |  |  |  | 0.4 | 67.2 | 84.5 |
+| B265 | 36.4 |  |  |  |  | 3.0 |  | 0.4 | 52.5 | 92.3 |
+| Q271 |  |  |  |  |  |  |  |  |  | 0.0 |
+| B273 | 13.3 | 2.4 | 1.9 | 3.0 | 0.8 | 2.4 |  | 0.4 | 648.4 | 672.6 |
 
 Minutes per phase.
-Open (started, not ended): T5/verify, T8/plan.
 <!-- rb:timing:end -->
 - 2026-11-01: retro on F4 and F5: 5 lessons, 0 config changes, 0 autonomy changes, 5 harness issues (ragarciaga/rockbuilt#45 to #49) plus evidence comments on ragarciaga/rockbuilt#42 and #43.
 - 2026-11-10: retro on the out-of-cycle work of 2026-11-09 and 2026-11-10 (PRs #250 to #262): 2 lessons, 1 config change (baseline recorded; branch protection left to the owner, `rb protect` was blocked in the cloud session), 0 autonomy changes, 5 harness issues (ragarciaga/rockbuilt#63 to #67) plus related links on #55, #56, #59 and evidence on #60.
