@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHECK_IDS } from "../src/install/doctor.js";
 import { SETUP_USAGE } from "../src/install/setup.js";
+import { parseYamlConfig } from "../src/vault/frontmatter.js";
 import { type ScanFinding, scanOwnerData } from "./plugin/helpers/plugin-scan.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -51,6 +52,10 @@ const SETUP_CODES = [
 
 /** Codes the installer emits that are not setup results. */
 const ALLOWED_EXTRA = ["usage"];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 /** Body of the `## <name>` section, up to the next `## ` heading. */
 function section(text: string, name: string): string {
@@ -167,6 +172,31 @@ describe("docs/INSTALL.md", () => {
     expect(at[0]).toBeGreaterThan(-1);
     expect(at[1]).toBeGreaterThan(at[0] ?? 0);
     expect(at[2]).toBeGreaterThan(at[1] ?? 0);
+  });
+
+  it("Updates builds every profiled service it then runs (B273)", () => {
+    const compose = parseYamlConfig(read("compose.yaml"));
+    const services = isRecord(compose) && isRecord(compose.services) ? compose.services : {};
+    const commands = section(guide, "Updates")
+      .split("\n")
+      .filter((l) => l.startsWith("docker compose "));
+    let checked = 0;
+    for (const [name, def] of Object.entries(services)) {
+      const profiles = isRecord(def) && Array.isArray(def.profiles) ? def.profiles : [];
+      if (profiles.length === 0) continue;
+      const runs = commands.filter((c) => new RegExp(`\\brun\\b.*\\b${name}\\b`).test(c));
+      if (runs.length === 0) continue;
+      checked += 1;
+      const built = commands.some(
+        (c) =>
+          (/\brun\b/.test(c) && c.includes("--build") && runs.includes(c)) ||
+          profiles.some(
+            (p) => c.includes(`--profile ${String(p)}`) && /\bbuild\b/.test(c) && c.includes(name),
+          ),
+      );
+      expect(built, `Updates runs profiled service ${name} but never builds it`).toBe(true);
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   describe("troubleshooting", () => {
